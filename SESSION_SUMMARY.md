@@ -30,17 +30,17 @@ An AI system for intelligent querying, cross-referencing, and compliance analysi
 
 1. **KG + RAG over pure RAG** — graph is the routing layer, RAG does fine-grained ranking
 2. **Graph scoping then targeted RAG** — not graph OR RAG, but graph THEN RAG within scoped candidate set
-3. **Deterministic structural parsing** — rule-based parsers per MNO format; LLM only for enrichment (concept tagging, relationship classification)
+3. **Profile-driven structural parsing** — standalone DocumentProfiler derives document structure from representative docs (no LLM); generic structural parser applies the profile; LLM only for enrichment (concept tagging, relationship classification)
 4. **Standards ingestion: Option C (Hybrid Selective)** — only ingest referenced 3GPP sections + surrounding context (parent, definitions, adjacent subsections), not full specs
 5. **Bottom-up feature taxonomy** — derive from documents using LLM, then human review; not pre-defined
 6. **Two cross-document patterns:** (a) Fragmented — one capability across multiple docs, handled by Feature nodes; (b) Dependent — requirement X needs requirement Y from another doc, handled by typed edges
 7. **Four standards relationship types:** DEFER, CONSTRAIN, OVERRIDE, EXTEND — with pre-computed delta summaries
 8. **Keep RAG** — don't skip to context stuffing even though context window may be large; production LLM context may be smaller
 9. **Single unified graph + vector store** — not MxN partitioned; enables cross-MNO comparison and cross-release diff as natural traversals; shared standards and feature nodes
-10. **Per-MNO parser registry** — each MNO gets dedicated parser; VZW parser built for PoC
+10. **DocumentProfiler + generic parser** — replaces per-MNO parser registry; DocumentProfiler is standalone, LLM-free, outputs human-editable JSON profile; generic parser applies profile to any MNO's docs; adding new MNO = profile representative docs, no code changes
 11. **Test cases as first-class graph citizens** — separate parser, Test_Case nodes, tested_by/tests edges, doc_type metadata in vector store
 12. **Release-specific standards versioning** — different MNOs may reference different 3GPP releases; separate Standard_Section nodes per release
-13. **Multi-format support (PDF, DOCX, XLS/XLSX)** — format-aware extraction layer produces normalized intermediate representation; supports embedded OLE objects (XLSX in DOCX, etc.) and images/diagrams
+13. **Multi-format support (PDF, DOC, DOCX, XLS, XLSX)** — format-aware extraction layer produces normalized intermediate representation; DOC converted to DOCX via LibreOffice headless; supports embedded OLE objects and images/diagrams
 14. **Folder-structure-driven metadata** — `/<MNO>/<Release>/Requirements/`, `/<MNO>/<Release>/TestCases/`, `/Standards/<Spec>/<Release>/`
 
 ---
@@ -97,20 +97,21 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - Knowledge graph model (8 node types, 15+ edge types)
 - Query pipeline (6 stages including MNO/release resolution)
 - All target capabilities with query flow examples
-- PoC plan (10 steps) with evaluation criteria
+- PoC plan (11 steps, including DocumentProfiler) with evaluation criteria
 - 15 identified risks with mitigations
 
 ---
 
 ## Where We Left Off
 
-**Status:** Design phase COMPLETE. Ready to start PoC implementation.
+**Status:** Design phase COMPLETE (TDD v0.4). Ready to start PoC implementation.
 
 **Next step:** PoC Step 1 — Document content extraction
-- Need working Python environment with POSIX shell (was setting this up when session ended)
-- Packages needed: `pymupdf pdfplumber python-docx openpyxl olefile Pillow`
+- Need working Python environment
+- Packages needed: `pymupdf pdfplumber python-docx openpyxl xlrd olefile Pillow`
 - Start by extracting text + tables from the 5 VZW PDF files in the repo
 - Build the normalized intermediate representation (Section 5.1.7 of TDD)
+- Then Step 2: Run DocumentProfiler on LTEDATARETRY + LTEB13NAC to derive VZW OA profile
 
 **Git repo initialized** in the working directory. TDD and CLAUDE.md should be committed.
 

@@ -1,12 +1,13 @@
 # Technical Design Document: Telecom Requirements AI System
 
-**Version:** 0.3
+**Version:** 0.4
 **Date:** April 2026
 **Status:** PoC Design Phase
 **Change Log:**
 - v0.1 (2026-04-11): Initial design — single MNO, single release
 - v0.2 (2026-04-12): Multi-MNO, multi-release, test case ingestion, unified graph, folder structure
 - v0.3 (2026-04-12): Multi-format document support (PDF, DOCX, XLS), embedded objects, image/diagram handling
+- v0.4 (2026-04-12): DocumentProfiler — standalone, LLM-free module that derives document structure profiles from representative docs, replacing hard-coded per-MNO parsers with a generic profile-driven structural parser; added DOC format support
 
 ---
 
@@ -21,13 +22,14 @@
    - 4.3 Document Organization and Folder Structure
 5. [Ingestion Pipeline](#5-ingestion-pipeline)
    - 5.1 Document Content Extraction
-   - 5.2 Structural Parser (Requirements)
-   - 5.3 Structural Parser (Test Cases)
-   - 5.4 Cross-Reference Extraction
-   - 5.5 Standards Specs Ingestion
-   - 5.6 Feature Taxonomy Derivation
-   - 5.7 Knowledge Graph Construction
-   - 5.8 Vector Store Construction
+   - 5.2 Document Profiling (DocumentProfiler)
+   - 5.3 Structural Parser (Requirements)
+   - 5.4 Structural Parser (Test Cases)
+   - 5.5 Cross-Reference Extraction
+   - 5.6 Standards Specs Ingestion
+   - 5.7 Feature Taxonomy Derivation
+   - 5.8 Knowledge Graph Construction
+   - 5.9 Vector Store Construction
 6. [Knowledge Graph Model](#6-knowledge-graph-model)
    - 6.1 Node Types
    - 6.2 Edge Types
@@ -118,8 +120,8 @@ Pure vector-based RAG was evaluated and found inadequate because:
 | **Data sensitivity** | Production data is proprietary MNO requirements; PoC uses only publicly available documents |
 | **Scale (production)** | Multiple MNOs (3+), multiple releases per MNO (4+ per year), hundreds of requirement + test case documents per release; total corpus can be several GBs |
 | **Scale (PoC)** | 5 Verizon OA documents (Feb 2026 release) |
-| **MNO formats** | Each MNO has its own consistent document format for requirements and test cases; separate parsers needed per MNO |
-| **Document formats** | Documents may be in PDF, DOCX, or XLS/XLSX format; may contain embedded tables, images, diagrams, and embedded Microsoft documents (OLE objects) |
+| **MNO formats** | Each MNO has its own consistent document format for requirements and test cases; document structure profiles are derived from representative docs via the standalone DocumentProfiler (no per-MNO parser code needed) |
+| **Document formats** | Documents may be in PDF, DOC, DOCX, XLS, or XLSX format; may contain embedded tables, images, diagrams, and embedded Microsoft documents (OLE objects) |
 
 ---
 
@@ -134,21 +136,30 @@ The system consists of two major pipelines: **Ingestion** (offline, document pro
 │                          INGESTION PIPELINE                               │
 │                                                                           │
 │  Source Folder Structure:                                                  │
-│  /<MNO>/<Release>/Requirements/*.{pdf,docx,xlsx}                          │
-│  /<MNO>/<Release>/TestCases/*.{pdf,docx,xlsx}                             │
+│  /<MNO>/<Release>/Requirements/*.{pdf,doc,docx,xls,xlsx}                  │
+│  /<MNO>/<Release>/TestCases/*.{pdf,doc,docx,xls,xlsx}                     │
 │  /Standards/<Spec>/<Release>/*.pdf  (pre-downloaded)                      │
 │                                                                           │
+│                  ┌──────────────────┐                                    │
+│  (one-time)      │ DocumentProfiler │   Standalone, LLM-free module      │
+│  Representative  │ (heuristic       │──> document_profile.json           │
+│  Docs ──────────>│  analysis)       │   (human-reviewable & editable)    │
+│                  └──────────────────┘                                    │
+│                                              │ profile                   │
+│                                              ▼                           │
 │  ┌───────────┐   ┌──────────────────┐   ┌───────────────┐                │
 │  │ MNO Req   │──>│ Content          │──>│  Structural   │                │
 │  │ Docs      │   │ Extraction       │   │  Parser       │                │
-│  │(pdf/docx/ │   │ (format-aware,   │   │  (per-MNO)    │                │
-│  │ xlsx)     │   │  embedded obj    │   └──────┬────────┘                │
-│  └───────────┘   │  extraction,     │          │                         │
-│                  │  image export,   │   ┌──────┴────────┐                │
-│  ┌───────────┐   │  → normalized    │   │  Cross-Ref    │                │
-│  │ MNO Test  │──>│  intermediate    │   │  Extraction   │                │
-│  │ Case Docs │   │  representation) │   │  (regex+LLM)  │                │
-│  └───────────┘   └──────────────────┘   └──────┬────────┘                │
+│  │(pdf/doc/  │   │ (format-aware,   │   │  (generic,    │                │
+│  │ docx/xls/ │   │  embedded obj    │   │  profile-     │                │
+│  │ xlsx)     │   │  extraction,     │   │  driven)      │                │
+│  └───────────┘   │  image export,   │   └──────┬────────┘                │
+│                  │  → normalized    │          │                         │
+│  ┌───────────┐   │  intermediate    │   ┌──────┴────────┐                │
+│  │ MNO Test  │──>│  representation) │   │  Cross-Ref    │                │
+│  │ Case Docs │   │                  │   │  Extraction   │                │
+│  └───────────┘   └──────────────────┘   │  (regex+LLM)  │                │
+│                                         └──────┬────────┘                │
 │                                                │                         │
 │  ┌───────────┐   ┌──────────────────┐   ┌──────┴────────┐                │
 │  │ Standards │──>│ Standards Section│   │  Feature      │                │
@@ -295,18 +306,21 @@ Source documents are organized in a hierarchical folder structure that maps dire
 | Format | Typical Usage | Extraction Approach |
 |--------|--------------|-------------------|
 | **PDF** | Published/finalized requirement specs, standards | `pymupdf` (PyMuPDF) or `pdfplumber` |
+| **DOC** | Legacy Word documents (pre-2007 binary format) | Convert to DOCX via LibreOffice headless, then process as DOCX |
 | **DOCX** | Working/editable requirement specs, some test plans | `python-docx` for structure; `mammoth` for HTML conversion |
-| **XLS/XLSX** | Requirement matrices, compliance sheets, some test cases | `openpyxl` (XLSX) / `xlrd` (XLS) or `pandas` |
+| **XLS** | Legacy Excel spreadsheets (pre-2007 binary format) | `xlrd` or convert to XLSX via LibreOffice headless |
+| **XLSX** | Requirement matrices, compliance sheets, some test cases | `openpyxl` or `pandas` |
 
-**Format detection:** Based on file extension. The extraction layer auto-selects the appropriate extractor.
+**Format detection:** Based on file extension. The extraction layer auto-selects the appropriate extractor. Legacy formats (DOC, XLS) are converted to their modern equivalents before extraction.
 
 ```python
 # Extractor registry pattern
 extractors = {
     ".pdf": PDFExtractor(),
+    ".doc": DOCExtractor(),       # converts to DOCX, then delegates to DOCXExtractor
     ".docx": DOCXExtractor(),
+    ".xls": XLSExtractor(),       # converts to XLSX or uses xlrd directly
     ".xlsx": XLSXExtractor(),
-    ".xls": XLSExtractor(),
 }
 ```
 
@@ -322,7 +336,20 @@ extractors = {
 
 **Challenge:** PDF is a presentation format — it has no semantic structure. Table detection relies on heuristics (ruled lines, column alignment). Complex nested tables or tables spanning multiple pages may require manual correction.
 
-#### 5.1.3 DOCX Extraction
+#### 5.1.3 DOC and DOCX Extraction
+
+**DOC (Legacy Binary Format):**
+
+DOC files use Microsoft's pre-2007 binary format, which cannot be parsed directly by `python-docx`. The extraction strategy is **conversion-first:**
+
+1. Convert DOC → DOCX using LibreOffice headless (`libreoffice --headless --convert-to docx`)
+2. Process the resulting DOCX through the standard DOCX extraction pipeline below
+
+This preserves heading styles, tables, and embedded objects with high fidelity. LibreOffice headless is a one-time dependency that runs without a GUI.
+
+**Fallback:** If LibreOffice conversion fails for a specific file, use `textract` or `antiword` for plain text extraction (loses structural information — flag for manual review).
+
+**DOCX Extraction:**
 
 **Tooling:** `python-docx` for native access to document structure.
 
@@ -480,35 +507,238 @@ All extractors produce a common intermediate format consumed by the structural p
 }
 ```
 
-This normalized representation ensures that the structural parser (Section 5.2) works identically regardless of whether the source was PDF, DOCX, or XLS. The parser operates on `content_blocks`, not on raw format-specific data.
+This normalized representation ensures that the structural parser (Section 5.3) works identically regardless of whether the source was PDF, DOC, DOCX, XLS, or XLSX. The parser operates on `content_blocks`, not on raw format-specific data.
 
-**Key benefit of DOCX over PDF:** When the source is DOCX, heading levels come directly from document styles (highly reliable). When the source is PDF, heading levels must be inferred from font size, boldness, and indentation (heuristic, error-prone). The structural parser can use the `source_format` field to adjust its confidence and strategy accordingly.
+**Key benefit of DOCX over PDF:** When the source is DOCX (or DOC converted to DOCX), heading levels come directly from document styles (highly reliable). When the source is PDF, heading levels must be inferred from font size, boldness, and indentation (heuristic, error-prone). The structural parser can use the `source_format` field to adjust its confidence and strategy accordingly.
 
-### 5.2 Structural Parser (Requirements)
+**Key benefit for DocumentProfiler:** When profiling from DOCX sources, the profiler gets heading styles directly, providing high-confidence heading detection rules. When profiling from PDF sources, the profiler must cluster font attributes to infer heading levels — the resulting profile should be reviewed more carefully.
 
-**Objective:** Parse the normalized intermediate representation (from Section 5.1.7) into a structured requirement tree, leveraging the consistent per-MNO document format.
+### 5.2 Document Profiling (DocumentProfiler)
 
-**Input:** Normalized content blocks from the document content extraction layer. The parser operates on the intermediate representation regardless of original file format.
+**Objective:** Analyze representative documents to derive a **document structure profile** that drives the generic structural parser. The DocumentProfiler is a **standalone module** — an independent executable that runs outside the ingestion pipeline, with no LLM dependency.
 
-**Approach:** Rule-based parser **specific to each MNO's document format**. A parser registry maps MNO identifiers to their corresponding parser implementation.
+**Key design properties:**
 
-```python
-# Parser registry pattern
-parsers = {
-    "VZW": VZWRequirementParser(),
-    "TMO": TMORequirementParser(),
-    "ATT": ATTRequirementParser(),
+| Property | Detail |
+|----------|--------|
+| **Standalone executable** | Runs independently, before the ingestion pipeline; its own module with its own CLI |
+| **No LLM dependency** | Pure heuristic/algorithmic analysis — font clustering, regex mining, frequency analysis |
+| **Iterative refinement** | Run on initial representative docs, then re-run with additional docs to refine the profile |
+| **Human-editable output** | Produces a JSON profile that can be manually reviewed and tuned |
+| **One profile per MNO document format** | e.g., one profile for VZW OA requirements, one for TMO requirements, one for VZW test cases |
+
+#### 5.2.1 Workflow
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                    DOCUMENT PROFILING (one-time, offline)            │
+│                                                                     │
+│  1. Select 2+ representative docs for an MNO format                 │
+│  2. Run format-specific extractors (5.1) → normalized content blocks│
+│  3. Feed blocks to DocumentProfiler                                 │
+│  4. DocumentProfiler analyzes patterns → document_profile.json      │
+│  5. Human reviews and optionally edits the profile                  │
+│  6. Re-run with additional docs if needed → profile updated/refined │
+│  7. Once profile is accurate → proceed with full ingestion pipeline │
+│                                                                     │
+│  Repeat steps 5-6 until the profile accurately captures the         │
+│  document format. The profile is perfected BEFORE the ingestion     │
+│  pipeline runs.                                                     │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**CLI interface:**
+
+```bash
+# Initial profiling from representative docs
+documentprofiler --create \
+    --name "VZW_OA" \
+    --docs LTEDATARETRY.pdf LTEB13NAC.pdf \
+    --output vzw_oa_profile.json
+
+# Update profile with additional representative docs
+documentprofiler --update \
+    --profile vzw_oa_profile.json \
+    --docs LTESMS.pdf LTEAT.pdf
+
+# Validate profile against a document (check that the profile correctly parses it)
+documentprofiler --validate \
+    --profile vzw_oa_profile.json \
+    --doc LTEOTADM.pdf
+```
+
+#### 5.2.2 What the Profiler Derives
+
+| Pattern Category | What It Detects | Detection Method |
+|-----------------|----------------|-----------------|
+| **Heading hierarchy** | Font sizes, boldness, all-caps patterns that indicate heading levels | Font size clustering across all text blocks; frequency analysis to distinguish headings from body text |
+| **Section numbering** | Numbering scheme (dot-separated, roman, alphanumeric), max depth | Regex pattern mining on detected heading text |
+| **Requirement ID format** | Requirement ID regex pattern and component structure | Regex mining across all document text; frequency and uniqueness validation |
+| **Plan metadata** | Location and format of plan name, ID, version, release date | Header/title page analysis; regex patterns matched against first few pages |
+| **Document zones** | Content classification of top-level sections (intro, specs, scenarios, etc.) | Section heading text analysis across representative docs; pattern matching for common zone indicators |
+| **Header/footer patterns** | Repeating text on every page that should be stripped | Cross-page text comparison; text that appears on >80% of pages at consistent positions |
+| **Cross-reference patterns** | Standards citation formats, internal section references, plan name references | Regex mining for known citation patterns (3GPP TS, section refs, etc.) |
+| **Table structure patterns** | Common table layouts, header row patterns | Table header text analysis across all extracted tables |
+| **Body text characteristics** | Font size range and families used for normal body text | Font attribute frequency analysis (most common font size = body text) |
+
+#### 5.2.3 Document Profile Schema
+
+The profile is a JSON file — machine-readable and human-editable:
+
+```json
+{
+  "profile_name": "VZW_OA",
+  "profile_version": 1,
+  "created_from": ["LTEDATARETRY.pdf", "LTEB13NAC.pdf"],
+  "last_updated": "2026-04-12",
+
+  "heading_detection": {
+    "method": "font_size_clustering | docx_styles",
+    "levels": [
+      {"level": 1, "font_size_min": 16.0, "font_size_max": 18.0, "bold": true, "all_caps": true},
+      {"level": 2, "font_size_min": 14.0, "font_size_max": 16.0, "bold": true, "all_caps": false},
+      {"level": 3, "font_size_min": 12.0, "font_size_max": 14.0, "bold": true, "all_caps": false}
+    ],
+    "numbering_pattern": "^(\\d+\\.)+\\d*\\s",
+    "max_observed_depth": 6
+  },
+
+  "requirement_id": {
+    "pattern": "VZ_REQ_[A-Z0-9]+_\\d+",
+    "components": {
+      "prefix": "VZ_REQ",
+      "separator": "_",
+      "plan_id_position": 2,
+      "number_position": 3
+    },
+    "sample_ids": ["VZ_REQ_LTEDATARETRY_7748", "VZ_REQ_LTEB13NAC_1234"],
+    "total_found": 487
+  },
+
+  "plan_metadata": {
+    "plan_name": {"location": "first_page", "pattern": "Plan Name:\\s*(.+)"},
+    "plan_id": {"location": "first_page", "pattern": "Plan Id:\\s*(\\w+)"},
+    "version": {"location": "first_page", "pattern": "Version\\s*(\\d+)"},
+    "release_date": {"location": "first_page", "pattern": "Release Date:\\s*(.+)"}
+  },
+
+  "document_zones": [
+    {"section_pattern": "^1\\.1\\b", "zone_type": "introduction", "description": "Applicability, references, acronyms, requirement language"},
+    {"section_pattern": "^1\\.2\\b", "zone_type": "hardware_specs", "description": "Mechanical, electrical specifications"},
+    {"section_pattern": "^1\\.3\\b", "zone_type": "software_specs", "description": "Core software specifications, timers, algorithms"},
+    {"section_pattern": "^1\\.4\\b", "zone_type": "scenarios", "description": "Scenario-based requirements (bulk of content)"}
+  ],
+
+  "header_footer": {
+    "header_patterns": ["Verizon Wireless.*Confidential", "Open Development"],
+    "footer_patterns": ["Page\\s+\\d+\\s+of\\s+\\d+"],
+    "page_number_pattern": "^\\s*\\d+\\s*$"
+  },
+
+  "cross_reference_patterns": {
+    "standards_citations": [
+      "3GPP\\s+TS\\s+[\\d.]+(?:\\s+[Ss]ection\\s+[\\d.]+)?",
+      "3GPP\\s+TS\\s+[\\d.]+(?:\\s+[Rr]elease\\s+\\d+)?"
+    ],
+    "internal_section_refs": "[Ss]ee\\s+[Ss]ection\\s+[\\d.]+",
+    "requirement_id_refs": "VZ_REQ_[A-Z0-9]+_\\d+"
+  },
+
+  "body_text": {
+    "font_size_range": [9.0, 12.0],
+    "font_families": ["Arial", "Calibri"]
+  }
 }
 ```
 
-**VZW OA Parser** (reference implementation for PoC):
+#### 5.2.4 Profile Update and Manual Editing
+
+**Adding more representative documents:**
+
+When run with `--update`, the profiler merges patterns from the new documents with the existing profile:
+- New heading font sizes are incorporated into the clustering
+- New requirement ID variants are added (widening the regex if needed)
+- New cross-reference patterns are added
+- Confidence scores are updated based on the larger sample
+- `created_from` list is updated to include the new documents
+- `profile_version` is incremented
+
+**Manual editing:**
+
+The profile JSON is designed for human editability. Common manual edits:
+- Adjusting heading level font size thresholds when auto-clustering splits a level incorrectly
+- Correcting or adding requirement ID patterns for edge cases the profiler missed
+- Adding document zone classifications that aren't obvious from heading text alone
+- Fixing header/footer patterns (e.g., when page headers vary slightly across documents)
+- Adding standards citation patterns specific to the MNO
+
+**Validation:**
+
+After any update (automated or manual), run `--validate` against a document not in the representative set to verify the profile generalizes correctly. The validator reports:
+- How many headings were detected and at which levels
+- How many requirement IDs were found
+- Whether plan metadata was successfully extracted
+- Header/footer strip coverage
+- Any content blocks that couldn't be classified
+
+#### 5.2.5 Relationship to Structural Parser
+
+The DocumentProfiler produces the rules; the Generic Structural Parser (Section 5.3) applies them:
+
+```
+DocumentProfiler (offline, one-time)     Generic Structural Parser (per-document)
+─────────────────────────────────────     ──────────────────────────────────────
+Representative docs                       Any MNO doc
+    │                                         │
+    ▼                                         ▼
+Heuristic analysis                        Read document_profile.json
+    │                                         │
+    ▼                                         ▼
+document_profile.json ───────────────────> Apply profile rules to content blocks
+                                              │
+                                              ▼
+                                          Structured requirement tree JSON
+```
+
+**This separation means:**
+- Adding a new MNO requires **zero code changes** — run the profiler on representative docs, review the profile, done
+- Format changes between MNO releases require **re-profiling**, not code modification
+- The profile is a **versioned artifact** stored alongside the documents it describes
+- Profiling quality can be validated independently before committing to full ingestion
+
+### 5.3 Structural Parser (Requirements)
+
+**Objective:** Parse the normalized intermediate representation (from Section 5.1.7) into a structured requirement tree, using the document structure profile generated by the DocumentProfiler (Section 5.2).
+
+**Input:**
+1. Normalized content blocks from the document content extraction layer (Section 5.1)
+2. Document structure profile JSON from the DocumentProfiler (Section 5.2)
+
+**Approach:** A single **generic, profile-driven parser** that applies the rules from the document profile to any MNO's documents. No per-MNO parser code is needed.
+
+```python
+# Generic parser — profile drives the behavior
+parser = GenericStructuralParser(profile="vzw_oa_profile.json")
+result = parser.parse(normalized_blocks, mno="VZW", release="2026_Feb")
+```
+
+**How the parser uses the profile:**
+
+| Profile Section | Parser Behavior |
+|----------------|----------------|
+| `heading_detection` | Classifies content blocks as headings vs. body text; assigns heading levels |
+| `requirement_id` | Regex-matches requirement IDs in text; extracts plan ID and number components |
+| `plan_metadata` | Extracts plan name, ID, version, release date from the document header |
+| `document_zones` | Tags top-level sections with zone types (intro, specs, scenarios) |
+| `header_footer` | Strips matched patterns before structural parsing |
+| `cross_reference_patterns` | Initial cross-reference detection (refined in Section 5.5) |
+| `body_text` | Distinguishes body text from other content (captions, footnotes) |
+
+**VZW OA Profile** (PoC reference — derived by DocumentProfiler from LTEDATARETRY.pdf and LTEB13NAC.pdf):
 - **Requirement ID pattern:** `VZ_REQ_{PLANID}_{NUMBER}` — globally unique, with plan name embedded
-- **Section numbering:** Hierarchical numbering (e.g., `1.4.3.1.1.10`) up to 6+ levels deep
-- **Plan metadata:** Plan Name, Plan ID, Version Number, Release Date in document header
-- **Consistent section zones:**
-  - Sections 1.1–1.2: Metadata (applicability, acronyms, hardware specs)
-  - Section 1.3: Core software specifications (timers, algorithms, rules)
-  - Section 1.4: Scenario-based requirements
+- **Section numbering:** Hierarchical dot-separated numbering (e.g., `1.4.3.1.1.10`) up to 6+ levels deep
+- **Plan metadata:** Plan Name, Plan ID, Version Number, Release Date on first page
+- **Document zones:** 1.1–1.2 (metadata), 1.3 (software specs), 1.4 (scenarios)
 
 **Output per document:** Structured JSON with MNO and release metadata derived from folder path:
 
@@ -562,11 +792,11 @@ parsers = {
 
 **Note on `referenced_standards_releases`:** Each MNO requirement document typically specifies in its Introduction/References section which release of each standard it references (e.g., "This document is based on 3GPP Release 10 specifications"). This is captured at the document level and used to resolve the correct standards version during standards ingestion.
 
-### 5.3 Structural Parser (Test Cases)
+### 5.4 Structural Parser (Test Cases)
 
 **Objective:** Parse test case documents into structured test case records, linked to their corresponding requirements.
 
-**Approach:** Rule-based parser specific to each MNO's test case format. Test case documents have their own format distinct from requirement documents, but are consistent within each MNO.
+**Approach:** The same generic, profile-driven parser approach used for requirements (Section 5.3). Test case documents have their own format distinct from requirement documents, so they use a **separate document profile** (e.g., `vzw_oa_testcase_profile.json`). The DocumentProfiler (Section 5.2) is run on representative test case documents to derive this profile.
 
 **Key extraction targets:**
 
@@ -606,7 +836,7 @@ parsers = {
 
 **Traceability link extraction:** Test case documents typically reference specific requirement IDs. These references are extracted to create `tested_by` / `tests` edges in the knowledge graph. If explicit requirement ID references are absent, LLM-based matching between test case descriptions and requirement text is used as a fallback.
 
-### 5.4 Cross-Reference Extraction
+### 5.5 Cross-Reference Extraction
 
 **Objective:** Identify all references from each requirement to other requirements, other plans (within the same MNO), and external standards.
 
@@ -620,7 +850,7 @@ parsers = {
 **Method 2: Standards References (Deterministic)**
 - Regex extraction of 3GPP spec citations: `3GPP TS \d+\.\d+`, section numbers, release versions
 - Regex for GSMA/OMA spec citations
-- **Release resolution:** If a reference doesn't specify a standards release, use the document-level `referenced_standards_releases` mapping (from Section 5.2) to resolve the correct version
+- **Release resolution:** If a reference doesn't specify a standards release, use the document-level `referenced_standards_releases` mapping (from Section 5.3) to resolve the correct version
 - Reliability: High
 
 **Method 3: Concept/Feature References (LLM-Assisted)**
@@ -631,7 +861,7 @@ parsers = {
 
 **Output:** A cross-reference manifest per document listing all outbound references with their types.
 
-### 5.5 Standards Specs Ingestion (Hybrid Selective — Option C)
+### 5.6 Standards Specs Ingestion (Hybrid Selective — Option C)
 
 **Objective:** Ingest the specific sections of 3GPP/GSMA standards that MNO requirements reference, with enough surrounding context for completeness. Handle **release-specific** standards references.
 
@@ -682,7 +912,7 @@ The LLM produces a concise summary of what specifically differs (e.g., "VZW mand
 
 When the same 3GPP section is referenced by requirements from different MNOs (even if different standards releases), flag it as a comparison opportunity. This enables queries like "How do VZW and TMO differ in their handling of T3402?"
 
-### 5.6 Feature Taxonomy Derivation
+### 5.7 Feature Taxonomy Derivation
 
 **Objective:** Build a feature/capability taxonomy bottom-up from the documents themselves, enabling cross-document and **cross-MNO** grouping of requirements by logical feature.
 
@@ -751,7 +981,7 @@ The derived taxonomy is reviewed by a domain expert to:
 
 **The feature taxonomy is MNO-agnostic at the feature level** — "IMS Registration" is a telecom concept that exists regardless of MNO. The `mno_coverage` field maps to specific plans per MNO that contribute to this feature. This enables cross-MNO comparison queries.
 
-### 5.7 Knowledge Graph Construction
+### 5.8 Knowledge Graph Construction
 
 **Objective:** Build a single unified knowledge graph across all MNOs, releases, documents, test cases, standards, and features.
 
@@ -775,7 +1005,7 @@ See [Section 6: Knowledge Graph Model](#6-knowledge-graph-model) for the full gr
 11. Create feature mapping edges (requirement → feature)
 12. Create cross-MNO concept links (via shared feature and standards nodes)
 
-### 5.8 Vector Store Construction
+### 5.9 Vector Store Construction
 
 **Objective:** Create embeddings for requirement and test case nodes for use in targeted vector retrieval, in a single unified vector store with metadata filters.
 
@@ -1317,22 +1547,23 @@ Validate that the Knowledge Graph + RAG architecture can reliably answer cross-d
 | Infrastructure | Local Python environment | On-premise servers |
 | Vector store | FAISS or ChromaDB | Production vector DB |
 | Graph store | NetworkX (in-memory) | Neo4j or similar |
-| Parsers | VZW parser only | Per-MNO parser registry |
+| Parsers | VZW document profile + generic parser | DocumentProfiler + generic parser per MNO profile |
 
 ### 9.3 PoC Steps
 
 | Step | Description | Validates | Deliverable |
 |------|-------------|-----------|-------------|
-| **1** | Set up folder structure; document content extraction for all 5 VZW docs (PDF for PoC; extraction layer supports DOCX/XLS) | Clean structured text, tables, and images from VZW docs? | Normalized intermediate representation per document |
-| **2** | Build VZW structural parser for requirements | Reliable extraction of IDs, hierarchy, section text? | Requirement tree JSON per document |
-| **3** | Build VZW test case parser (if test case docs available) | Test case extraction and requirement linkage? | Test case JSON per document |
-| **4** | Cross-reference extraction | Inter-document and standards references identified? | Cross-reference manifest per document |
-| **5** | LLM-driven feature taxonomy derivation | Bottom-up taxonomy produces sensible groupings? | Feature taxonomy JSON + human review notes |
-| **6** | Download referenced 3GPP specs; selective section extraction | Can we obtain and parse referenced standards sections? | Standards sections JSON |
-| **7** | Knowledge graph construction (with MNO/release metadata) | Graph structure correct and complete? Architecture supports future multi-MNO expansion? | NetworkX graph, visualizable, queryable |
-| **8** | Vector store construction with contextualized, metadata-tagged chunks | Baseline retrieval quality with metadata filtering? | FAISS/ChromaDB index |
-| **9** | Query pipeline implementation (MNO/release resolution → graph scoping → targeted RAG → context assembly → LLM synthesis) | **Core validation: can the system answer cross-document questions?** | Working query pipeline |
-| **10** | Evaluation on test questions | Quantified performance | Evaluation report |
+| **1** | Set up Python environment and folder structure; build document content extraction layer; extract all 5 VZW docs (PDF for PoC; extraction layer supports DOC/DOCX/XLS/XLSX) | Clean structured text, tables, and images from VZW docs? | Normalized intermediate representation per document |
+| **2** | Run DocumentProfiler on representative VZW docs (LTEDATARETRY + LTEB13NAC); iterate until profile accurately captures VZW OA document structure | Does the profiler derive correct heading levels, requirement ID patterns, section numbering, document zones? | `vzw_oa_profile.json` — validated and human-reviewed |
+| **3** | Run generic structural parser with VZW profile on all 5 docs | Reliable extraction of IDs, hierarchy, section text using the profile? | Requirement tree JSON per document |
+| **4** | Build test case parsing (if test case docs available) — profile + generic parser approach | Test case extraction and requirement linkage? | Test case JSON per document |
+| **5** | Cross-reference extraction | Inter-document and standards references identified? | Cross-reference manifest per document |
+| **6** | LLM-driven feature taxonomy derivation | Bottom-up taxonomy produces sensible groupings? | Feature taxonomy JSON + human review notes |
+| **7** | Download referenced 3GPP specs; selective section extraction | Can we obtain and parse referenced standards sections? | Standards sections JSON |
+| **8** | Knowledge graph construction (with MNO/release metadata) | Graph structure correct and complete? Architecture supports future multi-MNO expansion? | NetworkX graph, visualizable, queryable |
+| **9** | Vector store construction with contextualized, metadata-tagged chunks | Baseline retrieval quality with metadata filtering? | FAISS/ChromaDB index |
+| **10** | Query pipeline implementation (MNO/release resolution → graph scoping → targeted RAG → context assembly → LLM synthesis) | **Core validation: can the system answer cross-document questions?** | Working query pipeline |
+| **11** | Evaluation on test questions | Quantified performance | Evaluation report |
 
 ### 9.4 PoC Evaluation
 
@@ -1372,7 +1603,7 @@ The PoC is considered successful if:
 
 | # | Risk | Severity | Likelihood | Mitigation |
 |---|------|----------|-----------|------------|
-| 1 | **Document extraction quality** — tables, diagrams, embedded objects, and complex formatting may not extract cleanly across all formats (PDF, DOCX, XLS) | High | Medium | DOCX provides better structural access than PDF (headings, native tables). Prefer DOCX when both formats are available. For PDF, evaluate multiple libraries (pymupdf, pdfplumber). For embedded OLE objects, use recursive extraction with `olefile` fallback. Test extraction quality per format early. |
+| 1 | **Document extraction quality** — tables, diagrams, embedded objects, and complex formatting may not extract cleanly across all formats (PDF, DOC, DOCX, XLS, XLSX) | High | Medium | DOCX provides better structural access than PDF (headings, native tables). Prefer DOCX when both formats are available. DOC files are converted to DOCX via LibreOffice headless. For PDF, evaluate multiple libraries (pymupdf, pdfplumber). For embedded OLE objects, use recursive extraction with `olefile` fallback. Test extraction quality per format early. |
 | 2 | **Cross-document edge completeness** — implicit dependencies between documents may not be detected, leading to incomplete answers | High | Medium | Three-layer extraction strategy (deterministic + standards + LLM-based). Measure edge recall during PoC. Add missing edges from evaluation failures. |
 | 3 | **Feature taxonomy quality** — LLM-derived taxonomy may incorrectly group or miss features, especially cross-MNO alignment | Medium | Medium | Human review step is mandatory. Start simple (fewer, broader features) and refine. Cross-MNO alignment verified by domain expert. |
 | 4 | **Graph traversal explosion** — traversing too many edges returns an unmanageably large candidate set, especially in unified graph with multiple MNOs | Medium | Medium | Configurable depth limits (default: 2 hops). Edge type filtering based on query type. MNO/release metadata filtering at every traversal step. |
@@ -1382,8 +1613,8 @@ The PoC is considered successful if:
 | 8 | **Unified graph scale** — single graph spanning all MNOs × releases could become very large | Low (PoC) / High (Prod) | High | PoC validates architecture with single MNO+release. Production uses Neo4j with indexing on `mno` + `release` attributes. Monitor query latency as graph grows. Physical partitioning (sharding by MNO) is a fallback if needed. |
 | 9 | **Relationship type classification errors** — LLM may misclassify defer/constrain/override relationships with standards | Medium | Medium | Include representative examples in classification prompts. Validate classification on a sample during PoC. |
 | 10 | **Cross-release requirement matching** — structural changes across versions (renumbered sections, reorganized requirements) may break ID-based matching for `version_of` edges | Medium | Medium | Match by requirement ID first (typically stable across versions). Fall back to section number + text similarity for reorganized sections. Flag low-confidence matches for human review. |
-| 11 | **Per-MNO parser maintenance** — each MNO requires a separate parser; format changes across releases require parser updates | Medium | High | Parser design isolates format-specific logic. Version the parsers alongside MNO releases. Detect format changes early by validating extraction output structure. |
-| 12 | **Test case document format variability** — test case formats may vary more than requirement formats, even within an MNO | Medium | Medium | Build test case parsers incrementally. Start with the most structured format. Fall back to LLM-based extraction for less structured test docs. |
+| 11 | **Document profile accuracy** — the DocumentProfiler's heuristic analysis may produce incorrect heading level mappings, miss requirement ID patterns, or misclassify document zones, especially for PDFs where structure must be inferred from font attributes | Medium | Medium | Profile is human-reviewable and editable JSON. Validation step (`--validate`) checks profile against a held-out document. Iterative refinement workflow — re-run with additional docs until profile stabilizes. DOCX sources produce higher-confidence profiles than PDF sources. |
+| 12 | **Test case document format variability** — test case formats may vary more than requirement formats, even within an MNO | Medium | Medium | Separate document profiles for test case documents. Profile iteratively from representative test case docs. Fall back to LLM-based extraction for less structured test docs. |
 | 13 | **MNO/release resolution ambiguity** — user queries may not specify MNO or release, leading to incorrect scoping | Low | Medium | Default to latest release. For ambiguous MNO, ask for clarification or search across all (with clear attribution in response). Log resolution decisions for transparency. |
 | 14 | **Embedded object extraction failures** — OLE-embedded documents within DOCX may use proprietary/uncommon formats or be corrupted | Medium | Medium | Implement recursive extraction with graceful degradation — if an embedded object can't be extracted, log it and flag for manual review. Track extraction success rate per object type. |
 | 15 | **Image/diagram information loss** — diagrams containing requirement-relevant information (call flows, state machines) are opaque to text-based processing | Medium | High | PoC: store images with captions and surrounding text as proxy. Production: use multimodal LLM to extract structured descriptions. Prioritize call flow and state machine diagrams which carry highest-value information. |
@@ -1433,11 +1664,13 @@ Referenced Standards Release:
 |-----------|-----------|-------|
 | Language | Python 3.10+ | |
 | PDF extraction | pymupdf / pdfplumber | Evaluate both; choose based on table extraction quality |
+| DOC conversion | LibreOffice headless | Converts DOC → DOCX; one-time system dependency |
 | DOCX extraction | python-docx | Native access to headings, tables, images, OLE parts |
-| XLS/XLSX extraction | openpyxl / pandas | Structured tabular data; merged cell handling |
+| XLS/XLSX extraction | openpyxl / xlrd / pandas | Structured tabular data; merged cell handling; xlrd for legacy XLS |
 | OLE object handling | olefile | Fallback for complex embedded objects |
 | Image handling | Pillow (extraction); multimodal LLM (production) | PoC: extract and store; production: LLM description |
-| Structural parsing | Custom Python (regex + rules) | VZW OA format-specific; extensible parser registry |
+| Document profiling | DocumentProfiler (custom Python) | Standalone, LLM-free; heuristic font/regex analysis; outputs JSON profile |
+| Structural parsing | GenericStructuralParser (custom Python) | Profile-driven; no per-MNO code; reads document_profile.json |
 | LLM (PoC) | Claude API or Gemini API | For feature extraction, concept tagging, query synthesis |
 | Knowledge graph | NetworkX | In-memory, sufficient for single MNO+release PoC |
 | Vector store | FAISS or ChromaDB | Local, with metadata filtering support |
@@ -1452,7 +1685,7 @@ Referenced Standards Release:
 | Knowledge graph | Neo4j or equivalent graph database; indexed on `mno` + `release` for fast filtered traversal |
 | Vector store | Production-grade vector DB (Milvus, Weaviate, or similar on-premise option) with metadata filtering |
 | Embedding model | Evaluate proprietary LLM's embedding capability; otherwise on-premise open-source model (e.g., BGE, E5) |
-| Parser registry | Per-MNO parser implementations; versioned alongside MNO release format changes |
+| Document profiles | Per-MNO document profiles (JSON); re-profiled when MNO document format changes between releases; stored as versioned artifacts alongside documents |
 | Orchestration | Agentic workflow framework for compliance agent; RAG orchestration layer |
 | Document pipeline | Automated ingestion pipeline with folder-structure-driven metadata; incremental ingestion for new releases |
 | API layer | REST API for Q&A bot, test case queries, and compliance agent interfaces |

@@ -22,4 +22,6 @@ We are building an AI system (Knowledge Graph + RAG) for intelligent querying, c
 
 Key architectural decisions and rationale are captured in project memory (`design_decisions.md`). The VZW document structure analysis (critical for parser design) is in `vzw_document_structure.md`.
 
-Current phase: PoC development — starting with PDF extraction and structural parsing.
+Key architectural component: **DocumentProfiler** — a standalone, LLM-free module that derives document structure profiles from representative docs. The generic structural parser uses these profiles instead of hard-coded per-MNO parsers. Supported formats: PDF, DOC, DOCX, XLS, XLSX.
+
+Current phase: PoC development — starting with document content extraction and DocumentProfiler.
