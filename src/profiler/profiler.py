@@ -59,8 +59,8 @@ class DocumentProfiler:
         req_id = self._detect_requirement_ids(docs)
         plan_meta = self._detect_plan_metadata(docs)
         zones = self._detect_document_zones(docs, heading)
-        hf = self._detect_header_footer(docs)
-        xrefs = self._detect_cross_references(docs)
+        hf = self._collect_header_footer(docs)
+        xrefs = self._detect_cross_references(docs, req_id.pattern)
 
         profile = DocumentProfile(
             profile_name=profile_name or self._derive_profile_name(docs),
@@ -112,7 +112,7 @@ class DocumentProfiler:
             profile.requirement_id.total_found += new_req.total_found
 
         # Update cross-reference patterns — add any new ones
-        new_xrefs = self._detect_cross_references(docs)
+        new_xrefs = self._detect_cross_references(docs, profile.requirement_id.pattern)
         existing_std = set(profile.cross_reference_patterns.standards_citations)
         for pat in new_xrefs.standards_citations:
             if pat not in existing_std:
@@ -540,55 +540,39 @@ class DocumentProfiler:
         logger.info(f"Document zones: {len(zones)} top-level sections detected")
         return zones
 
-    def _detect_header_footer(
+    def _collect_header_footer(
         self, docs: list[DocumentIR]
     ) -> HeaderFooter:
-        """Detect header/footer patterns across documents."""
-        header_patterns = set()
-        footer_patterns = set()
+        """Collect header/footer patterns already detected by the extractor.
 
-        # Look for text that appears on most pages
+        The extractor strips headers/footers from the IR, so we can't
+        re-detect them from IR blocks. Instead, read the patterns the
+        extractor recorded in extraction_metadata.
+        """
+        all_patterns: set[str] = set()
         for doc in docs:
-            page_texts: dict[int, list[str]] = {}
-            for b in doc.blocks_by_type(BlockType.PARAGRAPH):
-                if not b.font_info:
-                    continue
-                pg = b.position.page
-                if pg not in page_texts:
-                    page_texts[pg] = []
-                # Normalize: replace digits with #
-                normalized = re.sub(r"\d+", "#", b.text.strip())
-                if normalized and len(normalized) < 100:
-                    page_texts[pg].append(normalized)
+            patterns = doc.extraction_metadata.get("header_footer_patterns", [])
+            all_patterns.update(patterns)
 
-            # Find text appearing on >60% of pages
-            total_pages = len(page_texts)
-            if total_pages < 3:
-                continue
-
-            text_freq: Counter = Counter()
-            for texts in page_texts.values():
-                for t in set(texts):  # dedupe within page
-                    text_freq[t] += 1
-
-            threshold = total_pages * 0.6
-            for text, count in text_freq.items():
-                if count >= threshold:
-                    # Classify as header or footer based on content
-                    if re.search(r"page|#\s+of\s+#", text, re.IGNORECASE):
-                        footer_patterns.add(text)
-                    else:
-                        header_patterns.add(text)
+        # Classify patterns as header vs footer
+        header_patterns = []
+        footer_patterns = []
+        for pat in sorted(all_patterns):
+            if re.search(r"page|#\s+of\s+#", pat, re.IGNORECASE):
+                footer_patterns.append(pat)
+            else:
+                header_patterns.append(pat)
 
         return HeaderFooter(
-            header_patterns=sorted(header_patterns),
-            footer_patterns=sorted(footer_patterns),
+            header_patterns=header_patterns,
+            footer_patterns=footer_patterns,
             page_number_pattern=r"^\s*Page\s+\d+\s+of\s+\d+\s*$",
         )
 
     def _detect_cross_references(
         self,
         docs: list[DocumentIR],
+        req_id_pattern: str = "",
     ) -> CrossReferencePatterns:
         """Detect cross-reference patterns in document text."""
         # Check for various standards citation formats
@@ -621,22 +605,23 @@ class DocumentProfiler:
                     re.findall(section_ref_pattern, b.text)
                 )
 
-        # Requirement ID references (reuse the detected pattern)
-        req_pattern = ""
-        req_count = 0
-        for doc in docs:
-            for b in doc.content_blocks:
-                found = re.findall(r"VZ_REQ_[A-Z0-9_]+_\d+", b.text)
-                req_count += len(found)
-        if req_count > 0:
-            req_pattern = r"VZ_REQ_[A-Z0-9_]+_\d+"
+        # Requirement ID references — use the pattern from _detect_requirement_ids
+        req_refs_pattern = ""
+        if req_id_pattern:
+            regex = re.compile(req_id_pattern)
+            req_count = 0
+            for doc in docs:
+                for b in doc.content_blocks:
+                    req_count += len(regex.findall(b.text))
+            if req_count > 0:
+                req_refs_pattern = req_id_pattern
 
         return CrossReferencePatterns(
             standards_citations=found_patterns,
             internal_section_refs=section_ref_pattern
             if section_ref_count > 0
             else "",
-            requirement_id_refs=req_pattern,
+            requirement_id_refs=req_refs_pattern,
         )
 
     # ----------------------------------------------------------------

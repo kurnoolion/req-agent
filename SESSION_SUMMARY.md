@@ -111,7 +111,6 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - **Data model:** `src/models/document.py` — Normalized IR (DocumentIR, ContentBlock, FontInfo, Position, BlockType)
 - **Output:** `data/extracted/*_ir.json` — 5 VZW docs extracted
 - **Key design:** pymupdf for text+font metadata, pdfplumber for tables, table-region deduplication, font-group splitting for mixed-font blocks, header/footer filtering
-- **Bugs fixed:** fitz_doc closed before page_count access, page numbers not filtered, degenerate TOC tables
 
 #### PoC Step 2 — DocumentProfiler (DONE, committed)
 - **Code:** `src/profiler/` (profiler.py, profile_schema.py, profile_cli.py)
@@ -120,23 +119,39 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - **Key design:** Font size clustering for heading detection, regex mining for req IDs and metadata, frequency analysis for body text, zone classification by keyword matching
 - **CLI:** `python -m src.profiler.profile_cli create|update|validate`
 
-#### PoC Step 3 — Generic Structural Parser (IN PROGRESS, code complete, needs final validation + commit)
+#### PoC Step 3 — Generic Structural Parser (DONE, committed)
 - **Code:** `src/parser/` (structural_parser.py, parse_cli.py)
 - **Output:** `data/parsed/*_tree.json` — 5 VZW docs parsed into RequirementTree structures
 - **Key classes:** GenericStructuralParser, RequirementTree, Requirement, CrossReferences, StandardsRef, TableData, ImageRef
-- **Parser run results (after fixes):**
-  | Document | Requirements | Standards Releases | Sections w/ Cross-Refs | Internal Refs | External Plan Refs | Standards Citations |
-  |---|---|---|---|---|---|---|
-  | LTEAT | 16 | 0 | 6 | 6 | 0 | 14 |
-  | LTEB13NAC | 431 | 50 | 116 | 285 | 1 | 261 |
-  | LTEDATARETRY | 115 | 18 | 43 | 73 | 0 | 62 |
-  | LTEOTADM | 80 | 0 | 3 | 65 | 3 | 2 |
-  | LTESMS | 69 | 9 | 8 | 10 | 0 | 16 |
-- **Bugs fixed during Step 3:**
-  1. `_extract_standards_releases()` — added bidirectional pattern (VZW docs use "Release N version of 3GPP TS X.X" in addition to standard order)
-  2. `_extract_cross_refs()` — added spec-only standards reference detection (many refs cite spec without section number)
-- **Minor data quality issue noticed (not yet fixed):** Some spec names have trailing dots (e.g., `3GPP TS 36.306.` instead of `3GPP TS 36.306`) — likely from source PDF text extraction artifacts
 - **CLI:** `python -m src.parser.parse_cli --profile <profile> --doc <ir.json> --output <tree.json>`
+
+### Code Review & Bug Fixes (completed after Step 3)
+
+Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
+
+1. **Resource leak in PDFExtractor** — `fitz_doc` and `plumber_pdf` not closed on exception. Fixed with try/finally wrapping extraction into `_extract_impl`.
+2. **Hardcoded `VZ_REQ` broke generic design** — Profiler's `_detect_cross_references` and parser's `_extract_cross_refs` hardcoded VZ_REQ instead of using detected patterns. Fixed: profiler passes detected req ID pattern to cross-ref detection; parser uses profile `components` config (separator + plan_id_position) to extract plan IDs from any MNO's req IDs.
+3. **Trailing dot in 3GPP spec numbers** — `[\d.]+` regex greedily captured sentence-ending dots (e.g., "3GPP TS 24.301." → captured "24.301."). Fixed with `\d[\d.]*\d` across all spec-parsing regexes.
+4. **SUPPORTED_EXTENSIONS mismatch** — CLI advertised .doc/.docx/.xls/.xlsx but registry only had .pdf. Fixed: CLI now reads from `registry.supported_extensions()`.
+5. **Profiler header/footer detection was a no-op** — Profiler tried to detect h/f from IR blocks that already had h/f stripped by the extractor. Replaced `_detect_header_footer` with `_collect_header_footer` that reads patterns from extractor's `extraction_metadata`.
+6. **`bbox` tuple→list on JSON round-trip** — `DocumentIR.load_json` returned bbox as list (from JSON) instead of tuple. Found by round-trip tests. Fixed with explicit `tuple()` conversion.
+
+Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type` intermediate variable in PDFExtractor.
+
+### Test Suite (88 tests, all passing)
+
+| File | Tests | Coverage |
+|---|---|---|
+| `test_document_ir.py` | 10 | DocumentIR serialize/deserialize round-trip, all block types, positions, metadata |
+| `test_profile_schema.py` | 9 | DocumentProfile round-trip for every nested structure, loads real VZW profile |
+| `test_patterns.py` | 39 | Section numbering, req IDs, plan ID extraction, 3GPP spec numbers (trailing dot regression), h/f patterns |
+| `test_pipeline.py` | 30 | End-to-end extract→profile→parse on real PDFs, cross-ref consistency, parent-child link integrity |
+
+### Known Design Concerns (deferred)
+
+- **Heading levels are misleading** — Profile shows 3 levels all at 13.5-14.5pt differentiated by bold/caps, but these don't map to section depth. Parser correctly uses section numbering for hierarchy, so not a functional bug, but the profile data is confusing.
+- **`update_profile` is incomplete** — Only updates req IDs, cross-refs, and zones. Doesn't re-analyze heading levels, body text, or plan metadata.
+- **Req ID tables captured as data tables** — Some sections have small tables that are just formatting artifacts around requirement IDs, not actual data tables.
 
 ### Remaining Steps
 
@@ -153,17 +168,17 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 
 ## Where We Left Off
 
-**Status:** PoC Step 3 nearly complete.
+**Status:** PoC Steps 1-3 complete with bug fixes and test suite. Ready for Step 4 or output regeneration.
 
 **What just happened:**
-- Re-ran the parser on all 5 VZW docs with the two fixes (standards releases + cross-refs) — results look good (see table above)
-- Noticed a minor data quality issue: trailing dots in some spec names (`3GPP TS 36.306.`) — likely from PDF text artifacts. Was about to investigate/fix when session ended.
+- Code review of all 3 PoC steps identified 5 bugs + 1 found by tests (6 total)
+- All bugs fixed and verified with smoke tests
+- Test suite built: 88 tests covering data model round-trips, regex patterns, and full pipeline
+- Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code
 
 **Immediate next actions:**
-1. Fix trailing-dot spec name issue in `_extract_standards_releases()` in `src/parser/structural_parser.py`
-2. Re-run parser one final time to confirm clean output
-3. Commit PoC Step 3
-4. Move to PoC Step 4
+1. Re-generate output files with fixed code (extraction, profiling, parsing)
+2. Move to PoC Step 4 (test case parsing) or another remaining step
 
 ---
 
@@ -192,10 +207,15 @@ req-agent/
 │   └── parser/
 │       ├── structural_parser.py      # GenericStructuralParser (profile-driven)
 │       └── parse_cli.py              # Parser CLI
+├── tests/
+│   ├── test_document_ir.py           # IR round-trip tests (10)
+│   ├── test_profile_schema.py        # Profile round-trip tests (9)
+│   ├── test_patterns.py              # Regex pattern tests (39)
+│   └── test_pipeline.py             # End-to-end pipeline tests (30)
 ├── data/
 │   ├── extracted/                    # IR JSON files (5 docs)
 │   └── parsed/                       # RequirementTree JSON files (5 docs)
-└── VZW/Feb2026/Requirements/         # Source PDFs (5 VZW OA docs)
+└── *.pdf                             # Source PDFs (5 VZW OA docs)
 ```
 
 ---

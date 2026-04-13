@@ -119,7 +119,13 @@ class DocumentIR:
             data = json.load(f)
         blocks = []
         for b in data.get("content_blocks", []):
-            pos = Position(**b["position"])
+            pos_data = b["position"]
+            bbox_raw = pos_data.get("bbox")
+            pos = Position(
+                page=pos_data["page"],
+                index=pos_data["index"],
+                bbox=tuple(bbox_raw) if bbox_raw is not None else None,
+            )
             font = FontInfo(**b["font_info"]) if b.get("font_info") else None
             blocks.append(ContentBlock(
                 type=BlockType(b["type"]),

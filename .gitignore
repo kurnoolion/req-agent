@@ -27,3 +27,9 @@ Thumbs.db
 # Data directory (raw docs and extracted output)
 data/
 
+# Extracted images (byproduct of PDF extraction)
+extracted_images/
+
+# Pytest
+.pytest_cache/
+

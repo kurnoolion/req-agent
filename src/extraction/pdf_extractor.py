@@ -54,8 +54,26 @@ class PDFExtractor(BaseExtractor):
         logger.info(f"Extracting PDF: {file_path.name}")
 
         fitz_doc = fitz.open(str(file_path))
-        plumber_pdf = pdfplumber.open(str(file_path))
+        try:
+            plumber_pdf = pdfplumber.open(str(file_path))
+        except Exception:
+            fitz_doc.close()
+            raise
+        try:
+            return self._extract_impl(file_path, fitz_doc, plumber_pdf, mno, release, doc_type)
+        finally:
+            fitz_doc.close()
+            plumber_pdf.close()
 
+    def _extract_impl(
+        self,
+        file_path: Path,
+        fitz_doc: fitz.Document,
+        plumber_pdf: pdfplumber.PDF,
+        mno: str,
+        release: str,
+        doc_type: str,
+    ) -> DocumentIR:
         # First pass: detect repeating header/footer text across pages
         header_footer_patterns = self._detect_header_footer_patterns(fitz_doc)
         logger.info(
@@ -153,12 +171,10 @@ class PDFExtractor(BaseExtractor):
                     if not text:
                         continue
                     font = group["font_info"]
-                    block_type = BlockType.PARAGRAPH
-                    metadata: dict = {}
 
                     all_blocks.append(
                         ContentBlock(
-                            type=block_type,
+                            type=BlockType.PARAGRAPH,
                             position=Position(
                                 page=page_num + 1,
                                 index=0,
@@ -166,7 +182,6 @@ class PDFExtractor(BaseExtractor):
                             ),
                             text=text,
                             font_info=font,
-                            metadata=metadata,
                         )
                     )
 
@@ -209,8 +224,6 @@ class PDFExtractor(BaseExtractor):
                     )
 
         total_pages = len(fitz_doc)
-        fitz_doc.close()
-        plumber_pdf.close()
 
         # Sort by page, then vertical position (y0 of bbox)
         all_blocks.sort(

@@ -15,6 +15,11 @@ _EXTRACTORS: dict[str, BaseExtractor] = {
 }
 
 
+def supported_extensions() -> set[str]:
+    """Return the set of file extensions with registered extractors."""
+    return set(_EXTRACTORS.keys())
+
+
 def get_extractor(file_path: Path) -> BaseExtractor:
     """Get the appropriate extractor for a file based on its extension."""
     ext = file_path.suffix.lower()

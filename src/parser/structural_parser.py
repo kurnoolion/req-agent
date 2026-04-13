@@ -115,12 +115,17 @@ class GenericStructuralParser:
             else None
         )
         # 3GPP spec + section extraction (more specific than profile patterns)
+        # Use \d[\d.]*\d to avoid capturing trailing dots from punctuation
         self._std_detail_re = re.compile(
-            r"3GPP\s+TS\s+([\d.]+)\s+(?:[Ss]ection\s+)?([\d.]+)"
+            r"3GPP\s+TS\s+(\d[\d.]*\d)\s+(?:[Ss]ection\s+)?(\d[\d.]*\d)"
         )
         self._std_release_re = re.compile(
-            r"3GPP\s+(?:TS\s+[\d.]+\s+)?[Rr]elease\s+(\d+)"
+            r"3GPP\s+(?:TS\s+\d[\d.]*\d\s+)?[Rr]elease\s+(\d+)"
         )
+        # Plan ID extraction from requirement IDs (profile-driven)
+        components = profile.requirement_id.components
+        self._req_id_separator = components.get("separator", "_")
+        self._req_id_plan_pos = components.get("plan_id_position")
         # Zone classification
         self._zone_map = {
             z.section_pattern: z.zone_type
@@ -383,10 +388,8 @@ class GenericStructuralParser:
         # Internal requirement ID references
         if self._req_id_re:
             for rid in self._req_id_re.findall(text):
-                # Check if it references another plan
-                m = re.match(r"VZ_REQ_([A-Z0-9]+)_\d+", rid)
-                if m:
-                    ref_plan = m.group(1)
+                ref_plan = self._extract_plan_id_from_req(rid)
+                if ref_plan is not None:
                     if ref_plan != own_plan_id:
                         if ref_plan not in refs.external_plans:
                             refs.external_plans.append(ref_plan)
@@ -414,7 +417,7 @@ class GenericStructuralParser:
             )
 
         # Standards references — spec only (no section number)
-        spec_only_re = re.compile(r"3GPP\s+TS\s+([\d.]+)")
+        spec_only_re = re.compile(r"3GPP\s+TS\s+(\d[\d.]*\d)")
         for m in spec_only_re.finditer(text):
             spec = f"3GPP TS {m.group(1)}"
             if not any(s.spec == spec for s in refs.standards):
@@ -428,6 +431,16 @@ class GenericStructuralParser:
                 )
 
         return refs
+
+    def _extract_plan_id_from_req(self, req_id: str) -> str | None:
+        """Extract the plan ID component from a requirement ID using profile config."""
+        if self._req_id_plan_pos is None:
+            return None
+        parts = req_id.split(self._req_id_separator)
+        pos = self._req_id_plan_pos
+        if pos < len(parts):
+            return parts[pos]
+        return None
 
     # ── Standards releases ──────────────────────────────────────────
 
@@ -443,9 +456,9 @@ class GenericStructuralParser:
         releases: dict[str, str] = {}
 
         # Pattern 1: "3GPP TS X.X ... Release N"
-        pat1 = re.compile(r"3GPP\s+TS\s+([\d.]+).*?[Rr]elease\s+(\d+)")
+        pat1 = re.compile(r"3GPP\s+TS\s+(\d[\d.]*\d).*?[Rr]elease\s+(\d+)")
         # Pattern 2: "Release N ... 3GPP TS X.X" (VZW style)
-        pat2 = re.compile(r"[Rr]elease\s+(\d+)\s+(?:version\s+of\s+)?3GPP\s+TS\s+([\d.]+)")
+        pat2 = re.compile(r"[Rr]elease\s+(\d+)\s+(?:version\s+of\s+)?3GPP\s+TS\s+(\d[\d.]*\d)")
 
         for b in doc.content_blocks:
             for m in pat1.finditer(b.text):

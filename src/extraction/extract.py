@@ -19,9 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-from src.extraction.registry import extract_document, infer_metadata_from_path
-
-SUPPORTED_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx"}
+from src.extraction.registry import extract_document, infer_metadata_from_path, supported_extensions
 
 
 def extract_file(file_path: Path, output_dir: Path) -> Path | None:
@@ -85,7 +83,7 @@ def main():
         files = sorted(
             f
             for f in input_path.iterdir()
-            if f.is_file() and f.suffix.lower() in SUPPORTED_EXTENSIONS
+            if f.is_file() and f.suffix.lower() in supported_extensions()
         )
     else:
         logging.error(f"Path does not exist: {input_path}")
