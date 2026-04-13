@@ -143,6 +143,17 @@ The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System
 - **CLI:** `python -m src.taxonomy.taxonomy_cli --trees-dir data/parsed --output-dir data/taxonomy`
 - **LLM swap:** Any class with `complete(prompt, system, temperature, max_tokens) -> str` satisfies the Protocol. See `src/llm/base.py` for documentation.
 
+#### PoC Step 7 — Standards Ingestion (DONE, committed)
+- **Reference collector:** `src/standards/reference_collector.py` — scans cross-ref manifests AND requirement tree text for section-level 3GPP references; aggregates by (spec, release)
+- **Spec resolver:** `src/standards/spec_resolver.py` — maps spec+release to 3GPP FTP download URL using version encoding conventions (release 8→"8xx", 10→"axy", 11→"bxy", etc.); probes FTP directory listings to find latest version per release
+- **Downloader:** `src/standards/spec_downloader.py` — downloads ZIP from 3GPP FTP, extracts DOC/DOCX, auto-converts DOC→DOCX via LibreOffice headless, local caching under `data/standards/TS_{spec}/Rel-{N}/`
+- **Spec parser:** `src/standards/spec_parser.py` — parses 3GPP DOCX into section tree using Heading styles; handles numbered sections, annexes, definitions; extracts metadata from filename version codes
+- **Section extractor:** `src/standards/section_extractor.py` — extracts referenced sections + parent + siblings + definitions for contextual completeness
+- **Data model:** `src/standards/schema.py` — SpecReference, AggregatedSpecRef, StandardsReferenceIndex, SpecSection, SpecDocument, ExtractedSpecContent
+- **Output:** `data/standards/reference_index.json` + `data/standards/TS_{spec}/Rel-{N}/{spec_parsed.json, sections.json}`
+- **CLI:** `python -m src.standards.standards_cli --manifests-dir data/resolved --trees-dir data/parsed --output-dir data/standards`
+- **Generic design:** No hardcoded spec lists — all specs and versions derived from how they're referenced in MNO requirement documents. Works for any MNO. No LLM required.
+
 ### Code Review & Bug Fixes (completed after Step 3)
 
 Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
@@ -156,7 +167,7 @@ Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
 
 Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type` intermediate variable in PDFExtractor.
 
-### Test Suite (128 tests, all passing)
+### Test Suite (163 tests, all passing)
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -166,8 +177,9 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 | `test_pipeline.py` | 30 | End-to-end extract→profile→parse on real PDFs, cross-ref consistency, parent-child link integrity |
 | `test_resolver.py` | 19 | Internal/cross-plan/standards resolution, summary counts, manifest round-trip, pipeline integration |
 | `test_taxonomy.py` | 40 | MockLLMProvider protocol/keyword matching, FeatureExtractor prompt/parse, TaxonomyConsolidator merge/dedup, schema round-trips, full pipeline integration |
+| `test_standards.py` | 35 | Spec resolver encoding/URLs, reference collector helpers + integration, spec parser metadata/sections/ancestry, section extractor selection, schema round-trips |
 
-Note: `test_pipeline.py` (30 tests) requires `pymupdf` which may not be installed in all environments. The remaining 98 tests run without it.
+Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX. The remaining 122 tests run without external dependencies.
 
 ### Known Design Concerns (deferred)
 
@@ -179,7 +191,6 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf` which may not be installe
 ### Remaining Steps
 
 4. Test case parsing (separate parser for test case documents)
-7. Standards ingestion (3GPP spec parsing, selective section extraction)
 8. Knowledge Graph construction (Neo4j or similar)
 9. Vector store (embeddings for parsed requirement text)
 10. Query pipeline (graph scoping + RAG ranking + LLM synthesis)
@@ -189,18 +200,19 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf` which may not be installe
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, and 6 complete. Step 4 skipped for now. Ready for Step 7 or other remaining steps.
+**Status:** PoC Steps 1, 2, 3, 5, 6, and 7 complete. Step 4 skipped for now. Ready for Step 8 (Knowledge Graph) or other remaining steps.
 
 **What just happened (this session):**
 - Completed Step 5 (cross-reference resolver) — resolves internal, cross-plan, and standards references across all parsed trees
 - Completed Step 6 (feature taxonomy) — LLM abstraction layer with Protocol-based provider interface, mock provider for testing, per-document feature extraction, cross-document consolidation into unified taxonomy
-- Added 59 new tests (19 resolver + 40 taxonomy) bringing total to 128
-- Taxonomy output verified: 16 features extracted across 5 VZW docs, each with primary/referenced tracking and MNO coverage
+- Completed Step 7 (standards ingestion) — generic pipeline that collects 3GPP references from MNO docs, resolves spec versions on 3GPP FTP, downloads + converts DOC→DOCX, parses into section trees, extracts referenced sections with contextual surround. No LLM, no hardcoded spec lists — fully driven by what MNO docs actually reference.
+- Added 94 new tests (19 resolver + 40 taxonomy + 35 standards) bringing total to 163
 
 **Immediate next actions:**
-1. Move to PoC Step 7 (standards ingestion) or another remaining step
-2. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
-3. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
+1. Move to PoC Step 8 (Knowledge Graph construction) or another remaining step
+2. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
+3. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
+4. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
 
 ---
 
@@ -236,23 +248,35 @@ req-agent/
 │   ├── llm/
 │   │   ├── base.py                       # LLMProvider Protocol
 │   │   └── mock_provider.py              # MockLLMProvider (keyword-based)
-│   └── taxonomy/
-│       ├── schema.py                     # Feature taxonomy data model
-│       ├── extractor.py                  # Per-document feature extraction
-│       ├── consolidator.py               # Cross-document feature consolidation
-│       └── taxonomy_cli.py               # Taxonomy CLI
+│   ├── taxonomy/
+│   │   ├── schema.py                     # Feature taxonomy data model
+│   │   ├── extractor.py                  # Per-document feature extraction
+│   │   ├── consolidator.py               # Cross-document feature consolidation
+│   │   └── taxonomy_cli.py               # Taxonomy CLI
+│   └── standards/
+│       ├── schema.py                     # Standards ingestion data model
+│       ├── reference_collector.py        # Reference aggregation from manifests + tree text
+│       ├── spec_resolver.py              # 3GPP FTP URL resolution
+│       ├── spec_downloader.py            # Download + cache + DOC→DOCX conversion
+│       ├── spec_parser.py               # 3GPP DOCX → section tree
+│       ├── section_extractor.py          # Referenced section + context extraction
+│       └── standards_cli.py              # Standards CLI
 ├── tests/
 │   ├── test_document_ir.py               # IR round-trip tests (10)
 │   ├── test_profile_schema.py            # Profile round-trip tests (9)
 │   ├── test_patterns.py                  # Regex pattern tests (39)
 │   ├── test_pipeline.py                  # End-to-end pipeline tests (30, needs pymupdf)
 │   ├── test_resolver.py                  # Cross-reference resolver tests (19)
-│   └── test_taxonomy.py                  # Feature taxonomy tests (40)
+│   ├── test_taxonomy.py                  # Feature taxonomy tests (40)
+│   └── test_standards.py                 # Standards ingestion tests (35)
 ├── data/
 │   ├── extracted/                        # IR JSON files (5 docs)
 │   ├── parsed/                           # RequirementTree JSON files (5 docs)
 │   ├── resolved/                         # Cross-reference manifest JSON files (5 docs)
-│   └── taxonomy/                         # Feature taxonomy JSON files (5 per-doc + 1 unified)
+│   ├── taxonomy/                         # Feature taxonomy JSON files (5 per-doc + 1 unified)
+│   └── standards/                        # Downloaded + parsed 3GPP specs
+│       ├── reference_index.json          # Aggregated reference index
+│       └── TS_{spec}/Rel-{N}/            # Per-spec per-release: ZIP, DOCX, parsed, sections
 └── *.pdf                                 # Source PDFs (5 VZW OA docs)
 ```
 

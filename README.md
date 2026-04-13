@@ -2,7 +2,7 @@
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 
-**Current status:** PoC Steps 1, 2, 3, 5, 6 implemented. Steps 4, 7-11 pending.
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7 implemented. Steps 4, 8-11 pending.
 
 ## Prerequisites
 
@@ -26,6 +26,10 @@ The following VZW Open Alliance PDFs must be present in the repo root:
 - `LTEB13NAC.pdf`
 - `LTEDATARETRY.pdf`
 - `LTEOTADM.pdf`
+
+### System Dependencies (optional)
+
+- **LibreOffice** — required for automatic DOC→DOCX conversion of 3GPP spec downloads. Install with `apt install libreoffice` or equivalent. If not available, the system will log a warning; you can manually convert DOC files.
 
 ## Quick Start — Run the Full Pipeline
 
@@ -56,6 +60,13 @@ python -m src.resolver.resolve_cli \
 python -m src.taxonomy.taxonomy_cli \
     --trees-dir data/parsed \
     --output-dir data/taxonomy
+
+# Step 7: Ingest referenced 3GPP standards → data/standards/
+# (downloads specs from 3GPP FTP — requires internet access)
+python -m src.standards.standards_cli \
+    --manifests-dir data/resolved \
+    --trees-dir data/parsed \
+    --output-dir data/standards
 ```
 
 ## Running Tests
@@ -74,6 +85,7 @@ python -m pytest tests/test_patterns.py -v          # Steps 2-3: Regex patterns
 python -m pytest tests/test_pipeline.py -v          # Steps 1-3: End-to-end pipeline
 python -m pytest tests/test_resolver.py -v          # Step 5: Cross-references
 python -m pytest tests/test_taxonomy.py -v          # Step 6: Feature taxonomy
+python -m pytest tests/test_standards.py -v          # Step 7: Standards ingestion
 ```
 
 ### Test Summary
@@ -86,7 +98,8 @@ python -m pytest tests/test_taxonomy.py -v          # Step 6: Feature taxonomy
 | `test_pipeline.py` | 30 | End-to-end extract, profile, parse on real PDFs, cross-ref consistency | `pymupdf`, source PDFs |
 | `test_resolver.py` | 19 | Internal/cross-plan/standards resolution, manifest round-trip, pipeline integration | `data/parsed/` trees |
 | `test_taxonomy.py` | 40 | LLM protocol, mock provider, extractor, consolidator, schema round-trips, pipeline | `data/parsed/` trees |
-| **Total** | **147** | | |
+| `test_standards.py` | 35 | Spec resolver encoding/URLs, reference collector, spec parser, section extractor, schemas | `data/resolved/`, `data/parsed/`, downloaded spec DOCX |
+| **Total** | **182** | | |
 
 ## Step-by-Step Details
 
@@ -296,6 +309,85 @@ print(f'Key concepts: {d[\"key_concepts\"]}')
 
 **Note on MockLLMProvider:** The current taxonomy uses a keyword-matching mock provider (no API keys needed). Results are approximate — e.g., IMS_REGISTRATION appears across all docs because many headings contain "registration". When a real LLM provider is configured, feature extractions will be more domain-accurate.
 
+### Step 7 — Standards Ingestion
+
+Collects all 3GPP standards references from MNO requirement documents, downloads the referenced spec versions from the 3GPP FTP archive, parses them into section trees, and extracts referenced sections with surrounding context. Fully generic — no hardcoded spec lists or MNO-specific logic. No LLM required.
+
+```bash
+# Full pipeline: collect refs, download, parse, extract
+python -m src.standards.standards_cli \
+    --manifests-dir data/resolved \
+    --trees-dir data/parsed \
+    --output-dir data/standards
+
+# Collect references only (no download)
+python -m src.standards.standards_cli --collect-only
+
+# Process only specific specs
+python -m src.standards.standards_cli --specs 24.301 36.331
+
+# Skip download (use already-cached specs)
+python -m src.standards.standards_cli --no-download
+
+# Limit specs to process (useful for testing)
+python -m src.standards.standards_cli --max-specs 3
+```
+
+**Output:**
+- `data/standards/reference_index.json` — aggregated reference index
+- `data/standards/TS_{spec}/Rel-{N}/` — per-spec per-release directory containing:
+  - `{compact}-{code}.zip` — original 3GPP archive
+  - `{compact}-{code}.docx` — extracted/converted spec document
+  - `spec_parsed.json` — full section tree
+  - `sections.json` — extracted referenced + context sections
+
+**Verify:**
+
+```bash
+# Check reference index
+python -c "
+import json
+with open('data/standards/reference_index.json') as f:
+    idx = json.load(f)
+print(f'Total refs: {idx[\"total_refs\"]}')
+print(f'Unique specs: {idx[\"total_unique_specs\"]}')
+print(f'Spec-release pairs: {len(idx[\"specs\"])}')
+# Show specs with section-level detail
+with_sec = [s for s in idx['specs'] if s['sections']]
+print(f'Specs with section-level refs: {len(with_sec)}')
+for s in with_sec[:5]:
+    print(f'  TS {s[\"spec\"]} {s[\"release\"]}: sections={s[\"sections\"][:3]}')
+"
+
+# Check parsed spec
+python -c "
+from src.standards.schema import SpecDocument
+doc = SpecDocument.load_json('data/standards/TS_24.301/Rel-11/spec_parsed.json')
+print(f'TS {doc.spec_number} v{doc.version} ({doc.release})')
+print(f'Total sections: {len(doc.sections)}')
+sec = doc.get_section('5.5.1.2.5')
+if sec:
+    print(f'Section 5.5.1.2.5: {sec.title} ({len(sec.text)} chars)')
+"
+
+# Check extracted sections
+python -c "
+import json
+with open('data/standards/TS_24.301/Rel-11/sections.json') as f:
+    data = json.load(f)
+print(f'Referenced: {len(data[\"referenced_sections\"])} sections')
+print(f'Context: {len(data[\"context_sections\"])} sections')
+print(f'Source plans: {data[\"source_plans\"]}')
+"
+```
+
+**How it works:**
+1. **Reference collection** scans cross-ref manifests for spec+release pairs, then scans requirement text for section-level references (e.g., "3GPP TS 24.301, section 5.5.3.2.5")
+2. **Spec resolution** maps each (spec, release) to the 3GPP FTP URL by probing the archive directory listing for the latest version of that release
+3. **Download** fetches the ZIP, extracts DOC/DOCX, auto-converts DOC→DOCX via LibreOffice headless
+4. **Parsing** uses python-docx Heading styles (Heading 1-6) and section numbering to build a section tree
+5. **Extraction** pulls referenced sections + parent/sibling/definitions context (typically 5-15% of the full spec)
+
 ## Swapping the LLM Provider
 
 The LLM abstraction uses Python's Protocol (structural typing). To use a real LLM:
@@ -344,12 +436,14 @@ req-agent/
 │   ├── parser/                            # Step 3: Structural parsing
 │   ├── resolver/                          # Step 5: Cross-reference resolution
 │   ├── llm/                               # LLM abstraction layer
-│   └── taxonomy/                          # Step 6: Feature taxonomy
-├── tests/                                 # 147 tests across 6 test files
+│   ├── taxonomy/                          # Step 6: Feature taxonomy
+│   └── standards/                         # Step 7: 3GPP standards ingestion
+├── tests/                                 # 182 tests across 7 test files
 ├── data/
 │   ├── extracted/                        # Step 1 output: IR JSON files
 │   ├── parsed/                           # Step 3 output: RequirementTree JSON files
 │   ├── resolved/                         # Step 5 output: Cross-reference manifests
-│   └── taxonomy/                         # Step 6 output: Feature taxonomy JSON files
+│   ├── taxonomy/                         # Step 6 output: Feature taxonomy JSON files
+│   └── standards/                        # Step 7 output: Downloaded + parsed 3GPP specs
 └── *.pdf                                 # Source VZW OA specification PDFs
 ```
