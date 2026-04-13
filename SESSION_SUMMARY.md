@@ -167,7 +167,7 @@ Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
 
 Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type` intermediate variable in PDFExtractor.
 
-### Test Suite (163 tests, all passing)
+### Test Suite (200 tests, all passing)
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -178,8 +178,9 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 | `test_resolver.py` | 19 | Internal/cross-plan/standards resolution, summary counts, manifest round-trip, pipeline integration |
 | `test_taxonomy.py` | 40 | MockLLMProvider protocol/keyword matching, FeatureExtractor prompt/parse, TaxonomyConsolidator merge/dedup, schema round-trips, full pipeline integration |
 | `test_standards.py` | 35 | Spec resolver encoding/URLs, reference collector helpers + integration, spec parser metadata/sections/ancestry, section extractor selection, schema round-trips |
+| `test_graph.py` | 48 | Schema ID generation, requirement/xref/standards/feature graph builders with synthetic data, serialization round-trips, full build with synthetic data, integration tests on real data (connectivity, traversals) |
 
-Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX. The remaining 122 tests run without external dependencies.
+Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` integration tests (11) require parsed/resolved data. The remaining tests run without external dependencies.
 
 ### Known Design Concerns (deferred)
 
@@ -188,10 +189,19 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Req ID tables captured as data tables** — Some sections have small tables that are just formatting artifacts around requirement IDs, not actual data tables.
 - **Mock provider feature accuracy** — MockLLMProvider uses keyword matching which is approximate. Real LLM will produce more domain-accurate feature extractions. IMS_REGISTRATION appearing in all 5 docs is a mock artifact (many docs contain "registration" in headings).
 
+#### PoC Step 8 — Knowledge Graph Construction (DONE, committed)
+- **Schema:** `src/graph/schema.py` — 6 node types (MNO, Release, Plan, Requirement, Standard_Section, Feature), 10 edge types across 5 categories (organizational, within-doc, cross-doc, standards, feature), deterministic ID generation functions
+- **Builder:** `src/graph/builder.py` — 7-step construction: MNO/Release/Plan → Requirement nodes + parent_of hierarchy → depends_on edges from xref manifests → Standard_Section nodes from extracted sections + references_standard edges → Feature nodes + maps_to edges (two-pass: nodes first, then edges) → shared_standard edges (cross-plan only)
+- **Data model:** `GraphStats` dataclass for summary statistics with JSON serialization
+- **Serialization:** JSON (node-link format via `nx.node_link_data`) and GraphML (with list/dict attrs converted to JSON strings)
+- **CLI:** `python -m src.graph.graph_cli --verify` — builds graph + runs 7 diagnostic queries (reqs per plan, feature coverage, most-referenced standards, cross-plan deps, shared standards, connectivity, path examples)
+- **Graph stats (real data):** 1,078 nodes (1 MNO, 1 Release, 5 Plans, 705 Requirements, 350 Standard_Sections, 16 Features), 11,732 edges (663 parent_of, 705 belongs_to, 300 depends_on, 326 references_standard, 9,260 maps_to, 204 shared_standard, 268 parent_section, 5 contains_plan, 1 has_release), 22 connected components with 98.1% in largest
+- **Output:** `data/graph/knowledge_graph.json` + `data/graph/graph_stats.json`
+- **Note on maps_to granularity:** MockLLMProvider produces coarse feature mappings (all reqs in a plan → plan's features). Real LLM would refine to specific requirement subsets. The 9,260 edges are expected mock behavior.
+
 ### Remaining Steps
 
 4. Test case parsing (separate parser for test case documents)
-8. Knowledge Graph construction (Neo4j or similar)
 9. Vector store (embeddings for parsed requirement text)
 10. Query pipeline (graph scoping + RAG ranking + LLM synthesis)
 11. Evaluation (accuracy, coverage, latency benchmarks)
@@ -200,16 +210,19 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, 6, and 7 complete. Step 4 skipped for now. Ready for Step 8 (Knowledge Graph) or other remaining steps.
+**Status:** PoC Steps 1, 2, 3, 5, 6, 7, and 8 complete. Step 4 (test case parsing) skipped for now. Ready for Step 9 (Vector Store) or other remaining steps.
 
 **What just happened (this session):**
-- Completed Step 5 (cross-reference resolver) — resolves internal, cross-plan, and standards references across all parsed trees
-- Completed Step 6 (feature taxonomy) — LLM abstraction layer with Protocol-based provider interface, mock provider for testing, per-document feature extraction, cross-document consolidation into unified taxonomy
-- Completed Step 7 (standards ingestion) — generic pipeline that collects 3GPP references from MNO docs, resolves spec versions on 3GPP FTP, downloads + converts DOC→DOCX, parses into section trees, extracts referenced sections with contextual surround. No LLM, no hardcoded spec lists — fully driven by what MNO docs actually reference.
-- Added 94 new tests (19 resolver + 40 taxonomy + 35 standards) bringing total to 163
+- Completed Step 8 (Knowledge Graph construction) — built unified NetworkX DiGraph from all prior ingestion outputs. 1,078 nodes across 6 types, 11,732 edges across 10 types, 98.1% connectivity in one component. CLI with --verify runs 7 diagnostic queries including connectivity analysis and path traversals.
+- Added 48 new tests (10 schema + 19 builder unit + 2 serialization + 2 full build + 11 integration + 4 stats) bringing total to 200
+- Fixed two-pass feature node creation bug (feature_depends_on edges failed when target feature hadn't been added yet)
+
+**Previous sessions completed:**
+- Step 1 (extraction), Step 2 (profiler), Step 3 (parser), code review + 6 bug fixes
+- Step 5 (cross-reference resolver), Step 6 (feature taxonomy), Step 7 (standards ingestion)
 
 **Immediate next actions:**
-1. Move to PoC Step 8 (Knowledge Graph construction) or another remaining step
+1. Move to PoC Step 9 (Vector Store construction) or another remaining step
 2. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
 3. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
 4. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
@@ -253,14 +266,18 @@ req-agent/
 │   │   ├── extractor.py                  # Per-document feature extraction
 │   │   ├── consolidator.py               # Cross-document feature consolidation
 │   │   └── taxonomy_cli.py               # Taxonomy CLI
-│   └── standards/
-│       ├── schema.py                     # Standards ingestion data model
-│       ├── reference_collector.py        # Reference aggregation from manifests + tree text
-│       ├── spec_resolver.py              # 3GPP FTP URL resolution
-│       ├── spec_downloader.py            # Download + cache + DOC→DOCX conversion
-│       ├── spec_parser.py               # 3GPP DOCX → section tree
-│       ├── section_extractor.py          # Referenced section + context extraction
-│       └── standards_cli.py              # Standards CLI
+│   ├── standards/
+│   │   ├── schema.py                     # Standards ingestion data model
+│   │   ├── reference_collector.py        # Reference aggregation from manifests + tree text
+│   │   ├── spec_resolver.py              # 3GPP FTP URL resolution
+│   │   ├── spec_downloader.py            # Download + cache + DOC→DOCX conversion
+│   │   ├── spec_parser.py               # 3GPP DOCX → section tree
+│   │   ├── section_extractor.py          # Referenced section + context extraction
+│   │   └── standards_cli.py              # Standards CLI
+│   └── graph/
+│       ├── schema.py                     # Node/edge types, ID generation functions
+│       ├── builder.py                    # KnowledgeGraphBuilder (7-step construction)
+│       └── graph_cli.py                  # Graph CLI with --verify diagnostics
 ├── tests/
 │   ├── test_document_ir.py               # IR round-trip tests (10)
 │   ├── test_profile_schema.py            # Profile round-trip tests (9)
@@ -268,15 +285,19 @@ req-agent/
 │   ├── test_pipeline.py                  # End-to-end pipeline tests (30, needs pymupdf)
 │   ├── test_resolver.py                  # Cross-reference resolver tests (19)
 │   ├── test_taxonomy.py                  # Feature taxonomy tests (40)
-│   └── test_standards.py                 # Standards ingestion tests (35)
+│   ├── test_standards.py                 # Standards ingestion tests (35)
+│   └── test_graph.py                     # Knowledge graph tests (48)
 ├── data/
 │   ├── extracted/                        # IR JSON files (5 docs)
 │   ├── parsed/                           # RequirementTree JSON files (5 docs)
 │   ├── resolved/                         # Cross-reference manifest JSON files (5 docs)
 │   ├── taxonomy/                         # Feature taxonomy JSON files (5 per-doc + 1 unified)
-│   └── standards/                        # Downloaded + parsed 3GPP specs
-│       ├── reference_index.json          # Aggregated reference index
-│       └── TS_{spec}/Rel-{N}/            # Per-spec per-release: ZIP, DOCX, parsed, sections
+│   ├── standards/                        # Downloaded + parsed 3GPP specs
+│   │   ├── reference_index.json          # Aggregated reference index
+│   │   └── TS_{spec}/Rel-{N}/            # Per-spec per-release: ZIP, DOCX, parsed, sections
+│   └── graph/                            # Knowledge graph output
+│       ├── knowledge_graph.json          # Full graph (node-link JSON)
+│       └── graph_stats.json              # Summary statistics
 └── *.pdf                                 # Source PDFs (5 VZW OA docs)
 ```
 
