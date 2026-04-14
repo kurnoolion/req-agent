@@ -2,7 +2,7 @@
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 
-**Current status:** PoC Steps 1, 2, 3, 5, 6, 7 implemented. Steps 4, 8-11 pending.
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9 implemented. Steps 4, 10-11 pending.
 
 ## Prerequisites
 
@@ -67,6 +67,12 @@ python -m src.standards.standards_cli \
     --manifests-dir data/resolved \
     --trees-dir data/parsed \
     --output-dir data/standards
+
+# Step 8: Build knowledge graph → data/graph/
+python -m src.graph.graph_cli --verify
+
+# Step 9: Build vector store → data/vectorstore/
+python -m src.vectorstore.vectorstore_cli
 ```
 
 ## Running Tests
@@ -86,6 +92,8 @@ python -m pytest tests/test_pipeline.py -v          # Steps 1-3: End-to-end pipe
 python -m pytest tests/test_resolver.py -v          # Step 5: Cross-references
 python -m pytest tests/test_taxonomy.py -v          # Step 6: Feature taxonomy
 python -m pytest tests/test_standards.py -v          # Step 7: Standards ingestion
+python -m pytest tests/test_graph.py -v              # Step 8: Knowledge graph
+python -m pytest tests/test_vectorstore.py -v        # Step 9: Vector store
 ```
 
 ### Test Summary
@@ -99,7 +107,9 @@ python -m pytest tests/test_standards.py -v          # Step 7: Standards ingesti
 | `test_resolver.py` | 19 | Internal/cross-plan/standards resolution, manifest round-trip, pipeline integration | `data/parsed/` trees |
 | `test_taxonomy.py` | 40 | LLM protocol, mock provider, extractor, consolidator, schema round-trips, pipeline | `data/parsed/` trees |
 | `test_standards.py` | 35 | Spec resolver encoding/URLs, reference collector, spec parser, section extractor, schemas | `data/resolved/`, `data/parsed/`, downloaded spec DOCX |
-| **Total** | **182** | | |
+| `test_graph.py` | 48 | Schema IDs, graph builders, serialization, full build, integration diagnostics | `networkx`, parsed/resolved/taxonomy/standards data |
+| `test_vectorstore.py` | 57 | Config, protocols, chunk builder, deduplication, builder, integration with real data | `data/parsed/`, `data/taxonomy/` |
+| **Total** | **287** | | |
 
 ## Step-by-Step Details
 
@@ -388,6 +398,74 @@ print(f'Source plans: {data[\"source_plans\"]}')
 4. **Parsing** uses python-docx Heading styles (Heading 1-6) and section numbering to build a section tree
 5. **Extraction** pulls referenced sections + parent/sibling/definitions context (typically 5-15% of the full spec)
 
+### Step 8 — Knowledge Graph Construction
+
+Builds a unified NetworkX DiGraph from all ingestion outputs: parsed trees, cross-reference manifests, feature taxonomy, and standards sections.
+
+```bash
+# Build graph with diagnostic queries
+python -m src.graph.graph_cli --verify
+
+# Build graph without diagnostics
+python -m src.graph.graph_cli
+```
+
+**Output:**
+- `data/graph/knowledge_graph.json` — full graph (node-link JSON)
+- `data/graph/graph_stats.json` — summary statistics
+
+### Step 9 — Vector Store Construction
+
+Creates embeddings for requirement chunks and stores them in a vector store with metadata for filtered retrieval. All settings (embedding model, vector DB backend, distance metric) are configurable.
+
+```bash
+# Build with defaults (all-MiniLM-L6-v2, ChromaDB, cosine)
+python -m src.vectorstore.vectorstore_cli
+
+# Use a different embedding model
+python -m src.vectorstore.vectorstore_cli --model all-mpnet-base-v2
+
+# Use a config file for reproducible experiments
+python -m src.vectorstore.vectorstore_cli --config configs/experiment1.json
+
+# Override distance metric
+python -m src.vectorstore.vectorstore_cli --metric l2
+
+# Force rebuild (clear existing data)
+python -m src.vectorstore.vectorstore_cli --rebuild
+
+# Inspect existing store
+python -m src.vectorstore.vectorstore_cli --info
+
+# Test query against the store
+python -m src.vectorstore.vectorstore_cli --query "T3402 timer behavior"
+python -m src.vectorstore.vectorstore_cli --query "attach reject" --filter-plan LTEDATARETRY --n-results 5
+
+# Save config alongside results for reproducibility
+python -m src.vectorstore.vectorstore_cli --save-config configs/baseline.json
+```
+
+**Output:**
+- `data/vectorstore/` — ChromaDB persistent data
+- `data/vectorstore/build_stats.json` — build statistics
+- `data/vectorstore/config.json` — config used for this build
+
+**Configurable parameters (via JSON config or CLI flags):**
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `embedding_model` | `all-MiniLM-L6-v2` | HuggingFace model name |
+| `embedding_provider` | `sentence-transformers` | Embedding backend |
+| `embedding_batch_size` | `64` | Batch size for encoding |
+| `embedding_device` | `cpu` | Device (`cpu`, `cuda`, `mps`) |
+| `normalize_embeddings` | `true` | L2-normalize vectors |
+| `vector_store_backend` | `chromadb` | Vector store backend |
+| `distance_metric` | `cosine` | `cosine`, `l2`, or `ip` |
+| `collection_name` | `requirements` | Collection name |
+| `include_mno_header` | `true` | Prepend MNO/release/plan header |
+| `include_hierarchy_path` | `true` | Prepend section hierarchy path |
+| `include_tables` | `true` | Include tables as Markdown |
+
 ## Swapping the LLM Provider
 
 The LLM abstraction uses Python's Protocol (structural typing). To use a real LLM:
@@ -437,13 +515,17 @@ req-agent/
 │   ├── resolver/                          # Step 5: Cross-reference resolution
 │   ├── llm/                               # LLM abstraction layer
 │   ├── taxonomy/                          # Step 6: Feature taxonomy
-│   └── standards/                         # Step 7: 3GPP standards ingestion
-├── tests/                                 # 182 tests across 7 test files
+│   ├── standards/                         # Step 7: 3GPP standards ingestion
+│   ├── graph/                             # Step 8: Knowledge graph construction
+│   └── vectorstore/                       # Step 9: Vector store construction
+├── tests/                                 # 287 tests across 9 test files
 ├── data/
 │   ├── extracted/                        # Step 1 output: IR JSON files
 │   ├── parsed/                           # Step 3 output: RequirementTree JSON files
 │   ├── resolved/                         # Step 5 output: Cross-reference manifests
 │   ├── taxonomy/                         # Step 6 output: Feature taxonomy JSON files
-│   └── standards/                        # Step 7 output: Downloaded + parsed 3GPP specs
+│   ├── standards/                        # Step 7 output: Downloaded + parsed 3GPP specs
+│   ├── graph/                            # Step 8 output: Knowledge graph JSON + stats
+│   └── vectorstore/                      # Step 9 output: ChromaDB data + config + stats
 └── *.pdf                                 # Source VZW OA specification PDFs
 ```

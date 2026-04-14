@@ -43,6 +43,7 @@ An AI system for intelligent querying, cross-referencing, and compliance analysi
 13. **Multi-format support (PDF, DOC, DOCX, XLS, XLSX)** — format-aware extraction layer produces normalized intermediate representation; DOC converted to DOCX via LibreOffice headless; supports embedded OLE objects and images/diagrams
 14. **Folder-structure-driven metadata** — `/<MNO>/<Release>/Requirements/`, `/<MNO>/<Release>/TestCases/`, `/Standards/<Spec>/<Release>/`
 15. **LLM abstraction via Protocol** — `LLMProvider` Protocol in `src/llm/base.py` is the only LLM interface; any class with matching `complete()` method works (structural typing, no inheritance); swap providers by passing a different instance
+16. **Configurable vector store** — embedding model, vector DB backend, distance metric, and chunk contextualization are all configurable via `VectorStoreConfig` (JSON-serializable). `EmbeddingProvider` and `VectorStoreProvider` Protocols follow same pattern as `LLMProvider`. Supports experimentation with different models/metrics to find best accuracy/speed tradeoff.
 
 ---
 
@@ -167,7 +168,7 @@ Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
 
 Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type` intermediate variable in PDFExtractor.
 
-### Test Suite (200 tests, all passing)
+### Test Suite (287 tests, all passing)
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -179,8 +180,9 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 | `test_taxonomy.py` | 40 | MockLLMProvider protocol/keyword matching, FeatureExtractor prompt/parse, TaxonomyConsolidator merge/dedup, schema round-trips, full pipeline integration |
 | `test_standards.py` | 35 | Spec resolver encoding/URLs, reference collector helpers + integration, spec parser metadata/sections/ancestry, section extractor selection, schema round-trips |
 | `test_graph.py` | 48 | Schema ID generation, requirement/xref/standards/feature graph builders with synthetic data, serialization round-trips, full build with synthetic data, integration tests on real data (connectivity, traversals) |
+| `test_vectorstore.py` | 57 | Config round-trip, protocol conformance (EmbeddingProvider, VectorStoreProvider), ChunkBuilder contextualization/metadata/tables/images/toggles, deduplication, Builder orchestration with mock providers, integration tests on real parsed data |
 
-Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` integration tests (11) require parsed/resolved data. The remaining tests run without external dependencies.
+Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` (48) requires `networkx`; `test_vectorstore.py` integration tests (7) require parsed/taxonomy data. The remaining tests run without external dependencies.
 
 ### Known Design Concerns (deferred)
 
@@ -199,10 +201,20 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Output:** `data/graph/knowledge_graph.json` + `data/graph/graph_stats.json`
 - **Note on maps_to granularity:** MockLLMProvider produces coarse feature mappings (all reqs in a plan → plan's features). Real LLM would refine to specific requirement subsets. The 9,260 edges are expected mock behavior.
 
+#### PoC Step 9 — Vector Store Construction (DONE, committed)
+- **Protocols:** `src/vectorstore/embedding_base.py` — `EmbeddingProvider` Protocol (embed, embed_query, dimension, model_name); `src/vectorstore/store_base.py` — `VectorStoreProvider` Protocol (add, query, count, reset) + `QueryResult` dataclass
+- **Config:** `src/vectorstore/config.py` — `VectorStoreConfig` dataclass with all tuneable parameters (embedding model/provider/batch_size/device/normalize, vector store backend/metric/collection, chunk contextualization toggles, extra dict for provider-specific settings). Loads from / saves to JSON for reproducible experiments.
+- **Chunk builder:** `src/vectorstore/chunk_builder.py` — converts each requirement into a contextualized text chunk following TDD 5.9 format: [MNO/Release/Plan/Version] header + [Path: hierarchy] + [Req ID] + title + body text + tables as Markdown + image captions. Each chunk carries metadata (mno, release, doc_type, plan_id, req_id, section_number, zone_type, feature_ids).
+- **Embedding provider:** `src/vectorstore/embedding_st.py` — `SentenceTransformerEmbedder` using sentence-transformers library. Configurable model name, device, batch size, normalization. No API key needed.
+- **Vector store backend:** `src/vectorstore/store_chroma.py` — `ChromaDBStore` using ChromaDB with persistent storage. Configurable distance metric (cosine/l2/ip), collection name. Metadata sanitization (list/dict → JSON strings for ChromaDB compatibility) with deserialization on query.
+- **Builder:** `src/vectorstore/builder.py` — `VectorStoreBuilder` orchestrates: load trees + taxonomy → build chunks → deduplicate by ID (keeps longer text) → batch embed → store. `BuildStats` dataclass for summary statistics.
+- **CLI:** `python -m src.vectorstore.vectorstore_cli` — supports `--config` JSON file + CLI flag overrides (--model, --metric, --backend, --device, etc.), `--rebuild`, `--info`, `--query` with `--filter-plan`/`--filter-mno`, `--save-config`. Saves config + stats alongside vector store data for reproducibility.
+- **Deduplication:** Builder deduplicates chunks with same ID (parser artifact: VZ_REQ_LTEAT_33081 appears in two sections), keeping the chunk with more text content. 706 raw chunks → 705 after dedup.
+- **Design:** All components are configurable and swappable via Protocols — adding a new embedding model or vector store backend requires no changes to existing code, just a new class matching the Protocol.
+
 ### Remaining Steps
 
 4. Test case parsing (separate parser for test case documents)
-9. Vector store (embeddings for parsed requirement text)
 10. Query pipeline (graph scoping + RAG ranking + LLM synthesis)
 11. Evaluation (accuracy, coverage, latency benchmarks)
 
@@ -210,22 +222,26 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, 6, 7, and 8 complete. Step 4 (test case parsing) skipped for now. Ready for Step 9 (Vector Store) or other remaining steps.
+**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, and 9 complete. Step 4 (test case parsing) skipped for now. Ready for Step 10 (Query Pipeline).
 
 **What just happened (this session):**
-- Completed Step 8 (Knowledge Graph construction) — built unified NetworkX DiGraph from all prior ingestion outputs. 1,078 nodes across 6 types, 11,732 edges across 10 types, 98.1% connectivity in one component. CLI with --verify runs 7 diagnostic queries including connectivity analysis and path traversals.
-- Added 48 new tests (10 schema + 19 builder unit + 2 serialization + 2 full build + 11 integration + 4 stats) bringing total to 200
-- Fixed two-pass feature node creation bug (feature_depends_on edges failed when target feature hadn't been added yet)
+- Completed Step 9 (Vector Store construction) — configurable embedding + vector store with Protocol-based abstraction. 705 requirement chunks (after dedup) with contextualized text and rich metadata. CLI supports config files, CLI overrides, test queries, and store inspection.
+- Added 57 new tests (5 config + 12 protocol + 22 chunk builder + 4 deduplication + 7 builder + 7 integration) bringing total to 287
+- Found and handled duplicate req_id (VZ_REQ_LTEAT_33081) with deduplication logic
 
 **Previous sessions completed:**
 - Step 1 (extraction), Step 2 (profiler), Step 3 (parser), code review + 6 bug fixes
 - Step 5 (cross-reference resolver), Step 6 (feature taxonomy), Step 7 (standards ingestion)
+- Step 8 (knowledge graph construction)
 
 **Immediate next actions:**
-1. Move to PoC Step 9 (Vector Store construction) or another remaining step
-2. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
-3. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
-4. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
+1. Move to PoC Step 10 (Query Pipeline) — graph scoping + targeted RAG + LLM synthesis
+2. Install sentence-transformers and chromadb to run the actual vector store build: `pip install sentence-transformers chromadb`
+3. Build the vector store: `python -m src.vectorstore.vectorstore_cli`
+4. Experiment with different configs: `--model all-mpnet-base-v2`, `--metric l2`, etc.
+5. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
+6. When internal LLM is available, swap MockLLMProvider for real provider (see `src/llm/base.py` for instructions)
+7. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
 
 ---
 
@@ -274,10 +290,19 @@ req-agent/
 │   │   ├── spec_parser.py               # 3GPP DOCX → section tree
 │   │   ├── section_extractor.py          # Referenced section + context extraction
 │   │   └── standards_cli.py              # Standards CLI
-│   └── graph/
-│       ├── schema.py                     # Node/edge types, ID generation functions
-│       ├── builder.py                    # KnowledgeGraphBuilder (7-step construction)
-│       └── graph_cli.py                  # Graph CLI with --verify diagnostics
+│   ├── graph/
+│   │   ├── schema.py                     # Node/edge types, ID generation functions
+│   │   ├── builder.py                    # KnowledgeGraphBuilder (7-step construction)
+│   │   └── graph_cli.py                  # Graph CLI with --verify diagnostics
+│   └── vectorstore/
+│       ├── embedding_base.py             # EmbeddingProvider Protocol
+│       ├── embedding_st.py               # SentenceTransformerEmbedder
+│       ├── store_base.py                 # VectorStoreProvider Protocol + QueryResult
+│       ├── store_chroma.py               # ChromaDBStore (persistent ChromaDB)
+│       ├── config.py                     # VectorStoreConfig (all tuneable params)
+│       ├── chunk_builder.py              # ChunkBuilder (requirement → contextualized chunk)
+│       ├── builder.py                    # VectorStoreBuilder (orchestration)
+│       └── vectorstore_cli.py            # CLI with config support + test queries
 ├── tests/
 │   ├── test_document_ir.py               # IR round-trip tests (10)
 │   ├── test_profile_schema.py            # Profile round-trip tests (9)
@@ -286,7 +311,8 @@ req-agent/
 │   ├── test_resolver.py                  # Cross-reference resolver tests (19)
 │   ├── test_taxonomy.py                  # Feature taxonomy tests (40)
 │   ├── test_standards.py                 # Standards ingestion tests (35)
-│   └── test_graph.py                     # Knowledge graph tests (48)
+│   ├── test_graph.py                     # Knowledge graph tests (48)
+│   └── test_vectorstore.py              # Vector store tests (57)
 ├── data/
 │   ├── extracted/                        # IR JSON files (5 docs)
 │   ├── parsed/                           # RequirementTree JSON files (5 docs)
@@ -295,9 +321,12 @@ req-agent/
 │   ├── standards/                        # Downloaded + parsed 3GPP specs
 │   │   ├── reference_index.json          # Aggregated reference index
 │   │   └── TS_{spec}/Rel-{N}/            # Per-spec per-release: ZIP, DOCX, parsed, sections
-│   └── graph/                            # Knowledge graph output
-│       ├── knowledge_graph.json          # Full graph (node-link JSON)
-│       └── graph_stats.json              # Summary statistics
+│   ├── graph/                            # Knowledge graph output
+│   │   ├── knowledge_graph.json          # Full graph (node-link JSON)
+│   │   └── graph_stats.json              # Summary statistics
+│   └── vectorstore/                      # Vector store output
+│       ├── config.json                   # Config used for build
+│       └── build_stats.json              # Build statistics
 └── *.pdf                                 # Source PDFs (5 VZW OA docs)
 ```
 
