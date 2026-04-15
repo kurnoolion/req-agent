@@ -78,6 +78,7 @@ Honesty:
 15. **LLM abstraction via Protocol** — `LLMProvider` Protocol in `src/llm/base.py` is the only LLM interface; any class with matching `complete()` method works (structural typing, no inheritance); swap providers by passing a different instance
 16. **Configurable vector store** — embedding model, vector DB backend, distance metric, and chunk contextualization are all configurable via `VectorStoreConfig` (JSON-serializable). `EmbeddingProvider` and `VectorStoreProvider` Protocols follow same pattern as `LLMProvider`. Supports experimentation with different models/metrics to find best accuracy/speed tradeoff.
 17. **Local LLM via Ollama (Gemma 4 E4B)** — Evaluated Gemma 3 (1B/4B/12B/27B) and Gemma 4 (E2B/E4B/26B-A4B/31B) against 16GB RAM / CPU-only / Intel Ultra 9 185H constraints. Selected Gemma 4 E4B (8B total params, 4B effective via PLE, Q4_K_M quantization, ~9.6GB, 128K context). 26B-A4B won't fit (18GB Q4); 31B ruled out (20GB Q4). E4B runs at ~2-5 tok/s on CPU — acceptable for PoC structured synthesis on pre-scoped context. OllamaProvider (`src/llm/ollama_provider.py`) connects to local Ollama HTTP API, satisfies LLMProvider Protocol.
+18. **Multi-environment collaboration protocol** — Dev PC (with Claude) + work laptop (no Claude, 16GB NVIDIA GPU, proprietary docs) + team members. Pipeline runner orchestrates all 9 stages with single command. Environment configs define per-member scoped workspaces (stages, MNO/release scope, objectives). Compact report format (RPT lines) for pasting results in chat. QC/FIX templates for structured quality feedback. Error codes (EXT-E001, PRF-W001, etc.) for remote debugging. Model picker auto-selects best Ollama model for detected hardware. Corrections dir auto-detected as overrides. User-supplied eval Q&A from Excel.
 
 ---
 
@@ -268,6 +269,19 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Pipeline change:** `pipeline.py` — added `_bypass_graph` flag + `CandidateSet` import for pure-RAG evaluation mode
 - **Tests:** 36 tests (12 question set structure, 8 metric scoring, 3 serialization, 3 A/B comparison, 7 runner integration, 3 overall score)
 
+#### Pipeline Runner, Environment System & Collaboration Tooling (DONE, committed)
+- **Environment config:** `src/env/config.py` — `EnvironmentConfig` dataclass with name, member, document_root, stage range, scope (MNOs/releases), objectives, model config. `PIPELINE_STAGES` registry (9 stages with names/numbers). `resolve_stage()` accepts names or numbers.
+- **Environment CLI:** `src/env/env_cli.py` — `stages` (list all), `create` (with `--stages extract:parse`, `--scope VZW/Feb2026`), `list`, `show` (with directory status), `init` (create directory structure), `delete`
+- **Pipeline runner:** `src/pipeline/runner.py` — `PipelineContext` (factory from env config or standalone args, handles path resolution, correction detection, LLM provider creation with mock fallback), `PipelineRunner` (orchestrates stages in sequence, collects `StageResult` per stage, supports `--continue-on-error`)
+- **Stage functions:** `src/pipeline/stages.py` — 9 stage functions (extract, profile, parse, resolve, taxonomy, standards, graph, vectorstore, eval), each returning `StageResult` with status/timing/stats/warnings/error codes. Correction auto-detection for profile and taxonomy. User eval Q&A loading from Excel.
+- **Report generator:** `src/pipeline/report.py` — `format_compact_report()` (8-15 line pasteable format: RPT/HW/MDL/stage lines), `format_verbose_report()` (full terminal report including compact block). QC templates (profile, extract, parse, taxonomy, eval) and FIX templates (profile, taxonomy, eval) for structured chat feedback.
+- **Pipeline CLI:** `src/pipeline/run_cli.py` — `--env` or `--docs` mode, `--start`/`--end` (name or number), `--model` (auto/mock/specific), `--continue-on-error`, `--list-stages`, `--detect-hw`, `--qc-template`, `--fix-template`. Reports saved to `reports/` directory.
+- **Model picker:** `src/llm/model_picker.py` — `detect_hardware()` (CPU/RAM/GPU via lscpu/free/nvidia-smi), `pick_model()` (5-model catalog ranked best-to-worst, prefers already-pulled models), `HardwareInfo.compact()` for report line.
+- **Error codes:** `src/pipeline/error_codes.py` — 40 structured codes (EXT-E001 through MDL-W001), each with message template, context formatting, and hint text. `PipelineError` exception class.
+- **Setup script:** `setup_env.sh` — One-command bootstrap: HW detection, Python deps, LibreOffice check, Ollama install/start, model selection/pull, full verification. Supports `--deps-only` and `--check` modes.
+- **Contribution guide:** `CONTRIBUTING.md` — File ownership table (auto-generated vs human-editable), correction workflow, eval Excel format, QC/FIX reporting templates, common commands.
+- **Tested end-to-end:** profile→parse→resolve chain (3/3 OK, 711 reqs), taxonomy with mock LLM (OK, 16 features), error handling (clean failures with error codes), `--continue-on-error` flag, model picker (correctly selects already-pulled models).
+
 ### Remaining Steps
 
 4. Test case parsing (separate parser for test case documents)
@@ -276,59 +290,48 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. All PoC steps except Step 4 are done. Vector store built, baseline evaluation run, local LLM (Ollama + Gemma 4 E4B) integrated and tested end-to-end. Citation improvement completed and verified.
+**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. Pipeline runner, environment system, model picker, and collaboration tooling implemented. Ready for multi-machine team workflow.
 
-**What just happened (this session — April 14-15, 2026):**
-- **Citation improvement — two-pronged fix for Gemma 4 E4B's poor inline citation:**
-  1. **Few-shot citation example** added to all system prompts (`context_builder.py`): shows the LLM exactly what a well-cited answer looks like with inline `(VZ_REQ_...)` IDs. Small models respond better to demonstration than instruction.
-  2. **End-of-context reminder** enhanced: now lists all req IDs available in the context, with explicit instructions that "an answer without inline requirement IDs is INCORRECT."
-  3. **Context-based citation fallback** added to `LLMSynthesizer` (`synthesizer.py`): when the LLM produces fewer than `MIN_REQ_CITATIONS=2` req ID citations, the synthesizer supplements with citations from all context chunks that were fed to the LLM. These are legitimate citations — the chunks contributed to the answer.
-- **Verification test:** SMS query (previously 0 VZ_REQ citations) now produces 10 req ID citations (all via fallback — LLM still doesn't cite inline reliably, but the safety net catches it). Citations span LTESMS and LTEB13NAC plans. Fallback logged: "added 10 context-based citations (LLM only cited 0 req IDs)."
-- 383 tests passing (378 original + 5 new: 2 context builder tests for few-shot/reminder, 3 synthesizer tests for fallback logic)
+**What just happened (this session — April 15, 2026):**
+- **Pipeline runner + environment system + collaboration tooling** — full implementation for multi-machine team workflow:
+  - Designed and agreed on collaboration protocol: dev PC (with Claude) + work laptop (16GB NVIDIA GPU, no Claude, proprietary docs) + team members via internal github
+  - Implemented environment config system (`src/env/`) — per-member scoped workspaces with stage range, MNO/release scope, objectives
+  - Implemented pipeline runner (`src/pipeline/`) — 9-stage orchestration with `PipelineContext`, `StageResult`, compact and verbose reports
+  - Implemented model picker (`src/llm/model_picker.py`) — HW auto-detection, 5-model catalog ranked best-to-worst, prefers already-pulled Ollama models
+  - Implemented error code catalog (`src/pipeline/error_codes.py`) — 40 structured codes for remote debugging
+  - Implemented compact report format for pasting results in chat (RPT/HW/MDL/stage lines)
+  - Implemented QC templates and FIX templates for structured quality feedback
+  - Implemented correction auto-detection (profile.json, taxonomy.json in corrections/ dir)
+  - Implemented user-supplied eval Q&A loading from Excel files
+  - Created `setup_env.sh` (one-command bootstrap) and `CONTRIBUTING.md` (team guide)
+  - Tested end-to-end: profile→parse→resolve (3/3 OK), taxonomy with mock (OK), error handling, --continue-on-error
+  - Fixed bugs during testing: DocumentProfile attribute names, TaxonomyConsolidator args, model picker exception handling, mock model routing
 
-**Previous session (April 14, 2026):**
-- Installed `sentence-transformers` and `chromadb` dependencies
-- Built the vector store: 705 chunks embedded with `all-MiniLM-L6-v2` (384d), ChromaDB cosine distance
-- Ran A/B evaluation baseline (mock synthesizer): 85.3% overall, all ties between graph-scoped and pure RAG (expected — mock synthesizer doesn't differentiate; real LLM will)
-  - Feature-level: 96.3%, Single-doc: 88.5%, Traceability: 83.3%, Cross-doc: 82.7%, Standards comparison: 71.7%
-- Fixed import bug in `eval_cli.py` — `ABComparison` was imported from wrong module
-- Fixed deprecation warning in `embedding_st.py` — `get_sentence_embedding_dimension` → `get_embedding_dimension`
-- Evaluated local LLM options for 16GB RAM / CPU-only / Intel Ultra 9 185H:
-  - Gemma 4 E4B selected (8B total, 4B effective via PLE, Q4_K_M ~9.6GB, 128K context)
-  - Gemma 4 26B-A4B ruled out (18GB Q4 — won't fit alongside pipeline)
-  - Gemma 3 4B viable fallback (3GB Q4, proven but older architecture)
-- Installed Ollama (v0.20.7) on WSL2, pulled `gemma4:e4b` (9.6 GB)
-- Implemented `OllamaProvider` (`src/llm/ollama_provider.py`) — connects to local Ollama HTTP API, satisfies LLMProvider Protocol, includes performance logging (tok/s), thinking mode support
-- Wired `--llm ollama --llm-model gemma4:e4b --llm-timeout` flags into both query CLI and eval CLI with graceful fallback to mock on connection failure
-- **Tested end-to-end with real Gemma 4 E4B LLM:**
-  - Data retry query: excellent result — 1,578 tokens in 236s (12.6 tok/s), coherent structured answer with 11 citations (8 req IDs + 3 standards refs), correctly described T3402 timer, attach counter, authentication reject scenarios
-  - SMS query: LLM produced good analytical answer but 0 citations — model summarized thematically instead of grounding each claim to specific VZ_REQ IDs despite system prompt instructions
-- **Initial system prompt tuning:**
-  - Added `_CITATION_RULES` block to all system prompts in `context_builder.py` with explicit mandatory citation instructions
-  - Added end-of-context citation reminder (placed after all chunks, closest to generation point) — smaller models respond better to instructions near the generation boundary
-  - Re-tested: SMS format query got 1 citation (3GPP TS 23.040) — improved but still not citing VZ_REQ IDs consistently.
-  - Observed: 300s default timeout can be insufficient when Ollama reloads the model fresh. Need `--llm-timeout 600` for reliability.
-
-**Observations on Gemma 4 E4B performance:**
-- Actual CPU inference: **~12-13 tok/s** on Intel Ultra 9 185H — significantly faster than the estimated 2-5 tok/s
-- Total response time: ~2-4 minutes per query (model load + inference)
-- RAM: fits alongside pipeline (embeddings + ChromaDB + graph) on 16GB system
-- Quality: good reasoning and structured analysis, but inconsistent at following citation instructions — smaller models need stronger/repeated prompting for grounded responses. The citation fallback mitigates this at the citation-extraction level.
+**Previous session (April 14-15, 2026):**
+- Citation improvement: few-shot examples, end-of-context reminders, context-based citation fallback
+- 383 tests passing
 
 **Previous sessions completed:**
 - Step 1 (extraction), Step 2 (profiler), Step 3 (parser), code review + 6 bug fixes
 - Step 5 (cross-reference resolver), Step 6 (feature taxonomy), Step 7 (standards ingestion)
 - Step 8 (knowledge graph construction), Step 9 (vector store construction)
 - Step 10 (query pipeline), Step 11 (evaluation framework)
-- Ollama + Gemma 4 E4B integration, initial system prompt tuning
+- Ollama + Gemma 4 E4B integration, citation improvement
+
+**Observations on Gemma 4 E4B performance (from previous session):**
+- Actual CPU inference: **~12-13 tok/s** on Intel Ultra 9 185H
+- Total response time: ~2-4 minutes per query (model load + inference)
+- Quality: good reasoning, inconsistent citation following. Citation fallback mitigates this.
 
 **Immediate next actions:**
-1. Run A/B evaluation with real LLM: `python -m src.eval.eval_cli --ab --llm ollama --llm-timeout 600 --output data/eval/report_llm.json` (will take ~1-2 hours with 36 query runs). The citation fallback should significantly improve citation_quality and accuracy metrics vs the previous LLM runs.
-2. Compare LLM vs mock evaluation results — graph-scoped should now outperform pure RAG with real synthesis
-3. Experiment with different embedding models: `--model all-mpnet-base-v2`
-4. To download all referenced specs (not just 24.301 and 36.331): `python -m src.standards.standards_cli`
-5. Stale output files in `data/extracted/`, `profiles/`, `data/parsed/` should be regenerated with fixed code (bug fixes from earlier haven't been re-run through the full pipeline)
-6. Consider whether Gemma 4 E4B's citation weakness warrants trying a larger model — could test `gemma4:e2b` for comparison (faster, smaller, may follow instructions more consistently at the cost of reasoning depth)
+1. Set up work laptop: `git clone`, `./setup_env.sh`, verify with `python -m src.pipeline.run_cli --detect-hw`
+2. Create environments for team members: `python -m src.env.env_cli create ...`
+3. Run full pipeline on work laptop: `python -m src.pipeline.run_cli --env <name>` — paste compact report back here
+4. Run A/B evaluation with real LLM: `python -m src.pipeline.run_cli --docs . --start eval --end eval` or `python -m src.eval.eval_cli --ab --llm ollama --llm-timeout 600`
+5. Team members: verify profiler/taxonomy/eval on new documents, provide QC/FIX feedback
+6. Experiment with different embedding models and larger LLM models (16GB GPU enables gemma3:12b)
+7. Stale output files should be regenerated via pipeline runner
+8. Consider Gemma 4 26B-A4B on 16GB GPU for better citation following
 
 ---
 
@@ -339,8 +342,11 @@ req-agent/
 ├── CLAUDE.md                              # Claude Code instructions
 ├── SESSION_SUMMARY.md                     # This file
 ├── README.md                              # How to run and test all PoC steps
+├── CONTRIBUTING.md                        # Team contribution guide
 ├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.4)
 ├── requirements.txt                       # Python dependencies
+├── setup_env.sh                           # One-command setup script
+├── environments/                          # Environment configs (JSON)
 ├── profiles/
 │   └── vzw_oa_profile.json               # VZW OA document profile
 ├── src/
@@ -364,7 +370,8 @@ req-agent/
 │   ├── llm/
 │   │   ├── base.py                       # LLMProvider Protocol
 │   │   ├── mock_provider.py              # MockLLMProvider (keyword-based)
-│   │   └── ollama_provider.py            # OllamaProvider (local Ollama HTTP API)
+│   │   ├── ollama_provider.py            # OllamaProvider (local Ollama HTTP API)
+│   │   └── model_picker.py              # HW detection + model auto-selection
 │   ├── taxonomy/
 │   │   ├── schema.py                     # Feature taxonomy data model
 │   │   ├── extractor.py                  # Per-document feature extraction
@@ -401,11 +408,20 @@ req-agent/
 │   │   ├── synthesizer.py                # Stage 6: LLM synthesis with citation extraction
 │   │   ├── pipeline.py                   # Pipeline orchestrator (6-stage)
 │   │   └── query_cli.py                  # CLI (single query, interactive, verbose)
-│   └── eval/
-│       ├── questions.py                  # 18 test questions with ground truth
-│       ├── metrics.py                    # Scoring functions and report aggregation
-│       ├── runner.py                     # EvalRunner with A/B comparison
-│       └── eval_cli.py                   # CLI (run, --ab, --category, --output)
+│   ├── eval/
+│   │   ├── questions.py                  # 18 test questions with ground truth
+│   │   ├── metrics.py                    # Scoring functions and report aggregation
+│   │   ├── runner.py                     # EvalRunner with A/B comparison
+│   │   └── eval_cli.py                   # CLI (run, --ab, --category, --output)
+│   ├── env/
+│   │   ├── config.py                     # EnvironmentConfig + PIPELINE_STAGES registry
+│   │   └── env_cli.py                    # Environment CLI (create, list, show, init, delete)
+│   └── pipeline/
+│       ├── stages.py                     # 9 stage functions + StageResult
+│       ├── runner.py                     # PipelineContext + PipelineRunner
+│       ├── report.py                     # Compact + verbose reports, QC/FIX templates
+│       ├── run_cli.py                    # Pipeline CLI (--env, --docs, --start, --end, --detect-hw)
+│       └── error_codes.py               # 40 structured error codes
 ├── tests/
 │   ├── test_document_ir.py               # IR round-trip tests (10)
 │   ├── test_profile_schema.py            # Profile round-trip tests (9)

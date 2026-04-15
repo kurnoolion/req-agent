@@ -2,7 +2,7 @@
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 
-**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending. Local LLM (Ollama + Gemma 4 E4B) integrated. Citation quality improved with few-shot prompting and context-based fallback.
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending. Local LLM (Ollama + Gemma 4 E4B) integrated. Citation quality improved with few-shot prompting and context-based fallback. Automated pipeline runner, multi-user environment system, and collaboration tooling added for team workflows.
 
 ## Prerequisites
 
@@ -57,9 +57,131 @@ CPU inference runs at ~10-13 tok/s on Intel Core Ultra 9 185H, producing answers
 
 - **LibreOffice** — required for automatic DOC→DOCX conversion of 3GPP spec downloads. Install with `apt install libreoffice` or equivalent. If not available, the system will log a warning; you can manually convert DOC files.
 
-## Quick Start — Run the Full Pipeline
+## Quick Start — Automated Pipeline Runner
 
-Run all steps sequentially to regenerate all output from source PDFs:
+The pipeline runner chains all stages with a single command, generates compact reports, and supports multi-user environment configs.
+
+```bash
+# Run the full pipeline on documents in current directory
+python -m src.pipeline.run_cli --docs . --start extract --end eval
+
+# Run specific stages (by name or number)
+python -m src.pipeline.run_cli --docs . --start profile --end parse
+python -m src.pipeline.run_cli --docs . --start 1 --end 3
+
+# Run using an environment config (see Environment Management below)
+python -m src.pipeline.run_cli --env profiler-review
+
+# Use mock LLM (no Ollama required)
+python -m src.pipeline.run_cli --docs . --model mock --start taxonomy --end graph
+
+# Continue past failed stages
+python -m src.pipeline.run_cli --docs . --continue-on-error
+
+# List available stages
+python -m src.pipeline.run_cli --list-stages
+
+# Detect hardware and get model recommendation
+python -m src.pipeline.run_cli --detect-hw
+
+# Show quality check / correction feedback templates
+python -m src.pipeline.run_cli --qc-template profile
+python -m src.pipeline.run_cli --fix-template taxonomy
+```
+
+**Pipeline output** includes a compact report block (paste in chat for collaborative debugging):
+```
+RPT standalone 2026-04-15T15:53
+HW CPU=Intel Core Ultra 9 185H(22c) RAM=15G GPU=none
+MDL gemma4:e4b
+PRF OK 0s lvl=4 rpat=1 zone=9
+PRS OK 0s req=711 dep=11 docs=5
+RES WARN 0s int=301 xp=1 std=320
+ERR none
+```
+
+## Environment Management
+
+Environments define scoped workspaces for team members to run specific pipeline stages against specific documents.
+
+```bash
+# Create an environment for a team member
+python -m src.env.env_cli create \
+    --name profiler-review \
+    --member alice \
+    --doc-root /data/vzw-new-batch \
+    --stages extract:parse \
+    --scope VZW/Feb2026 \
+    --objectives "Verify heading detection" "Check table extraction" \
+    --created-by mohan
+
+# Create a full-pipeline environment with multiple MNOs
+python -m src.env.env_cli create \
+    --name eval-review \
+    --member bob \
+    --doc-root /data/multi-mno \
+    --stages 1:9 \
+    --scope VZW/Feb2026 ATT/Oct2025
+
+# List all environments
+python -m src.env.env_cli list
+
+# Show environment details and directory status
+python -m src.env.env_cli show profiler-review
+
+# Initialize directory structure at document_root
+python -m src.env.env_cli init profiler-review
+
+# Run the pipeline for an environment
+python -m src.pipeline.run_cli --env profiler-review
+```
+
+**Document root layout** (created by `init`):
+```
+<document_root>/
+├── documents/        # Place source documents here (PDF, DOCX, XLS, XLSX)
+├── corrections/      # Place corrected artifacts here (profile.json, taxonomy.json)
+├── eval/             # Place Q&A eval pairs here (*.xlsx)
+├── output/           # Pipeline outputs (auto-generated per stage)
+└── reports/          # Pipeline reports (auto-generated)
+```
+
+**Correction workflow:** Run pipeline → review artifacts → copy generated file to `corrections/` → edit it → re-run pipeline (corrections auto-detected as overrides).
+
+**User-supplied eval Q&A:** Place an Excel file in `eval/` with columns: `question_id`, `category`, `question`, `expected_plans`, `expected_req_ids`, `expected_features`, `expected_standards`, `expected_concepts`, `min_plans`, `min_chunks`. See `CONTRIBUTING.md` for details.
+
+## Model Selection
+
+The system auto-detects hardware and selects the best Ollama model that fits:
+
+```bash
+python -m src.pipeline.run_cli --detect-hw
+```
+
+| Model | Size (Q4) | RAM/VRAM | GPU-only | Description |
+|-------|-----------|----------|----------|-------------|
+| `gemma4:27b-it-qat` | 18 GB | >=20GB VRAM | Yes | Best quality, needs large GPU |
+| `gemma3:12b` | 8 GB | 12GB+ VRAM or 16GB RAM | No | Strong quality, fits most setups |
+| `gemma4:e4b` | 9.6 GB | 11GB+ | No | Good quality, 128K context, CPU-viable |
+| `gemma3:4b` | 3 GB | 4GB+ | No | Lighter fallback, fast on CPU |
+| `gemma3:1b` | 1.5 GB | 2GB+ | No | Minimal, runs anywhere |
+
+Auto-selection prefers models already pulled on Ollama. Override with `--model gemma4:e4b`.
+
+## Setup (New Machine)
+
+```bash
+# One-command setup: Python deps, Ollama, model, verification
+./setup_env.sh
+
+# Or step by step:
+./setup_env.sh --deps-only    # Python deps only
+./setup_env.sh --check        # Verify without installing
+```
+
+## Quick Start — Run Individual Steps
+
+Run steps individually for more control:
 
 ```bash
 # Step 1: Extract document content → data/extracted/
@@ -662,8 +784,11 @@ req-agent/
 ├── CLAUDE.md                              # Claude Code instructions
 ├── SESSION_SUMMARY.md                     # Session context for continuity
 ├── README.md                              # This file
+├── CONTRIBUTING.md                        # Team contribution guide (file ownership, QC templates, correction workflow)
 ├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.4)
 ├── requirements.txt                       # Python dependencies
+├── setup_env.sh                           # One-command setup script (deps, Ollama, model, verification)
+├── environments/                          # Environment configs (JSON, one per team member workspace)
 ├── profiles/
 │   └── vzw_oa_profile.json               # VZW OA document profile
 ├── src/
@@ -672,13 +797,15 @@ req-agent/
 │   ├── profiler/                          # Step 2: Document profiling
 │   ├── parser/                            # Step 3: Structural parsing
 │   ├── resolver/                          # Step 5: Cross-reference resolution
-│   ├── llm/                               # LLM abstraction layer (mock + Ollama)
+│   ├── llm/                               # LLM abstraction layer (mock + Ollama + model picker)
 │   ├── taxonomy/                          # Step 6: Feature taxonomy
 │   ├── standards/                         # Step 7: 3GPP standards ingestion
 │   ├── graph/                             # Step 8: Knowledge graph construction
 │   ├── vectorstore/                       # Step 9: Vector store construction
 │   ├── query/                             # Step 10: Query pipeline (6-stage)
-│   └── eval/                              # Step 11: Evaluation framework
+│   ├── eval/                              # Step 11: Evaluation framework
+│   ├── env/                               # Environment config system (multi-user workspaces)
+│   └── pipeline/                          # Pipeline runner (stage orchestration, reports, error codes)
 ├── tests/                                 # 383 tests across 11 test files
 ├── data/
 │   ├── extracted/                        # Step 1 output: IR JSON files
