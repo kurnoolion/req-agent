@@ -625,6 +625,45 @@ class TestContextBuilder:
         assert "[MNO:" not in stripped
         assert "Actual content" in stripped
 
+    def test_system_prompt_has_few_shot_example(self):
+        chunks = [
+            RetrievedChunk(
+                chunk_id="req:VZ_REQ_LTEDATARETRY_200",
+                text="The T3402 timer",
+                metadata={"mno": "VZW", "plan_id": "LTEDATARETRY",
+                           "req_id": "VZ_REQ_LTEDATARETRY_200",
+                           "section_number": "1.3", "release": "2026_feb"},
+                graph_node_id="req:VZ_REQ_LTEDATARETRY_200",
+            ),
+        ]
+        ctx = self.builder.build("timer?", chunks, QueryType.SINGLE_DOC)
+        assert "EXAMPLE of a well-cited answer" in ctx.system_prompt
+        assert "VZ_REQ_LTEDATARETRY_7748" in ctx.system_prompt
+
+    def test_context_reminder_lists_req_ids(self):
+        chunks = [
+            RetrievedChunk(
+                chunk_id="req:VZ_REQ_LTEDATARETRY_200",
+                text="timer text",
+                metadata={"mno": "VZW", "plan_id": "LTEDATARETRY",
+                           "req_id": "VZ_REQ_LTEDATARETRY_200",
+                           "section_number": "1.3", "release": "2026_feb"},
+                graph_node_id="req:VZ_REQ_LTEDATARETRY_200",
+            ),
+            RetrievedChunk(
+                chunk_id="req:VZ_REQ_LTESMS_100",
+                text="sms text",
+                metadata={"mno": "VZW", "plan_id": "LTESMS",
+                           "req_id": "VZ_REQ_LTESMS_100",
+                           "section_number": "1.1", "release": "2026_feb"},
+                graph_node_id="req:VZ_REQ_LTESMS_100",
+            ),
+        ]
+        ctx = self.builder.build("test", chunks, QueryType.GENERAL)
+        assert "VZ_REQ_LTEDATARETRY_200" in ctx.context_text
+        assert "VZ_REQ_LTESMS_100" in ctx.context_text
+        assert "REMINDER" in ctx.context_text
+
 
 # ═══════════════════════════════════════════════════════════════
 # Synthesizer tests
@@ -673,6 +712,123 @@ class TestSynthesizer:
         assert req_cites[0].req_id == "VZ_REQ_LTEDATARETRY_7748"
         assert len(std_cites) == 1
         assert std_cites[0].spec_section == "5.5.1.2.5"
+
+    def test_citation_fallback_adds_context_citations(self):
+        """When LLM cites fewer than MIN_REQ_CITATIONS, fallback adds from context."""
+        existing = []  # LLM cited nothing
+        context = AssembledContext(
+            system_prompt="test",
+            context_text="test",
+            chunks=[
+                ChunkContext(
+                    chunk=RetrievedChunk(
+                        chunk_id="req:A",
+                        text="text A",
+                        metadata={"req_id": "VZ_REQ_LTEDATARETRY_100",
+                                   "plan_id": "LTEDATARETRY"},
+                    ),
+                    standards=[
+                        StandardsContext(
+                            spec="24.301", section="5.5.1.2.5",
+                            release_num=11, title="Attach reject",
+                        ),
+                    ],
+                ),
+                ChunkContext(
+                    chunk=RetrievedChunk(
+                        chunk_id="req:B",
+                        text="text B",
+                        metadata={"req_id": "VZ_REQ_LTESMS_200",
+                                   "plan_id": "LTESMS"},
+                    ),
+                ),
+            ],
+        )
+        fallback = LLMSynthesizer._recover_citations_from_context(existing, context)
+        req_ids = {c.req_id for c in fallback if c.req_id}
+        specs = {c.spec for c in fallback if c.spec}
+        assert "VZ_REQ_LTEDATARETRY_100" in req_ids
+        assert "VZ_REQ_LTESMS_200" in req_ids
+        assert "3GPP TS 24.301" in specs
+
+    def test_citation_fallback_skips_already_cited(self):
+        """Fallback should not duplicate citations the LLM already produced."""
+        existing = [
+            Citation(req_id="VZ_REQ_LTEDATARETRY_100", plan_id="LTEDATARETRY"),
+        ]
+        context = AssembledContext(
+            chunks=[
+                ChunkContext(
+                    chunk=RetrievedChunk(
+                        chunk_id="req:A",
+                        text="text A",
+                        metadata={"req_id": "VZ_REQ_LTEDATARETRY_100",
+                                   "plan_id": "LTEDATARETRY"},
+                    ),
+                ),
+                ChunkContext(
+                    chunk=RetrievedChunk(
+                        chunk_id="req:B",
+                        text="text B",
+                        metadata={"req_id": "VZ_REQ_LTESMS_200",
+                                   "plan_id": "LTESMS"},
+                    ),
+                ),
+            ],
+        )
+        fallback = LLMSynthesizer._recover_citations_from_context(existing, context)
+        req_ids = [c.req_id for c in fallback if c.req_id]
+        assert "VZ_REQ_LTEDATARETRY_100" not in req_ids
+        assert "VZ_REQ_LTESMS_200" in req_ids
+
+    def test_citation_fallback_not_triggered_when_enough(self):
+        """When LLM produces enough citations, fallback should not be triggered."""
+        # Create a mock LLM that returns an answer with citations
+        class _FakeLLM:
+            def complete(self, prompt, system, temperature, max_tokens):
+                return (
+                    "Per VZ_REQ_LTEDATARETRY_100 and VZ_REQ_LTEDATARETRY_200, "
+                    "the timer is 720s."
+                )
+
+        synth = LLMSynthesizer(_FakeLLM())
+        ctx = AssembledContext(
+            system_prompt="test",
+            context_text="test",
+            chunks=[
+                ChunkContext(
+                    chunk=RetrievedChunk(
+                        chunk_id="req:A",
+                        text="text A",
+                        metadata={"req_id": "VZ_REQ_LTEDATARETRY_100",
+                                   "plan_id": "LTEDATARETRY"},
+                    ),
+                ),
+                ChunkContext(
+                    chunk=RetrievedChunk(
+                        chunk_id="req:B",
+                        text="text B",
+                        metadata={"req_id": "VZ_REQ_LTEDATARETRY_200",
+                                   "plan_id": "LTEDATARETRY"},
+                    ),
+                ),
+                ChunkContext(
+                    chunk=RetrievedChunk(
+                        chunk_id="req:C",
+                        text="text C",
+                        metadata={"req_id": "VZ_REQ_LTESMS_100",
+                                   "plan_id": "LTESMS"},
+                    ),
+                ),
+            ],
+        )
+        intent = QueryIntent(raw_query="test")
+        response = synth.synthesize(ctx, intent)
+        # Should have 2 req citations from the LLM, no fallback for LTESMS_100
+        req_ids = {c.req_id for c in response.citations if c.req_id}
+        assert "VZ_REQ_LTEDATARETRY_100" in req_ids
+        assert "VZ_REQ_LTEDATARETRY_200" in req_ids
+        assert "VZ_REQ_LTESMS_100" not in req_ids
 
 
 # ═══════════════════════════════════════════════════════════════

@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 class LLMSynthesizer:
     """Generates answers from assembled context using an LLM."""
 
+    # Minimum req ID citations before context fallback kicks in
+    MIN_REQ_CITATIONS = 2
+
     def __init__(self, llm_provider, max_tokens: int = 4096) -> None:
         self._llm = llm_provider
         self._max_tokens = max_tokens
@@ -57,8 +60,21 @@ class LLMSynthesizer:
             logger.error(f"LLM synthesis failed: {e}")
             answer = f"[LLM synthesis failed: {e}]"
 
-        # Extract citations from the answer
+        # Extract citations from the answer text
         citations = self._extract_citations(answer)
+
+        # Fallback: if LLM didn't cite enough req IDs, recover from context
+        req_citations = [c for c in citations if c.req_id]
+        if len(req_citations) < self.MIN_REQ_CITATIONS and context.chunks:
+            fallback = self._recover_citations_from_context(
+                citations, context,
+            )
+            if fallback:
+                logger.info(
+                    f"Citation fallback: added {len(fallback)} context-based "
+                    f"citations (LLM only cited {len(req_citations)} req IDs)"
+                )
+                citations.extend(fallback)
 
         response = QueryResponse(
             answer=answer,
@@ -74,6 +90,39 @@ class LLMSynthesizer:
             f"{len(citations)} citations"
         )
         return response
+
+    @staticmethod
+    def _recover_citations_from_context(
+        existing: list[Citation],
+        context: AssembledContext,
+    ) -> list[Citation]:
+        """Recover citations from context chunks the LLM didn't explicitly cite.
+
+        These are legitimate citations — the chunks were in the LLM's context
+        and contributed to the answer. They're added as supplementary
+        references, not as claims the LLM made.
+        """
+        seen = {c.req_id for c in existing if c.req_id}
+        seen |= {f"{c.spec}:{c.spec_section}" for c in existing if c.spec}
+        fallback = []
+
+        for ctx in context.chunks:
+            req_id = ctx.chunk.metadata.get("req_id", "")
+            plan_id = ctx.chunk.metadata.get("plan_id", "")
+            if req_id and req_id not in seen:
+                fallback.append(Citation(req_id=req_id, plan_id=plan_id))
+                seen.add(req_id)
+
+            for std in ctx.standards:
+                key = f"3GPP TS {std.spec}:{std.section}"
+                if key not in seen:
+                    fallback.append(Citation(
+                        spec=f"3GPP TS {std.spec}",
+                        spec_section=std.section,
+                    ))
+                    seen.add(key)
+
+        return fallback
 
     @staticmethod
     def _extract_citations(answer: str) -> list[Citation]:

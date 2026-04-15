@@ -43,6 +43,18 @@ _CITATION_RULES = (
     "- Do NOT invent or fabricate requirement IDs. Only use IDs that appear in the context."
 )
 
+_FEW_SHOT_EXAMPLE = (
+    "\n\nEXAMPLE of a well-cited answer:\n"
+    'Q: "What timers apply to LTE data retry?"\n'
+    "A: The data retry procedure uses two key timers:\n"
+    "1. **T3402 timer** (VZ_REQ_LTEDATARETRY_7748): The UE shall start the T3402 timer "
+    "upon receiving an Attach Reject with cause #7, #14, or #15, per "
+    "3GPP TS 24.301, Section 5.5.1.2.6.\n"
+    "2. **T3411 timer** (VZ_REQ_LTEDATARETRY_7750): After expiry of T3411, the UE shall "
+    "re-attempt the attach procedure.\n\n"
+    "Follow this pattern: every claim MUST include the (VZ_REQ_...) ID inline."
+)
+
 _SYSTEM_PROMPTS = {
     QueryType.SINGLE_DOC: (
         "You are an expert telecom requirements analyst. "
@@ -50,6 +62,7 @@ _SYSTEM_PROMPTS = {
         "Structure your answer around the specific requirements, referencing each by its ID. "
         "If the context is insufficient, say so."
         + _CITATION_RULES
+        + _FEW_SHOT_EXAMPLE
     ),
     QueryType.CROSS_DOC: (
         "You are an expert telecom requirements analyst. "
@@ -58,6 +71,7 @@ _SYSTEM_PROMPTS = {
         "Reference each requirement by its exact ID. "
         "Note when requirements from different documents interact or depend on each other."
         + _CITATION_RULES
+        + _FEW_SHOT_EXAMPLE
     ),
     QueryType.FEATURE_LEVEL: (
         "You are an expert telecom requirements analyst. "
@@ -65,6 +79,7 @@ _SYSTEM_PROMPTS = {
         "Summarize all requirements related to this feature across the provided documents. "
         "Reference each requirement by its exact ID and note which plan/document each comes from."
         + _CITATION_RULES
+        + _FEW_SHOT_EXAMPLE
     ),
     QueryType.STANDARDS_COMPARISON: (
         "You are an expert telecom requirements analyst comparing MNO requirements "
@@ -73,6 +88,7 @@ _SYSTEM_PROMPTS = {
         "the 3GPP standard — does it defer to, constrain, override, or extend the standard? "
         "Reference each requirement by its exact ID and cite 3GPP section numbers."
         + _CITATION_RULES
+        + _FEW_SHOT_EXAMPLE
     ),
     QueryType.CROSS_MNO_COMPARISON: (
         "You are comparing MNO device requirements across operators. "
@@ -80,6 +96,7 @@ _SYSTEM_PROMPTS = {
         "Use table format when appropriate. "
         "Reference each requirement by its exact ID from each MNO."
         + _CITATION_RULES
+        + _FEW_SHOT_EXAMPLE
     ),
     QueryType.GENERAL: (
         "You are an expert telecom requirements analyst. "
@@ -87,6 +104,7 @@ _SYSTEM_PROMPTS = {
         "Reference each requirement by its exact ID for every factual claim. "
         "If the context is insufficient, say so."
         + _CITATION_RULES
+        + _FEW_SHOT_EXAMPLE
     ),
 }
 
@@ -285,12 +303,24 @@ class ContextBuilder:
             # Similarity score (useful for debugging)
             parts.append(f"[Relevance score: {chunk.similarity_score:.4f}]")
 
+        # Collect all req IDs from context for the reminder
+        context_req_ids = [
+            ctx.chunk.metadata.get("req_id", "")
+            for ctx in chunks
+            if ctx.chunk.metadata.get("req_id")
+        ]
+
         # Add citation reminder at end of context (closest to generation)
         parts.append("\n" + "=" * 60)
         parts.append(
-            "IMPORTANT: In your answer, you MUST reference the specific "
-            "Req IDs (e.g., VZ_REQ_LTESMS_30328) shown above for each claim. "
-            "Also cite any 3GPP TS specifications mentioned in the context."
+            "REMINDER — YOU MUST CITE REQUIREMENT IDs:\n"
+            "The requirement IDs available in this context are:\n"
+            + ", ".join(context_req_ids[:20])
+            + ("\n..." if len(context_req_ids) > 20 else "")
+            + "\n\nFor EVERY factual claim in your answer, write the ID inline "
+            "like: '...the UE shall start T3402 (VZ_REQ_LTEDATARETRY_7748)...'\n"
+            "Also cite 3GPP specs as: 3GPP TS 24.301, Section 5.5.1.2.6\n"
+            "An answer without inline requirement IDs is INCORRECT."
         )
         parts.append("=" * 60)
 
