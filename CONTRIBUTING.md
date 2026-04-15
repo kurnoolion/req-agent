@@ -1,6 +1,6 @@
 # Contributing Guide
 
-This guide is for team members working on verifying and improving the telecom requirements AI pipeline.
+This guide is for team members working on verifying and improving the NORA (Network Operator Requirements Analyzer) pipeline.
 
 ## Workflow Overview
 

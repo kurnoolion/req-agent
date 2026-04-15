@@ -82,7 +82,7 @@ def _detect_hw() -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Run the telecom requirements pipeline.",
+        description="NORA — Run the network operator requirements pipeline.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Examples:\n"

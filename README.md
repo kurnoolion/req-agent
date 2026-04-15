@@ -1,4 +1,4 @@
-# Telecom Requirements AI System — PoC
+# NORA — Network Operator Requirements Analyzer (PoC)
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 

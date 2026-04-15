@@ -1,4 +1,4 @@
-# Technical Design Document: Telecom Requirements AI System
+# Technical Design Document: NORA — Network Operator Requirements Analyzer
 
 **Version:** 0.4
 **Date:** April 2026

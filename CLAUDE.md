@@ -18,7 +18,7 @@ The PDFs cover LTE feature specifications:
 
 ## Project Context
 
-We are building an AI system (Knowledge Graph + RAG) for intelligent querying, cross-referencing, and compliance analysis of MNO device requirement specifications. The full technical design is in `TDD_Telecom_Requirements_AI_System.md`.
+We are building **NORA** (Network Operator Requirements Analyzer) — an AI system (Knowledge Graph + RAG) for intelligent querying, cross-referencing, and compliance analysis of MNO device requirement specifications. The full technical design is in `TDD_Telecom_Requirements_AI_System.md`.
 
 Key architectural decisions and rationale are captured in project memory (`design_decisions.md`). The VZW document structure analysis (critical for parser design) is in `vzw_document_structure.md`.
 

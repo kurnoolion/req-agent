@@ -155,7 +155,7 @@ def cmd_interactive(args: argparse.Namespace) -> None:
     """Run interactive query mode."""
     pipeline = _create_pipeline(args)
 
-    print("\nTelecom Requirements Q&A System")
+    print("\nNORA — Network Operator Requirements Analyzer")
     print("Type your question, or 'quit' to exit.\n")
 
     while True:
@@ -178,7 +178,7 @@ def cmd_interactive(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Query pipeline for telecom requirements"
+        description="NORA — Query pipeline for network operator requirements"
     )
 
     # Data paths

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Setup script for the telecom requirements AI system.
+# Setup script for NORA (Network Operator Requirements Analyzer).
 # Run this once on a new machine to install dependencies and configure the environment.
 #
 # Usage:

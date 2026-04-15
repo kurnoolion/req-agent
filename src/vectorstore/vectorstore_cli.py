@@ -242,7 +242,7 @@ def cmd_query(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Vector store construction for telecom requirements"
+        description="NORA — Vector store construction for network operator requirements"
     )
 
     # Data paths
