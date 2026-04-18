@@ -4,9 +4,10 @@
 #
 # Usage:
 #   chmod +x setup_env.sh
-#   ./setup_env.sh              # Full setup (Python deps + Ollama + model)
-#   ./setup_env.sh --deps-only  # Python dependencies only
-#   ./setup_env.sh --check      # Verify environment without installing
+#   ./setup_env.sh                             # Full setup (Python deps + Ollama + model)
+#   ./setup_env.sh --deps-only                 # Python dependencies only
+#   ./setup_env.sh --check                     # Verify environment without installing
+#   ./setup_env.sh --download-dir ./downloads  # Use pre-downloaded files (see download_urls.txt)
 
 set -euo pipefail
 
@@ -21,17 +22,30 @@ fail() { echo -e "${RED}[FAIL]${NC} $1"; }
 
 DEPS_ONLY=false
 CHECK_ONLY=false
+DOWNLOAD_DIR=""
 
-for arg in "$@"; do
-    case $arg in
-        --deps-only) DEPS_ONLY=true ;;
-        --check)     CHECK_ONLY=true ;;
+while [[ $# -gt 0 ]]; do
+    case $1 in
+        --deps-only) DEPS_ONLY=true; shift ;;
+        --check)     CHECK_ONLY=true; shift ;;
+        --download-dir)
+            if [ -z "${2:-}" ]; then fail "--download-dir requires a path argument"; exit 1; fi
+            DOWNLOAD_DIR="$2"; shift 2 ;;
         --help|-h)
-            echo "Usage: $0 [--deps-only | --check]"
-            echo "  --deps-only  Install Python deps only (no Ollama/model)"
-            echo "  --check      Verify environment without installing"
+            echo "Usage: $0 [OPTIONS]"
+            echo ""
+            echo "Options:"
+            echo "  --deps-only              Install Python deps only (no Ollama/model)"
+            echo "  --check                  Verify environment without installing"
+            echo "  --download-dir <path>    Use pre-downloaded files from <path> instead of curl"
+            echo ""
+            echo "Offline workflow (for environments where curl HTTPS fails):"
+            echo "  1. Check download_urls.txt for the list of URLs"
+            echo "  2. Download each file manually into a directory (keep the filenames)"
+            echo "  3. Run: $0 --download-dir /path/to/downloaded/files"
             exit 0
             ;;
+        *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
 
@@ -147,6 +161,17 @@ if command -v ollama &>/dev/null; then
 else
     if [ "$CHECK_ONLY" = true ]; then
         warn "Ollama not installed. Install: curl -fsSL https://ollama.com/install.sh | sh"
+    elif [ -n "$DOWNLOAD_DIR" ] && [ -f "$DOWNLOAD_DIR/ollama-linux-amd64.tgz" ]; then
+        echo "  Installing Ollama from local tarball: $DOWNLOAD_DIR/ollama-linux-amd64.tgz"
+        mkdir -p /tmp/ollama-install
+        tar -xzf "$DOWNLOAD_DIR/ollama-linux-amd64.tgz" -C /tmp/ollama-install
+        sudo cp /tmp/ollama-install/bin/ollama /usr/local/bin/ollama
+        rm -rf /tmp/ollama-install
+        ok "Ollama installed (from local tarball)"
+    elif [ -n "$DOWNLOAD_DIR" ] && [ -f "$DOWNLOAD_DIR/install_ollama.sh" ]; then
+        echo "  Installing Ollama from local script: $DOWNLOAD_DIR/install_ollama.sh"
+        bash "$DOWNLOAD_DIR/install_ollama.sh"
+        ok "Ollama installed (from local script)"
     else
         echo "  Installing Ollama..."
         curl -fsSL https://ollama.com/install.sh | sh
