@@ -1,0 +1,267 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Job {{ job.id[:8] }}{% endblock %}
+{% block nav_jobs %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <div>
+        <h4 class="mb-1">Job Detail</h4>
+        <small class="text-muted">{{ job.id }}</small>
+    </div>
+    <div>
+        <a href="{{ root_path }}/jobs" class="btn btn-outline-secondary btn-sm me-2">
+            <i class="bi bi-arrow-left me-1"></i>Back to Jobs
+        </a>
+        {% if job.status in ('submitted', 'running') %}
+        <form method="post" action="{{ root_path }}/api/jobs/{{ job.id }}/cancel" class="d-inline">
+            <button type="submit" class="btn btn-outline-danger btn-sm">
+                <i class="bi bi-x-circle me-1"></i>Cancel
+            </button>
+        </form>
+        {% endif %}
+    </div>
+</div>
+
+<div class="row g-4 mb-4">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header d-flex align-items-center">
+                <i class="bi bi-info-circle me-2"></i>Job Information
+            </div>
+            <div class="card-body">
+                <table class="table table-sm table-borderless mb-0">
+                    <tbody>
+                        <tr>
+                            <td class="text-muted" style="width: 140px;">Status</td>
+                            <td>
+                                <span id="job-status-badge">
+                                {% if job.status == 'submitted' %}
+                                <span class="badge bg-secondary">submitted</span>
+                                {% elif job.status == 'running' %}
+                                <span class="badge bg-primary">
+                                    <span class="spinner-border spinner-border-sm me-1" role="status"></span>running
+                                </span>
+                                {% elif job.status == 'completed' %}
+                                <span class="badge bg-success">completed</span>
+                                {% elif job.status == 'failed' %}
+                                <span class="badge bg-danger">failed</span>
+                                {% elif job.status == 'cancelled' %}
+                                <span class="badge bg-warning text-dark">cancelled</span>
+                                {% endif %}
+                                </span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Type</td>
+                            <td>{{ job.job_type }}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Submitted By</td>
+                            <td>{{ job.submitted_by }}</td>
+                        </tr>
+                        <tr>
+                            <td class="text-muted">Environment</td>
+                            <td>{{ job.environment or '-' }}</td>
+                        </tr>
+                        {% if job.stages %}
+                        <tr>
+                            <td class="text-muted">Stages</td>
+                            <td>{{ job.stages | join(', ') }}</td>
+                        </tr>
+                        {% endif %}
+                        <tr>
+                            <td class="text-muted">Created</td>
+                            <td>{{ job.created_at[:19] | replace('T', ' ') }} UTC</td>
+                        </tr>
+                        {% if job.started_at %}
+                        <tr>
+                            <td class="text-muted">Started</td>
+                            <td>{{ job.started_at[:19] | replace('T', ' ') }} UTC</td>
+                        </tr>
+                        {% endif %}
+                        {% if job.completed_at %}
+                        <tr>
+                            <td class="text-muted">Completed</td>
+                            <td>{{ job.completed_at[:19] | replace('T', ' ') }} UTC</td>
+                        </tr>
+                        {% endif %}
+                        <tr>
+                            <td class="text-muted">Duration</td>
+                            <td>{{ duration(job) }}</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card h-100">
+            <div class="card-header d-flex align-items-center">
+                <i class="bi bi-bar-chart me-2"></i>Progress
+            </div>
+            <div class="card-body d-flex flex-column justify-content-center">
+                <div class="progress mb-3" style="height: 24px;">
+                    <div id="progress-bar"
+                         class="progress-bar {% if job.status == 'running' %}progress-bar-striped progress-bar-animated{% endif %} {% if job.status == 'failed' %}bg-danger{% elif job.status == 'cancelled' %}bg-warning{% endif %}"
+                         role="progressbar"
+                         style="width: {{ job.progress }}%"
+                         aria-valuenow="{{ job.progress }}"
+                         aria-valuemin="0"
+                         aria-valuemax="100">
+                        {{ job.progress }}%
+                    </div>
+                </div>
+                <p class="text-center text-muted mb-0">
+                    <span id="current-stage-label">
+                    {% if job.current_stage %}
+                    Stage: <strong>{{ job.current_stage }}</strong>
+                    {% elif job.status == 'submitted' %}
+                    Waiting to start
+                    {% elif job.status == 'completed' %}
+                    All stages complete
+                    {% elif job.status == 'failed' %}
+                    Failed
+                    {% elif job.status == 'cancelled' %}
+                    Cancelled
+                    {% else %}
+                    --
+                    {% endif %}
+                    </span>
+                </p>
+                {% if job.result_summary %}
+                <hr>
+                <p class="small mb-0"><strong>Result:</strong> {{ job.result_summary }}</p>
+                {% endif %}
+                {% if job.error_message %}
+                <hr>
+                <p class="small text-danger mb-0"><strong>Error:</strong> {{ job.error_message }}</p>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header d-flex align-items-center justify-content-between">
+        <span><i class="bi bi-terminal me-2"></i>Log Output</span>
+        <span id="log-status" class="badge bg-secondary">
+            {% if job.status in ('submitted', 'running') %}
+            Streaming...
+            {% else %}
+            {{ job.status | capitalize }}
+            {% endif %}
+        </span>
+    </div>
+    <div id="log-output" class="card-body p-0">
+        <pre id="log-pre" class="log-area mb-0">{% for line in job.log_lines %}{{ line }}
+{% endfor %}</pre>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_head %}
+<style>
+.log-area {
+    background-color: #1a202c;
+    color: #e2e8f0;
+    font-family: 'Cascadia Code', 'Fira Code', 'Consolas', monospace;
+    font-size: 0.82rem;
+    line-height: 1.6;
+    padding: 1rem;
+    margin: 0;
+    max-height: 500px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+</style>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function () {
+    var rootPath = document.body.dataset.rootPath || "";
+    var jobId = "{{ job.id }}";
+    var jobStatus = "{{ job.status }}";
+    var logPre = document.getElementById("log-pre");
+    var progressBar = document.getElementById("progress-bar");
+    var stageLabel = document.getElementById("current-stage-label");
+    var statusBadge = document.getElementById("job-status-badge");
+    var logStatus = document.getElementById("log-status");
+
+    if (jobStatus === "completed" || jobStatus === "failed" || jobStatus === "cancelled") {
+        return;
+    }
+
+    var lineCount = {{ job.log_lines | length }};
+    var source = new EventSource(rootPath + "/api/jobs/" + jobId + "/stream?after=" + lineCount);
+
+    source.onmessage = function (event) {
+        var data = JSON.parse(event.data);
+        if (data.line !== undefined) {
+            logPre.textContent += data.line + "\n";
+            lineCount++;
+            logPre.scrollTop = logPre.scrollHeight;
+        }
+    };
+
+    source.addEventListener("progress", function (event) {
+        var data = JSON.parse(event.data);
+        progressBar.style.width = data.progress + "%";
+        progressBar.setAttribute("aria-valuenow", data.progress);
+        progressBar.textContent = data.progress + "%";
+        if (data.current_stage) {
+            stageLabel.innerHTML = "Stage: <strong>" + escapeHtml(data.current_stage) + "</strong>";
+        }
+    });
+
+    source.addEventListener("done", function (event) {
+        var data = JSON.parse(event.data);
+        source.close();
+        logStatus.textContent = data.status.charAt(0).toUpperCase() + data.status.slice(1);
+
+        progressBar.classList.remove("progress-bar-striped", "progress-bar-animated");
+        if (data.status === "completed") {
+            statusBadge.innerHTML = '<span class="badge bg-success">completed</span>';
+            logStatus.className = "badge bg-success";
+            stageLabel.textContent = "All stages complete";
+        } else if (data.status === "failed") {
+            statusBadge.innerHTML = '<span class="badge bg-danger">failed</span>';
+            progressBar.classList.add("bg-danger");
+            logStatus.className = "badge bg-danger";
+            stageLabel.textContent = "Failed";
+        } else if (data.status === "cancelled") {
+            statusBadge.innerHTML = '<span class="badge bg-warning text-dark">cancelled</span>';
+            progressBar.classList.add("bg-warning");
+            logStatus.className = "badge bg-warning text-dark";
+            stageLabel.textContent = "Cancelled";
+        }
+    });
+
+    source.addEventListener("stream_error", function (event) {
+        var data = JSON.parse(event.data);
+        source.close();
+        logStatus.textContent = data.message || "Stream error";
+        logStatus.className = "badge bg-danger";
+    });
+
+    source.onerror = function () {
+        if (source.readyState === EventSource.CLOSED) {
+            logStatus.textContent = "Disconnected";
+            logStatus.className = "badge bg-danger";
+        } else {
+            logStatus.textContent = "Reconnecting...";
+            logStatus.className = "badge bg-warning text-dark";
+        }
+    };
+
+    function escapeHtml(text) {
+        var div = document.createElement("div");
+        div.appendChild(document.createTextNode(text));
+        return div.innerHTML;
+    }
+})();
+</script>
+{% endblock %}

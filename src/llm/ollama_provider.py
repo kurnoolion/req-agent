@@ -50,6 +50,7 @@ class OllamaProvider:
         self._timeout = timeout
         self._think = think
         self._call_count = 0
+        self._last_call_stats: dict = {}
 
         # Verify server is reachable
         try:
@@ -127,11 +128,14 @@ class OllamaProvider:
         message = data.get("message", {})
         content = message.get("content", "")
 
-        # Log performance stats
+        # Log performance stats and capture for observability
         total_ns = data.get("total_duration", 0)
         eval_count = data.get("eval_count", 0)
         eval_ns = data.get("eval_duration", 0)
+        prompt_eval_count = data.get("prompt_eval_count", 0)
 
+        tok_per_s = 0.0
+        total_s = 0.0
         if total_ns > 0:
             total_s = total_ns / 1e9
             tok_per_s = eval_count / (eval_ns / 1e9) if eval_ns > 0 else 0
@@ -140,6 +144,14 @@ class OllamaProvider:
                 f"{eval_count} tokens in {total_s:.1f}s "
                 f"({tok_per_s:.1f} tok/s)"
             )
+
+        self._last_call_stats = {
+            "total_duration_s": total_s,
+            "eval_count": eval_count,
+            "prompt_eval_count": prompt_eval_count,
+            "tokens_per_second": round(tok_per_s, 1),
+            "model": self._model,
+        }
 
         return content
 
@@ -150,3 +162,8 @@ class OllamaProvider:
     @property
     def call_count(self) -> int:
         return self._call_count
+
+    @property
+    def last_call_stats(self) -> dict:
+        """Performance stats from the most recent complete() call."""
+        return dict(self._last_call_stats)

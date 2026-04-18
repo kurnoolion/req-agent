@@ -1,0 +1,71 @@
+{% if status == "running" or status == "submitted" %}
+<div class="card" data-poll="true">
+    <div class="card-body text-center py-4">
+        <div class="spinner-border text-primary mb-2" role="status"></div>
+        <p class="text-muted mb-0">Running query pipeline...</p>
+    </div>
+</div>
+
+{% elif status == "failed" %}
+<div class="card" data-poll="false">
+    <div class="card-body">
+        <div class="alert alert-danger mb-0">
+            <i class="bi bi-exclamation-triangle me-2"></i>
+            <strong>Query failed.</strong>
+            {% if error_message %}
+            <p class="mt-2 mb-0">{{ error_message }}</p>
+            {% endif %}
+        </div>
+    </div>
+</div>
+
+{% elif status == "completed" %}
+<div class="card" data-poll="false">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-check-circle text-success me-2"></i>Answer</span>
+        {% if timing %}
+        <span class="text-muted small">took {{ timing }}s</span>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        {% if answer %}
+        <div class="answer-text" style="white-space: pre-wrap; font-size: 0.95rem; line-height: 1.6;">{{ answer }}</div>
+        {% else %}
+        <p class="text-muted">No answer was generated.</p>
+        {% endif %}
+
+        {% if citations %}
+        <hr>
+        <h6 class="text-muted">Citations ({{ citations|length }})</h6>
+        <ul class="list-unstyled small mb-0">
+            {% for c in citations %}
+            <li class="mb-1">
+                {% if c.req_id %}
+                <span class="badge bg-primary me-1">{{ c.req_id }}</span>
+                {% endif %}
+                {% if c.plan_id %}
+                <span class="text-muted">Plan: {{ c.plan_id }}</span>
+                {% endif %}
+                {% if c.spec %}
+                <span class="badge bg-secondary me-1">{{ c.spec }}</span>
+                {% endif %}
+                {% if c.spec_section %}
+                <span class="text-muted">Section {{ c.spec_section }}</span>
+                {% endif %}
+                {% if c.section_number %}
+                <span class="text-muted">(Section {{ c.section_number }})</span>
+                {% endif %}
+            </li>
+            {% endfor %}
+        </ul>
+        {% endif %}
+    </div>
+</div>
+
+{% else %}
+<div class="card" data-poll="false">
+    <div class="card-body">
+        <p class="text-muted mb-0">Unknown status: {{ status }}</p>
+    </div>
+</div>
+{% endif %}

@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Files{% endblock %}
+{% block nav_files %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">File Browser</h4>
+</div>
+
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+    {{ error }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+{% if not browsing %}
+<!-- Root selection -->
+<div class="row g-4">
+    {% for root in roots %}
+    <div class="col-md-4">
+        <a href="{{ root_path }}/files/browse?path={{ root.linux }}"
+           class="text-decoration-none">
+            <div class="card dash-card h-100">
+                <div class="card-body text-center py-4">
+                    <i class="bi bi-hdd-network" style="font-size: 2rem; color: var(--nora-primary);"></i>
+                    <h6 class="mt-2 mb-1">{{ root.label }}</h6>
+                    <small class="text-muted d-block"><code>{{ root.linux }}</code></small>
+                    <small class="text-muted d-block"><code>{{ root.windows }}</code></small>
+                </div>
+            </div>
+        </a>
+    </div>
+    {% else %}
+    <div class="col-12">
+        <div class="alert alert-info mb-0">
+            No shared folder roots are configured. Update <code>web/config.json</code> path_mappings.
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+{% else %}
+<!-- Browsing a directory -->
+<div id="file-browser-content">
+    {% include "partials/file_listing.html" %}
+</div>
+{% endif %}
+{% endblock %}

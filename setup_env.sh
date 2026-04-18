@@ -227,8 +227,18 @@ else
         warn "Model '$RECOMMENDED' not pulled. Run: ollama pull $RECOMMENDED"
     else
         echo "  Pulling model '$RECOMMENDED' (this may take several minutes)..."
-        ollama pull "$RECOMMENDED"
-        ok "Model '$RECOMMENDED' pulled"
+        if ollama pull "$RECOMMENDED"; then
+            ok "Model '$RECOMMENDED' pulled"
+        else
+            warn "Normal pull failed. Retrying with OLLAMA_INSECURE=1 (skip TLS verify)..."
+            if OLLAMA_INSECURE=1 ollama pull "$RECOMMENDED"; then
+                ok "Model '$RECOMMENDED' pulled (insecure mode)"
+            else
+                fail "Model pull failed. Try manually:"
+                echo "    OLLAMA_INSECURE=1 ollama pull $RECOMMENDED"
+                echo "  Or pull on another machine and copy ~/.ollama/models/ here."
+            fi
+        fi
     fi
 fi
 

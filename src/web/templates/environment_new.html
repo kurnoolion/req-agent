@@ -1,0 +1,154 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - New Environment{% endblock %}
+{% block nav_environments %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">Create Environment</h4>
+    <a href="{{ root_path }}/environments" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left me-1"></i>Back to Environments
+    </a>
+</div>
+
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+    {{ error }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-gear me-2"></i>Environment Configuration
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ root_path }}/api/environments/create">
+
+                    <div class="mb-3">
+                        <label for="name" class="form-label fw-semibold">Name</label>
+                        <input type="text" class="form-control" id="name" name="name"
+                               required placeholder="e.g. vzw-feb2026-review">
+                        <div class="form-text">Used as the filename. Alphanumeric, hyphens, underscores.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="description" class="form-label">Description</label>
+                        <input type="text" class="form-control" id="description" name="description"
+                               placeholder="Brief description of this environment's purpose">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="member" class="form-label fw-semibold">Member</label>
+                        <input type="text" class="form-control" id="member" name="member"
+                               required placeholder="e.g. alice">
+                        <div class="form-text">Team member assigned to this environment.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="document_root" class="form-label fw-semibold">Document Root</label>
+                        <input type="text" class="form-control" id="document_root" name="document_root"
+                               required placeholder="\\SERVER\OADocs\vzw or /mnt/oa_docs/vzw">
+                        <div class="form-text">Windows UNC path or Linux path to the document root directory.</div>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="stage_start" class="form-label">Start Stage</label>
+                            <select class="form-select" id="stage_start" name="stage_start">
+                                {% for s in stages %}
+                                <option value="{{ s.name }}" {% if s.num == 1 %}selected{% endif %}>
+                                    {{ s.num }}. {{ s.name }} -- {{ s.desc }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="stage_end" class="form-label">End Stage</label>
+                            <select class="form-select" id="stage_end" name="stage_end">
+                                {% for s in stages %}
+                                <option value="{{ s.name }}" {% if s.num == stages|length %}selected{% endif %}>
+                                    {{ s.num }}. {{ s.name }} -- {{ s.desc }}
+                                </option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">MNOs</label>
+                        <div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" id="mno_VZW" name="mno_VZW" value="1" checked>
+                                <label class="form-check-label" for="mno_VZW">VZW</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" id="mno_ATT" name="mno_ATT" value="1">
+                                <label class="form-check-label" for="mno_ATT">ATT</label>
+                            </div>
+                            <div class="form-check form-check-inline">
+                                <input class="form-check-input" type="checkbox" id="mno_TMO" name="mno_TMO" value="1">
+                                <label class="form-check-label" for="mno_TMO">TMO</label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="releases" class="form-label">Releases</label>
+                        <input type="text" class="form-control" id="releases" name="releases"
+                               value="Feb2026" placeholder="Comma-separated, e.g. Feb2026, Aug2026">
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="objectives" class="form-label">Objectives</label>
+                        <textarea class="form-control" id="objectives" name="objectives" rows="3"
+                                  placeholder="One objective per line"></textarea>
+                    </div>
+
+                    <div class="row mb-3">
+                        <div class="col-md-6">
+                            <label for="model_provider" class="form-label">Model Provider</label>
+                            <select class="form-select" id="model_provider" name="model_provider">
+                                <option value="ollama" selected>Ollama</option>
+                                <option value="openai">OpenAI</option>
+                                <option value="anthropic">Anthropic</option>
+                            </select>
+                        </div>
+                        <div class="col-md-6">
+                            <label for="model_name" class="form-label">Model Name</label>
+                            <input type="text" class="form-control" id="model_name" name="model_name"
+                                   value="auto" placeholder="auto or specific model name">
+                        </div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-check-circle me-1"></i>Create Environment
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Pipeline Stages
+            </div>
+            <div class="card-body p-0">
+                <ol class="list-group list-group-numbered list-group-flush">
+                    {% for s in stages %}
+                    <li class="list-group-item d-flex justify-content-between align-items-start">
+                        <div class="ms-2 me-auto">
+                            <div class="fw-bold">{{ s.name }}</div>
+                            <small class="text-muted">{{ s.desc }}</small>
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,40 @@
+{% if recent_jobs %}
+<table class="table table-sm table-hover mb-0">
+    <thead>
+        <tr>
+            <th>Status</th>
+            <th>Type</th>
+            <th>Environment</th>
+            <th>Created</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in recent_jobs %}
+        <tr style="cursor: pointer;" onclick="window.location='{{ root_path }}/jobs/{{ job.id }}'">
+            <td>
+                {% if job.status == 'submitted' %}
+                <span class="badge bg-secondary">submitted</span>
+                {% elif job.status == 'running' %}
+                <span class="badge bg-primary">
+                    <span class="spinner-border spinner-border-sm me-1" role="status"></span>running
+                </span>
+                {% elif job.status == 'completed' %}
+                <span class="badge bg-success">completed</span>
+                {% elif job.status == 'failed' %}
+                <span class="badge bg-danger">failed</span>
+                {% elif job.status == 'cancelled' %}
+                <span class="badge bg-warning text-dark">cancelled</span>
+                {% else %}
+                <span class="badge bg-secondary">{{ job.status }}</span>
+                {% endif %}
+            </td>
+            <td>{{ job.job_type }}</td>
+            <td class="text-truncate" style="max-width: 120px;">{{ job.environment or '-' }}</td>
+            <td class="small text-muted">{{ job.created_at[:16] | replace('T', ' ') }}</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p class="text-muted small mb-0">No jobs recorded yet.</p>
+{% endif %}

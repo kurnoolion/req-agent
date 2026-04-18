@@ -1,0 +1,52 @@
+{% if resource and resource.cpu_percent is not none %}
+<table class="table table-sm table-borderless mb-0">
+    <tr>
+        <td class="text-muted">CPU</td>
+        <td class="text-end">
+            <div class="progress" style="height: 16px; min-width: 80px;">
+                <div class="progress-bar {% if resource.cpu_percent > 80 %}bg-danger{% elif resource.cpu_percent > 60 %}bg-warning{% else %}bg-success{% endif %}"
+                     style="width: {{ resource.cpu_percent }}%">
+                    {{ resource.cpu_percent }}%
+                </div>
+            </div>
+        </td>
+    </tr>
+    {% if resource.ram_used_gb is not none %}
+    <tr>
+        <td class="text-muted">RAM</td>
+        <td class="text-end">
+            {{ resource.ram_used_gb }}GB{% if resource.ram_total_gb %} / {{ resource.ram_total_gb }}GB{% endif %}
+            {% if resource.ram_percent is not none %}
+            <div class="progress mt-1" style="height: 10px;">
+                <div class="progress-bar {% if resource.ram_percent > 85 %}bg-danger{% elif resource.ram_percent > 70 %}bg-warning{% else %}bg-info{% endif %}"
+                     style="width: {{ resource.ram_percent }}%"></div>
+            </div>
+            {% endif %}
+        </td>
+    </tr>
+    {% endif %}
+    {% if resource.gpu_percent is not none %}
+    <tr>
+        <td class="text-muted">GPU</td>
+        <td class="text-end">
+            <div class="progress" style="height: 16px; min-width: 80px;">
+                <div class="progress-bar bg-info"
+                     style="width: {{ resource.gpu_percent }}%">
+                    {{ resource.gpu_percent }}%
+                </div>
+            </div>
+        </td>
+    </tr>
+    {% endif %}
+    {% if resource.gpu_mem_used_gb is not none %}
+    <tr>
+        <td class="text-muted">VRAM</td>
+        <td class="text-end">
+            {{ resource.gpu_mem_used_gb }}GB{% if resource.gpu_mem_total_gb %} / {{ resource.gpu_mem_total_gb }}GB{% endif %}
+        </td>
+    </tr>
+    {% endif %}
+</table>
+{% else %}
+<p class="text-muted small mb-0">Waiting for first sample...</p>
+{% endif %}

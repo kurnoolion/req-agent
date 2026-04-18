@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Jobs{% endblock %}
+{% block nav_jobs %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">Jobs</h4>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">{{ error }}</div>
+{% endif %}
+
+<ul class="nav nav-tabs mb-3">
+    <li class="nav-item">
+        <a class="nav-link {% if not status_filter %}active{% endif %}"
+           href="{{ root_path }}/jobs">All</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if status_filter == 'running' %}active{% endif %}"
+           href="{{ root_path }}/jobs?status=running">Running</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if status_filter == 'completed' %}active{% endif %}"
+           href="{{ root_path }}/jobs?status=completed">Completed</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if status_filter == 'failed' %}active{% endif %}"
+           href="{{ root_path }}/jobs?status=failed">Failed</a>
+    </li>
+    <li class="nav-item">
+        <a class="nav-link {% if status_filter == 'cancelled' %}active{% endif %}"
+           href="{{ root_path }}/jobs?status=cancelled">Cancelled</a>
+    </li>
+</ul>
+
+<div id="jobs-table-container"
+     hx-get="{{ root_path }}/jobs/table{% if status_filter %}?status={{ status_filter }}{% endif %}"
+     hx-trigger="every 5s"
+     hx-swap="innerHTML">
+    {% include "partials/jobs_table.html" %}
+</div>
+{% endblock %}

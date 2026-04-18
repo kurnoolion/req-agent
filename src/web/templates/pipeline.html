@@ -1,0 +1,161 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Pipeline{% endblock %}
+{% block nav_pipeline %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">Run Pipeline</h4>
+</div>
+
+{% if error %}
+<div class="alert alert-danger alert-dismissible fade show" role="alert">
+    {{ error }}
+    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-diagram-3 me-2"></i>Pipeline Configuration
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ root_path }}/api/pipeline/submit">
+
+                    <!-- Mode selector -->
+                    <div class="mb-3">
+                        <label class="form-label fw-semibold">Mode</label>
+                        <div class="btn-group w-100" role="group">
+                            <input type="radio" class="btn-check" name="mode" id="mode-env"
+                                   value="environment" autocomplete="off"
+                                   {% if environments %}checked{% endif %}>
+                            <label class="btn btn-outline-primary" for="mode-env">
+                                Use Environment
+                            </label>
+                            <input type="radio" class="btn-check" name="mode" id="mode-standalone"
+                                   value="standalone" autocomplete="off"
+                                   {% if not environments %}checked{% endif %}>
+                            <label class="btn btn-outline-primary" for="mode-standalone">
+                                Standalone
+                            </label>
+                        </div>
+                    </div>
+
+                    <!-- Environment mode fields -->
+                    <div id="env-fields" {% if not environments %}style="display:none"{% endif %}>
+                        <div class="mb-3">
+                            <label for="environment" class="form-label">Environment</label>
+                            <select class="form-select" id="environment" name="environment">
+                                <option value="">-- Select an environment --</option>
+                                {% for env in environments %}
+                                <option value="{{ env.name }}">
+                                    {{ env.name }} -- {{ env.description }} ({{ env.member }})
+                                </option>
+                                {% endfor %}
+                            </select>
+                            <div class="form-text">
+                                Pre-configured environments define document root, stages, and scope.
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Standalone mode fields -->
+                    <div id="standalone-fields" {% if environments %}style="display:none"{% endif %}>
+                        <div class="mb-3">
+                            <label for="document_dir" class="form-label">Document Directory</label>
+                            <input type="text" class="form-control" id="document_dir"
+                                   name="document_dir"
+                                   placeholder="\\SERVER\OADocs\vzw or /data/vzw-docs">
+                            <div class="form-text">
+                                Windows UNC path or Linux path to the document root directory.
+                            </div>
+                        </div>
+                        <div class="row mb-3">
+                            <div class="col-md-6">
+                                <label for="stage_start" class="form-label">Start Stage</label>
+                                <select class="form-select" id="stage_start" name="stage_start">
+                                    {% for s in stages %}
+                                    <option value="{{ s.name }}" {% if s.num == 1 %}selected{% endif %}>
+                                        {{ s.num }}. {{ s.name }} -- {{ s.desc }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div class="col-md-6">
+                                <label for="stage_end" class="form-label">End Stage</label>
+                                <select class="form-select" id="stage_end" name="stage_end">
+                                    {% for s in stages %}
+                                    <option value="{{ s.name }}" {% if s.num == stages|length %}selected{% endif %}>
+                                        {{ s.num }}. {{ s.name }} -- {{ s.desc }}
+                                    </option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Submitted by -->
+                    <div class="mb-3">
+                        <label for="submitted_by" class="form-label">Your Name</label>
+                        <input type="text" class="form-control" id="submitted_by"
+                               name="submitted_by" placeholder="e.g. Alice">
+                    </div>
+
+                    <!-- Submit -->
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-play-circle me-1"></i>Submit Pipeline Job
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Sidebar info -->
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Pipeline Stages
+            </div>
+            <div class="card-body p-0">
+                <ol class="list-group list-group-numbered list-group-flush">
+                    {% for s in stages %}
+                    <li class="list-group-item d-flex justify-content-between align-items-start">
+                        <div class="ms-2 me-auto">
+                            <div class="fw-bold">{{ s.name }}</div>
+                            <small class="text-muted">{{ s.desc }}</small>
+                        </div>
+                    </li>
+                    {% endfor %}
+                </ol>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    var modeEnv = document.getElementById('mode-env');
+    var modeStandalone = document.getElementById('mode-standalone');
+    var envFields = document.getElementById('env-fields');
+    var standaloneFields = document.getElementById('standalone-fields');
+
+    function toggleMode() {
+        if (modeEnv.checked) {
+            envFields.style.display = '';
+            standaloneFields.style.display = 'none';
+        } else {
+            envFields.style.display = 'none';
+            standaloneFields.style.display = '';
+        }
+    }
+
+    modeEnv.addEventListener('change', toggleMode);
+    modeStandalone.addEventListener('change', toggleMode);
+    toggleMode();
+})();
+</script>
+{% endblock %}

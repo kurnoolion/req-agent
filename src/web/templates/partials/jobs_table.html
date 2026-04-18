@@ -1,0 +1,44 @@
+<table class="table table-hover align-middle">
+    <thead class="table-light">
+        <tr>
+            <th>Status</th>
+            <th>Type</th>
+            <th>Submitted By</th>
+            <th>Environment</th>
+            <th>Created</th>
+            <th>Duration</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for job in jobs %}
+        <tr style="cursor: pointer;" onclick="window.location='{{ root_path }}/jobs/{{ job.id }}'">
+            <td>
+                {% if job.status == 'submitted' %}
+                <span class="badge bg-secondary">submitted</span>
+                {% elif job.status == 'running' %}
+                <span class="badge bg-primary">
+                    <span class="spinner-border spinner-border-sm me-1" role="status"></span>running
+                </span>
+                {% elif job.status == 'completed' %}
+                <span class="badge bg-success">completed</span>
+                {% elif job.status == 'failed' %}
+                <span class="badge bg-danger">failed</span>
+                {% elif job.status == 'cancelled' %}
+                <span class="badge bg-warning text-dark">cancelled</span>
+                {% else %}
+                <span class="badge bg-secondary">{{ job.status }}</span>
+                {% endif %}
+            </td>
+            <td>{{ job.job_type }}</td>
+            <td>{{ job.submitted_by }}</td>
+            <td>{{ job.environment or '-' }}</td>
+            <td>{{ job.created_at[:19] | replace('T', ' ') }}</td>
+            <td>{{ duration(job) }}</td>
+        </tr>
+        {% else %}
+        <tr>
+            <td colspan="6" class="text-center text-muted py-4">No jobs found.</td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>

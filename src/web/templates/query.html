@@ -1,0 +1,150 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Query{% endblock %}
+{% block nav_query %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">Query Requirements</h4>
+</div>
+
+{% if not graph_exists or not vectorstore_exists %}
+<div class="alert alert-warning" role="alert">
+    <strong>Data not ready.</strong>
+    {% if not graph_exists %}
+    The knowledge graph has not been built yet (data/graph/knowledge_graph.json).
+    {% endif %}
+    {% if not vectorstore_exists %}
+    The vector store has not been populated yet (data/vectorstore/).
+    {% endif %}
+    <br>Run the pipeline stages (extract, parse, graph, vectorstore) before querying.
+</div>
+{% endif %}
+
+<div class="row">
+    <div class="col-lg-8">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-search me-2"></i>Ask a Question
+            </div>
+            <div class="card-body">
+                <form id="query-form">
+                    <div class="mb-3">
+                        <label for="query_text" class="form-label">Your Question</label>
+                        <textarea class="form-control" id="query_text" name="query_text"
+                                  rows="4" placeholder="e.g. What is the T3402 timer behavior for LTE attach?"
+                                  required></textarea>
+                    </div>
+                    <div class="mb-3">
+                        <label for="submitted_by" class="form-label">Your Name</label>
+                        <input type="text" class="form-control" id="submitted_by"
+                               name="submitted_by" placeholder="e.g. Alice">
+                    </div>
+                    <button type="submit" class="btn btn-primary" id="ask-btn">
+                        <i class="bi bi-send me-1"></i>Ask
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <div id="query-result-area" class="mt-4"></div>
+    </div>
+
+    <div class="col-lg-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="bi bi-info-circle me-2"></i>Tips
+            </div>
+            <div class="card-body">
+                <ul class="mb-0 small">
+                    <li>Ask about specific requirements, timers, or features.</li>
+                    <li>Reference MNO names or plan IDs for scoped results.</li>
+                    <li>Try cross-document queries like "Compare T3402 across VZW plans."</li>
+                    <li>The system searches the knowledge graph and vector store, then synthesizes an answer with citations.</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+(function() {
+    var rootPath = document.body.getAttribute('data-root-path') || '';
+    var form = document.getElementById('query-form');
+    var askBtn = document.getElementById('ask-btn');
+    var resultArea = document.getElementById('query-result-area');
+    var pollTimer = null;
+
+    form.addEventListener('submit', function(e) {
+        e.preventDefault();
+        var queryText = document.getElementById('query_text').value.trim();
+        if (!queryText) return;
+
+        askBtn.disabled = true;
+        askBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Submitting...';
+
+        resultArea.innerHTML =
+            '<div class="card"><div class="card-body text-center py-4">' +
+            '<div class="spinner-border text-primary mb-2" role="status"></div>' +
+            '<p class="text-muted mb-0">Submitting query...</p>' +
+            '</div></div>';
+
+        var formData = new FormData(form);
+        fetch(rootPath + '/api/query/ask', {
+            method: 'POST',
+            body: formData,
+        })
+        .then(function(resp) { return resp.json(); })
+        .then(function(data) {
+            if (data.error) {
+                resultArea.innerHTML =
+                    '<div class="alert alert-danger">' + data.error + '</div>';
+                resetBtn();
+                return;
+            }
+            startPolling(data.job_id);
+        })
+        .catch(function(err) {
+            resultArea.innerHTML =
+                '<div class="alert alert-danger">Request failed: ' + err.message + '</div>';
+            resetBtn();
+        });
+    });
+
+    function startPolling(jobId) {
+        resultArea.innerHTML =
+            '<div class="card"><div class="card-body text-center py-4">' +
+            '<div class="spinner-border text-primary mb-2" role="status"></div>' +
+            '<p class="text-muted mb-0">Running query pipeline...</p>' +
+            '</div></div>';
+
+        pollTimer = setInterval(function() {
+            fetch(rootPath + '/api/query/' + jobId + '/result')
+            .then(function(resp) { return resp.text(); })
+            .then(function(html) {
+                resultArea.innerHTML = html;
+                if (html.indexOf('data-poll="false"') !== -1) {
+                    clearInterval(pollTimer);
+                    pollTimer = null;
+                    resetBtn();
+                }
+            })
+            .catch(function() {
+                clearInterval(pollTimer);
+                pollTimer = null;
+                resultArea.innerHTML =
+                    '<div class="alert alert-danger">Lost connection while polling for results.</div>';
+                resetBtn();
+            });
+        }, 2000);
+    }
+
+    function resetBtn() {
+        askBtn.disabled = false;
+        askBtn.innerHTML = '<i class="bi bi-send me-1"></i>Ask';
+    }
+})();
+</script>
+{% endblock %}

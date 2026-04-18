@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+
+{% block title %}NORA - Metrics{% endblock %}
+{% block nav_metrics %}active{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h4 class="mb-0">Metrics</h4>
+    <div>
+        <button class="btn btn-sm btn-outline-secondary" onclick="copyCompactReport()">
+            <i class="bi bi-clipboard me-1"></i>Copy Compact Report
+        </button>
+    </div>
+</div>
+
+<div class="row g-4">
+    <!-- Request Summary -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card dash-card h-100">
+            <div class="card-header">
+                <i class="bi bi-globe me-2"></i>Requests (1h)
+            </div>
+            <div class="card-body" id="request-summary">
+                <p class="text-muted small">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- LLM Summary -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card dash-card h-100">
+            <div class="card-header">
+                <i class="bi bi-cpu me-2"></i>LLM (1h)
+            </div>
+            <div class="card-body" id="llm-summary">
+                <p class="text-muted small">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Pipeline Summary -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card dash-card h-100">
+            <div class="card-header">
+                <i class="bi bi-diagram-3 me-2"></i>Pipeline (24h)
+            </div>
+            <div class="card-body" id="pipeline-summary">
+                <p class="text-muted small">Loading...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Resource Gauges -->
+    <div class="col-md-6 col-lg-3">
+        <div class="card dash-card h-100">
+            <div class="card-header">
+                <i class="bi bi-motherboard me-2"></i>Resources
+            </div>
+            <div class="card-body"
+                 id="resource-gauges"
+                 hx-get="{{ root_path }}/api/metrics/resource"
+                 hx-trigger="load, every 30s"
+                 hx-swap="innerHTML">
+                <p class="text-muted small">Loading...</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Compact Report Preview -->
+<div class="row g-4 mt-2">
+    <div class="col-12">
+        <div class="card dash-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="bi bi-terminal me-2"></i>Compact Report</span>
+                <button class="btn btn-sm btn-outline-secondary" onclick="refreshCompactReport()">
+                    <i class="bi bi-arrow-clockwise"></i>
+                </button>
+            </div>
+            <div class="card-body">
+                <pre id="compact-report" class="mb-0 p-2 bg-dark text-light rounded" style="font-size: 0.85rem;">Loading...</pre>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const rootPath = document.body.dataset.rootPath || '';
+
+async function loadMetricsSummary() {
+    try {
+        const resp = await fetch(rootPath + '/api/metrics/summary');
+        if (!resp.ok) return;
+        const data = await resp.json();
+        renderRequestSummary(data.request);
+        renderLLMSummary(data.llm);
+        renderPipelineSummary(data.pipeline);
+    } catch (e) {
+        console.error('Failed to load metrics summary:', e);
+    }
+}
+
+function renderRequestSummary(r) {
+    const el = document.getElementById('request-summary');
+    if (!r || r.count === 0) {
+        el.innerHTML = '<p class="text-muted small">No requests recorded yet.</p>';
+        return;
+    }
+    el.innerHTML = `
+        <table class="table table-sm table-borderless mb-0">
+            <tr><td class="text-muted">Count</td><td class="text-end fw-bold">${r.count}</td></tr>
+            <tr><td class="text-muted">Avg</td><td class="text-end">${r.avg_ms.toFixed(0)} ms</td></tr>
+            <tr><td class="text-muted">p95</td><td class="text-end">${r.p95_ms.toFixed(0)} ms</td></tr>
+            <tr><td class="text-muted">Errors</td><td class="text-end">${r.error_count} (${r.error_rate}%)</td></tr>
+        </table>
+    `;
+}
+
+function renderLLMSummary(l) {
+    const el = document.getElementById('llm-summary');
+    if (!l || l.call_count === 0) {
+        el.innerHTML = '<p class="text-muted small">No LLM calls recorded yet.</p>';
+        return;
+    }
+    const tokStr = l.avg_tok_s !== null ? l.avg_tok_s.toFixed(1) + ' tok/s' : '--';
+    el.innerHTML = `
+        <table class="table table-sm table-borderless mb-0">
+            <tr><td class="text-muted">Calls</td><td class="text-end fw-bold">${l.call_count}</td></tr>
+            <tr><td class="text-muted">Avg latency</td><td class="text-end">${l.avg_latency_s.toFixed(1)}s</td></tr>
+            <tr><td class="text-muted">p95 latency</td><td class="text-end">${l.p95_latency_s.toFixed(1)}s</td></tr>
+            <tr><td class="text-muted">Throughput</td><td class="text-end">${tokStr}</td></tr>
+            <tr><td class="text-muted">Tokens</td><td class="text-end">${l.total_tokens}</td></tr>
+        </table>
+    `;
+}
+
+function renderPipelineSummary(p) {
+    const el = document.getElementById('pipeline-summary');
+    if (!p || Object.keys(p).length === 0) {
+        el.innerHTML = '<p class="text-muted small">No pipeline runs recorded yet.</p>';
+        return;
+    }
+    let rows = '';
+    for (const [stage, info] of Object.entries(p)) {
+        const badge = info.status === 'OK'
+            ? '<span class="badge bg-success">OK</span>'
+            : info.status === 'WARN'
+            ? '<span class="badge bg-warning text-dark">WARN</span>'
+            : '<span class="badge bg-danger">' + info.status + '</span>';
+        const elapsed = info.elapsed !== undefined ? info.elapsed.toFixed(1) + 's' : '--';
+        rows += `<tr><td class="text-muted text-uppercase">${stage}</td><td class="text-center">${badge}</td><td class="text-end">${elapsed}</td></tr>`;
+    }
+    el.innerHTML = `
+        <table class="table table-sm table-borderless mb-0">
+            <thead><tr><th>Stage</th><th class="text-center">Status</th><th class="text-end">Time</th></tr></thead>
+            <tbody>${rows}</tbody>
+        </table>
+    `;
+}
+
+async function refreshCompactReport() {
+    try {
+        const resp = await fetch(rootPath + '/api/metrics/compact');
+        const text = await resp.text();
+        document.getElementById('compact-report').textContent = text;
+    } catch (e) {
+        document.getElementById('compact-report').textContent = 'Failed to load report.';
+    }
+}
+
+async function copyCompactReport() {
+    const text = document.getElementById('compact-report').textContent;
+    try {
+        await navigator.clipboard.writeText(text);
+        const btn = document.querySelector('[onclick="copyCompactReport()"]');
+        const origHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="bi bi-check me-1"></i>Copied';
+        setTimeout(() => { btn.innerHTML = origHTML; }, 2000);
+    } catch (e) {
+        console.error('Copy failed:', e);
+    }
+}
+
+loadMetricsSummary();
+refreshCompactReport();
+setInterval(loadMetricsSummary, 30000);
+setInterval(refreshCompactReport, 60000);
+</script>
+{% endblock %}

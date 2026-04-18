@@ -1,0 +1,28 @@
+<table class="table table-sm table-borderless mb-0">
+    <tbody>
+        <tr>
+            <td class="text-muted" style="width: 100px;">Ollama</td>
+            <td>
+                {% if ollama_ok %}
+                <span class="badge bg-success">Connected</span>
+                {% else %}
+                <span class="badge bg-danger">Unavailable</span>
+                {% endif %}
+            </td>
+        </tr>
+        <tr>
+            <td class="text-muted">Model</td>
+            <td><code>{{ model_name }}</code></td>
+        </tr>
+        <tr>
+            <td class="text-muted">Uptime</td>
+            <td>{{ uptime_str }}</td>
+        </tr>
+        {% if gpu_info %}
+        <tr>
+            <td class="text-muted">GPU</td>
+            <td>{{ gpu_info }}</td>
+        </tr>
+        {% endif %}
+    </tbody>
+</table>

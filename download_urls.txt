@@ -12,13 +12,18 @@
 install_ollama.sh  https://ollama.com/install.sh
 #
 # NOTE: The install script itself downloads the ollama binary via curl.
-# If that also fails, download the Linux binary directly and place it
-# in your PATH as 'ollama':
-ollama-linux-amd64.tgz  https://ollama.com/download/ollama-linux-amd64.tgz
+# If that also fails, download the Linux binary directly from GitHub releases.
 #
-# To install manually from the tarball:
-#   tar -xzf ollama-linux-amd64.tgz
-#   sudo mv bin/ollama /usr/local/bin/
+# As of v0.21.0, CUDA is bundled into the main package (no separate -cuda download).
+# Format changed from .tgz to .tar.zst.
+#
+# Full package with CUDA/GPU support (2 GB):
+ollama-linux-amd64.tar.zst  https://github.com/ollama/ollama/releases/download/v0.21.0/ollama-linux-amd64.tar.zst
+#
+# To install manually:
+#   sudo apt install zstd -y
+#   sudo tar --use-compress-program=unzstd -xf ollama-linux-amd64.tar.zst -C /usr/local
+#   # Verify: ls /usr/local/lib/ollama/cuda_v12/
 #   ollama serve &
 #
 # ── Ollama model ──────────────────────────────────────────────────────
