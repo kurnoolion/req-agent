@@ -1,6 +1,6 @@
 # Session Summary: NORA — Network Operator Requirements Analyzer
 
-**Date:** April 11-14, 2026
+**Date:** April 11-18, 2026
 **Purpose:** Feed this to Claude Code at the start of a new session to resume where we left off.
 
 ---
@@ -79,6 +79,8 @@ Honesty:
 16. **Configurable vector store** — embedding model, vector DB backend, distance metric, and chunk contextualization are all configurable via `VectorStoreConfig` (JSON-serializable). `EmbeddingProvider` and `VectorStoreProvider` Protocols follow same pattern as `LLMProvider`. Supports experimentation with different models/metrics to find best accuracy/speed tradeoff.
 17. **Local LLM via Ollama (Gemma 4 E4B)** — Evaluated Gemma 3 (1B/4B/12B/27B) and Gemma 4 (E2B/E4B/26B-A4B/31B) against 16GB RAM / CPU-only / Intel Ultra 9 185H constraints. Selected Gemma 4 E4B (8B total params, 4B effective via PLE, Q4_K_M quantization, ~9.6GB, 128K context). 26B-A4B won't fit (18GB Q4); 31B ruled out (20GB Q4). E4B runs at ~2-5 tok/s on CPU — acceptable for PoC structured synthesis on pre-scoped context. OllamaProvider (`src/llm/ollama_provider.py`) connects to local Ollama HTTP API, satisfies LLMProvider Protocol.
 18. **Multi-environment collaboration protocol** — Dev PC (with Claude) + work laptop (no Claude, 16GB NVIDIA GPU, proprietary docs) + team members. Pipeline runner orchestrates all 9 stages with single command. Environment configs define per-member scoped workspaces (stages, MNO/release scope, objectives). Compact report format (RPT lines) for pasting results in chat. QC/FIX templates for structured quality feedback. Error codes (EXT-E001, PRF-W001, etc.) for remote debugging. Model picker auto-selects best Ollama model for detected hardware. Corrections dir auto-detected as overrides. User-supplied eval Q&A from Excel.
+19. **Web UI for team access** — Team members primarily work on Windows PCs and may not have Linux terminal/CLI experience. FastAPI + Bootstrap 5 + HTMX (zero npm/JS build). Rejected Streamlit (single-user), Gradio (ML demo focus), Airflow (heavy deps). Features: pipeline submission via form, real-time log streaming via SSE, job queue with SQLite persistence, shared folder browser with Windows↔Linux path mapping, query interface, environment CRUD, reverse proxy support via `root_path` config. Background jobs via `asyncio.create_task()`. HTMX for partial page updates without SPA complexity.
+20. **Metrics and observability** — Extends compact report philosophy (RPT/HW/MDL) with persistent SQLite metrics DB. Five categories: REQ (endpoint timing), LLM (model performance), PIP (stage timing), RES (CPU/RAM/GPU sampling), MET (custom). MetricsMiddleware is fire-and-forget (never blocks responses). ResourceSampler reads from /proc and nvidia-smi (no psutil dependency). OllamaProvider.last_call_stats captures per-call LLM performance. compact_report() produces pasteable MET lines matching existing report format.
 
 ---
 
@@ -128,13 +130,14 @@ Honesty:
 
 ## Design Document
 
-The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System.md` (v0.4). It contains:
+The complete Technical Design Document is at `TDD_Telecom_Requirements_AI_System.md` (v0.5). It contains:
 - Full architecture diagrams (ingestion + query pipelines)
 - Detailed ingestion pipeline (7 stages including multi-format extraction)
 - Knowledge graph model (8 node types, 15+ edge types)
 - Query pipeline (6 stages including MNO/release resolution)
 - All target capabilities with query flow examples
 - PoC plan (11 steps, including DocumentProfiler) with evaluation criteria
+- Web UI and team access design (Section 10): architecture, path mapping, job queue, metrics, reverse proxy
 - 15 identified risks with mitigations
 
 ---
@@ -203,7 +206,7 @@ Thorough review of all 3 PoC steps with fresh eyes, identified and fixed 6 bugs:
 
 Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type` intermediate variable in PDFExtractor.
 
-### Test Suite (383 tests, all passing)
+### Test Suite (426 tests, all passing)
 
 | File | Tests | Coverage |
 |---|---|---|
@@ -218,8 +221,10 @@ Also removed dead code: unused `metadata: dict = {}` and unnecessary `block_type
 | `test_vectorstore.py` | 57 | Config round-trip, protocol conformance (EmbeddingProvider, VectorStoreProvider), ChunkBuilder contextualization/metadata/tables/images/toggles, deduplication, Builder orchestration with mock providers, integration tests on real parsed data |
 | `test_query.py` | 60 | Schema models, MockQueryAnalyzer (entities/concepts/MNOs/features/plans/query types), MNOReleaseResolver, GraphScoper (entity/feature/plan/title lookup + edge traversal), RAGRetriever (scoped + metadata retrieval + diversity), ContextBuilder (enrichment + formatting + few-shot + reminder), synthesizer citations + fallback logic, pipeline orchestration, integration with synthetic graph |
 | `test_eval.py` | 36 | Question set structure (counts, categories, IDs, ground truth), metric scoring (perfect/zero/partial/hallucination), score/report serialization, A/B comparison logic, runner integration with synthetic graph + mock store, overall score weighting |
+| `test_web_path_mapper.py` | 19 | PathMapper to_linux/to_windows/list_roots/resolve/is_within_roots across 5 test classes, security checks against directory traversal |
+| `test_web_jobs.py` | 24 | JobQueue CRUD, status transitions (pending→running→completed/failed/cancelled), log append/retrieval with line numbers, cancel, cleanup_old, async operations |
 
-Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` (48) requires `networkx`; `test_query.py` (55) requires `networkx`; `test_eval.py` (36) requires `networkx`; `test_vectorstore.py` integration tests (7) require parsed/taxonomy data. The remaining tests run without external dependencies.
+Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec parser tests (6) require a downloaded spec DOCX; `test_graph.py` (48) requires `networkx`; `test_query.py` (55) requires `networkx`; `test_eval.py` (36) requires `networkx`; `test_vectorstore.py` integration tests (7) require parsed/taxonomy data; `test_web_jobs.py` (24) requires `aiosqlite`. The remaining tests run without external dependencies.
 
 ### Known Design Concerns (deferred)
 
@@ -282,6 +287,35 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - **Contribution guide:** `CONTRIBUTING.md` — File ownership table (auto-generated vs human-editable), correction workflow, eval Excel format, QC/FIX reporting templates, common commands.
 - **Tested end-to-end:** profile→parse→resolve chain (3/3 OK, 711 reqs), taxonomy with mock LLM (OK, 16 features), error handling (clean failures with error codes), `--continue-on-error` flag, model picker (correctly selects already-pulled models).
 
+#### Web UI for Team Access (DONE, committed)
+- **Application:** `src/web/app.py` — FastAPI entry point with lifespan initializing JobQueue, MetricsStore, PathMapper, ResourceSampler. Mounts static files, includes 7 route modules. MetricsMiddleware for request timing. Entry: `python -m src.web.app`.
+- **Configuration:** `src/web/config.py` — `WebConfig` dataclass (host, port, root_path, path_mappings, ollama_url, default_model, db_path). `PathMapping` dataclass (windows, linux, label). Loads from `web/config.json`.
+- **Path mapping:** `src/web/path_mapper.py` — `PathMapper` with `to_linux()`, `to_windows()`, `resolve()` (auto-detects Windows/Linux), `is_within_roots()` (directory traversal protection). Case-insensitive Windows matching, backslash normalization.
+- **Job queue:** `src/web/jobs.py` — `Job` dataclass + `JobQueue` with SQLite persistence (aiosqlite, WAL mode). Two tables: `jobs` and `job_logs`. Operations: submit, get, list, update_status, append_log, get_logs_with_numbers (for SSE), cancel, cleanup_old.
+- **Metrics:** `src/web/metrics.py` — `MetricRecord` dataclass + `MetricsStore` with SQLite. Operations: record, record_batch, query, summary (aggregates with p95), compact_report (MET/REQ/LLM/PIP/RES lines), cleanup_old.
+- **Middleware:** `src/web/middleware.py` — `MetricsMiddleware` records endpoint, method, status code, response time. Fire-and-forget via asyncio.create_task.
+- **Resource sampler:** `src/web/resource_sampler.py` — Background asyncio task sampling every 30s. CPU from /proc/stat, RAM from /proc/meminfo, disk via os.statvfs(), GPU via nvidia-smi subprocess. No psutil dependency.
+- **Routes:** 7 route modules:
+  - `routes/dashboard.py` — System status, Ollama check, GPU info, recent jobs
+  - `routes/pipeline.py` — Pipeline form + `POST /api/pipeline/submit` launches background execution via asyncio.create_task
+  - `routes/jobs.py` — Job list, detail, SSE log streaming (1s poll), cancel
+  - `routes/query.py` — Query form, async execution, LLM metrics recording via OllamaProvider.last_call_stats
+  - `routes/environments.py` — Environment CRUD (list, create, delete)
+  - `routes/files.py` — Shared folder browser with PathMapper security
+  - `routes/metrics_route.py` — Metrics dashboard, JSON summary, compact report, resource partials
+- **Templates:** 10 full pages (base, dashboard, pipeline, jobs, job_detail, query, environments, environment_new, files, metrics) + 6 HTMX partials (dashboard_status, dashboard_jobs, jobs_table, query_result, file_listing, metrics_resource)
+- **Static assets:** `static/css/style.css` (sidebar layout, status dots, job log styling) + `static/js/app.js` (health polling, SSE handling)
+- **LLM integration:** `src/llm/ollama_provider.py` updated with `last_call_stats` property capturing total_duration_s, eval_count, tokens_per_second after each complete() call
+- **Tests:** 43 web tests — `tests/test_web_path_mapper.py` (19 tests across 5 classes) + `tests/test_web_jobs.py` (24 async tests covering all JobQueue operations)
+- **Dependencies:** fastapi, uvicorn[standard], jinja2, python-multipart, aiosqlite, httpx
+
+#### Offline Ollama Install Workflow (DONE, committed)
+- **`setup_env.sh`** — Added `--download-dir <path>` flag for offline installs. Auto-retries with `OLLAMA_INSECURE=1` when normal `ollama pull` fails. Supports local tarball and install script.
+- **`download_urls.txt`** — URL list for manual browser downloads. Updated to Ollama v0.21.0 (CUDA bundled in `ollama-linux-amd64.tar.zst`, 2GB).
+- **`gemma3_12b_manual_install.md`** — Step-by-step browser download guide for gemma3:12b (5 blob URLs from Ollama registry, manifest creation, sha256 rename).
+- **`gemma4_e4b_manual_install.md`** — Same format for gemma4:e4b (4 blob URLs, 9.6GB model weights).
+- **Ollama v0.21.0 packaging change:** CUDA now bundled in main package (no separate `-cuda.tgz`), format changed from `.tgz` to `.tar.zst`, installed via `sudo tar --use-compress-program=unzstd -xf`.
+
 ### Remaining Steps
 
 4. Test case parsing (separate parser for test case documents)
@@ -290,22 +324,39 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 
 ## Where We Left Off
 
-**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. Pipeline runner, environment system, model picker, and collaboration tooling implemented. Ready for multi-machine team workflow.
+**Status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, and 11 complete. Step 4 (test case parsing) skipped for now. Pipeline runner, environment system, model picker, collaboration tooling, web UI, and metrics/observability all implemented. 426 tests passing. Ready for multi-machine team workflow with browser-based access.
 
-**What just happened (this session — April 15, 2026):**
-- **Pipeline runner + environment system + collaboration tooling** — full implementation for multi-machine team workflow:
-  - Designed and agreed on collaboration protocol: dev PC (with Claude) + work laptop (16GB NVIDIA GPU, no Claude, proprietary docs) + team members via internal github
-  - Implemented environment config system (`src/env/`) — per-member scoped workspaces with stage range, MNO/release scope, objectives
-  - Implemented pipeline runner (`src/pipeline/`) — 9-stage orchestration with `PipelineContext`, `StageResult`, compact and verbose reports
-  - Implemented model picker (`src/llm/model_picker.py`) — HW auto-detection, 5-model catalog ranked best-to-worst, prefers already-pulled Ollama models
-  - Implemented error code catalog (`src/pipeline/error_codes.py`) — 40 structured codes for remote debugging
-  - Implemented compact report format for pasting results in chat (RPT/HW/MDL/stage lines)
-  - Implemented QC templates and FIX templates for structured quality feedback
-  - Implemented correction auto-detection (profile.json, taxonomy.json in corrections/ dir)
-  - Implemented user-supplied eval Q&A loading from Excel files
-  - Created `setup_env.sh` (one-command bootstrap) and `CONTRIBUTING.md` (team guide)
-  - Tested end-to-end: profile→parse→resolve (3/3 OK), taxonomy with mock (OK), error handling, --continue-on-error
-  - Fixed bugs during testing: DocumentProfile attribute names, TaxonomyConsolidator args, model picker exception handling, mock model routing
+**What just happened (this session — April 18, 2026):**
+- **Web UI for team access** — full implementation (43 new files, 5129 lines):
+  - Designed and agreed on FastAPI + Bootstrap 5 + HTMX stack (rejected Streamlit/Gradio/Airflow)
+  - 7 route modules: dashboard, pipeline, jobs, query, environments, files, metrics
+  - Job queue with SQLite persistence (aiosqlite, WAL mode) for background pipeline execution
+  - SSE (Server-Sent Events) for real-time log streaming from background jobs
+  - Path mapping: Windows UNC paths ↔ Linux mount points for shared network folders
+  - Shared folder browser with directory traversal security checks
+  - Reverse proxy support via `root_path` configuration
+  - 10 templates + 6 HTMX partials + CSS + JS
+  - 43 web tests (19 path mapper + 24 job queue)
+- **Metrics and observability** — persistent instrumentation:
+  - MetricsStore (SQLite) for REQ/LLM/PIP/RES/MET categories
+  - MetricsMiddleware (fire-and-forget request timing)
+  - ResourceSampler (CPU/RAM/GPU from /proc + nvidia-smi, 30s interval, no psutil)
+  - OllamaProvider.last_call_stats for per-call LLM performance
+  - compact_report() producing pasteable MET lines matching RPT format
+- **Offline Ollama install workflow** for proxy-restricted environments:
+  - `setup_env.sh --download-dir` for offline installs
+  - `download_urls.txt` with browser-downloadable URLs
+  - Manual install guides for gemma3:12b and gemma4:e4b
+  - Documented Ollama v0.21.0 packaging change (CUDA bundled, .tar.zst format)
+- **Work laptop setup:** Intel Xeon E5-2650 v2, 62GB RAM, NVIDIA RTX A4000 (15GB VRAM)
+  - Ollama installed with CUDA from .tar.zst package
+  - Selected gemma3:12b (8.1GB, fits in 15GB VRAM with room for other processes)
+  - Resolved proxy issues with direct blob downloads from Ollama registry
+- **TDD updated to v0.5** — new Section 10 (Web UI and Team Access) with architecture, path mapping, job queue, metrics, and reverse proxy design
+
+**Previous session (April 15, 2026):**
+- Pipeline runner + environment system + collaboration tooling
+- setup_env.sh, CONTRIBUTING.md, model picker, error codes, QC/FIX templates
 
 **Previous session (April 14-15, 2026):**
 - Citation improvement: few-shot examples, end-of-context reminders, context-based citation fallback
@@ -324,14 +375,14 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 - Quality: good reasoning, inconsistent citation following. Citation fallback mitigates this.
 
 **Immediate next actions:**
-1. Set up work laptop: `git clone`, `./setup_env.sh`, verify with `python -m src.pipeline.run_cli --detect-hw`
-2. Create environments for team members: `python -m src.env.env_cli create ...`
-3. Run full pipeline on work laptop: `python -m src.pipeline.run_cli --env <name>` — paste compact report back here
-4. Run A/B evaluation with real LLM: `python -m src.pipeline.run_cli --docs . --start eval --end eval` or `python -m src.eval.eval_cli --ab --llm ollama --llm-timeout 600`
-5. Team members: verify profiler/taxonomy/eval on new documents, provide QC/FIX feedback
-6. Experiment with different embedding models and larger LLM models (16GB GPU enables gemma3:12b)
-7. Stale output files should be regenerated via pipeline runner
-8. Consider Gemma 4 26B-A4B on 16GB GPU for better citation following
+1. Start web UI: `python -m src.web.app` — access at `http://localhost:8000` (or behind reverse proxy at configured root_path)
+2. Run full pipeline on work laptop via web UI or CLI
+3. Create environments for team members via web UI (`/environments/new`) or CLI
+4. Run A/B evaluation with real LLM: `python -m src.eval.eval_cli --ab --llm ollama --llm-timeout 600`
+5. Team members: access web UI to run pipeline stages, submit queries, review results
+6. Monitor system metrics at `/metrics` dashboard
+7. Experiment with different embedding models and LLM models (gemma3:12b on 15GB GPU)
+8. Stale output files should be regenerated via pipeline runner
 
 ---
 
@@ -343,9 +394,12 @@ req-agent/
 ├── SESSION_SUMMARY.md                     # This file
 ├── README.md                              # How to run and test all PoC steps
 ├── CONTRIBUTING.md                        # Team contribution guide
-├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.4)
+├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.5)
 ├── requirements.txt                       # Python dependencies
-├── setup_env.sh                           # One-command setup script
+├── setup_env.sh                           # One-command setup script (--download-dir for offline)
+├── download_urls.txt                      # Manual download URLs for proxy-restricted environments
+├── gemma3_12b_manual_install.md           # Manual Ollama model install guide (gemma3:12b)
+├── gemma4_e4b_manual_install.md           # Manual Ollama model install guide (gemma4:e4b)
 ├── environments/                          # Environment configs (JSON)
 ├── profiles/
 │   └── vzw_oa_profile.json               # VZW OA document profile
@@ -416,12 +470,34 @@ req-agent/
 │   ├── env/
 │   │   ├── config.py                     # EnvironmentConfig + PIPELINE_STAGES registry
 │   │   └── env_cli.py                    # Environment CLI (create, list, show, init, delete)
-│   └── pipeline/
-│       ├── stages.py                     # 9 stage functions + StageResult
-│       ├── runner.py                     # PipelineContext + PipelineRunner
-│       ├── report.py                     # Compact + verbose reports, QC/FIX templates
-│       ├── run_cli.py                    # Pipeline CLI (--env, --docs, --start, --end, --detect-hw)
-│       └── error_codes.py               # 40 structured error codes
+│   ├── pipeline/
+│   │   ├── stages.py                     # 9 stage functions + StageResult
+│   │   ├── runner.py                     # PipelineContext + PipelineRunner
+│   │   ├── report.py                     # Compact + verbose reports, QC/FIX templates
+│   │   ├── run_cli.py                    # Pipeline CLI (--env, --docs, --start, --end, --detect-hw)
+│   │   └── error_codes.py               # 40 structured error codes
+│   └── web/
+│       ├── __init__.py                   # Package init
+│       ├── app.py                        # FastAPI application entry point
+│       ├── config.py                     # WebConfig + PathMapping + load_config()
+│       ├── path_mapper.py                # Windows↔Linux path translation + security
+│       ├── jobs.py                       # Job + JobQueue (SQLite, aiosqlite)
+│       ├── metrics.py                    # MetricRecord + MetricsStore (SQLite)
+│       ├── middleware.py                 # MetricsMiddleware (fire-and-forget)
+│       ├── resource_sampler.py           # CPU/RAM/GPU sampling from /proc + nvidia-smi
+│       ├── routes/
+│       │   ├── dashboard.py              # System status, recent jobs
+│       │   ├── pipeline.py               # Pipeline form + background submission
+│       │   ├── jobs.py                   # Job list, detail, SSE streaming, cancel
+│       │   ├── query.py                  # Query form + async execution
+│       │   ├── environments.py           # Environment CRUD
+│       │   ├── files.py                  # Shared folder browser
+│       │   └── metrics_route.py          # Metrics dashboard + compact report
+│       ├── templates/                    # 10 Jinja2 templates (base, dashboard, pipeline, etc.)
+│       ├── templates/partials/           # 6 HTMX partial templates
+│       └── static/                       # CSS + JS (no build toolchain)
+├── web/
+│   └── config.json                       # Web UI configuration (path mappings, Ollama URL, etc.)
 ├── tests/
 │   ├── test_document_ir.py               # IR round-trip tests (10)
 │   ├── test_profile_schema.py            # Profile round-trip tests (9)
@@ -433,7 +509,9 @@ req-agent/
 │   ├── test_graph.py                     # Knowledge graph tests (48)
 │   ├── test_vectorstore.py              # Vector store tests (57)
 │   ├── test_query.py                    # Query pipeline tests (55)
-│   └── test_eval.py                     # Evaluation framework tests (36)
+│   ├── test_eval.py                     # Evaluation framework tests (36)
+│   ├── test_web_path_mapper.py          # Path mapper tests (19)
+│   └── test_web_jobs.py                 # Job queue tests (24)
 ├── data/
 │   ├── extracted/                        # IR JSON files (5 docs)
 │   ├── parsed/                           # RequirementTree JSON files (5 docs)

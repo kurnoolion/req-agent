@@ -1,6 +1,6 @@
 # Technical Design Document: NORA — Network Operator Requirements Analyzer
 
-**Version:** 0.4
+**Version:** 0.5
 **Date:** April 2026
 **Status:** PoC Design Phase
 **Change Log:**
@@ -8,6 +8,7 @@
 - v0.2 (2026-04-12): Multi-MNO, multi-release, test case ingestion, unified graph, folder structure
 - v0.3 (2026-04-12): Multi-format document support (PDF, DOCX, XLS), embedded objects, image/diagram handling
 - v0.4 (2026-04-12): DocumentProfiler — standalone, LLM-free module that derives document structure profiles from representative docs, replacing hard-coded per-MNO parsers with a generic profile-driven structural parser; added DOC format support
+- v0.5 (2026-04-18): Web UI for easy non-terminal access (FastAPI + Bootstrap 5 + HTMX), metrics and observability (compact MET report format, SQLite metrics DB, resource sampling), offline Ollama install workflow for proxy-restricted environments
 
 ---
 
@@ -48,7 +49,14 @@
    - 8.2 Test Case Q&A
    - 8.3 Requirement Compliance Agent
 9. [PoC Plan](#9-poc-plan)
-10. [Risks and Mitigations](#10-risks-and-mitigations)
+10. [Web UI and Team Access](#10-web-ui-and-team-access)
+    - 10.1 Design Rationale
+    - 10.2 Architecture
+    - 10.3 Path Mapping (Windows ↔ Linux)
+    - 10.4 Job Queue and Background Execution
+    - 10.5 Metrics and Observability
+    - 10.6 Reverse Proxy Support
+11. [Risks and Mitigations](#11-risks-and-mitigations)
 
 ---
 
@@ -1599,7 +1607,148 @@ The PoC is considered successful if:
 
 ---
 
-## 10. Risks and Mitigations
+## 10. Web UI and Team Access
+
+### 10.1 Design Rationale
+
+Many team members contributing to NORA (document profiling, taxonomy review, evaluation Q&A) primarily work on Windows PCs and may not have experience with Linux terminal environment or CLI tools. A browser-based interface allows them to:
+
+- Run pipeline stages on their documents via a web form
+- Monitor job progress in real time
+- Browse shared network folders to select input/output paths
+- Submit queries against the knowledge graph
+- Review metrics and system health
+
+**Decision: FastAPI + Bootstrap 5 + HTMX over Streamlit/Gradio/Airflow.**
+
+| Option | Rejected because |
+|--------|-----------------|
+| Streamlit | Single-user model, no background job support, can't handle concurrent users |
+| Gradio | Designed for ML demos, poor fit for multi-stage pipeline orchestration |
+| Airflow | Heavy infrastructure dependency (PostgreSQL, Redis), overkill for PoC |
+| **FastAPI + HTMX** | **Selected:** async background tasks, multi-user, zero JS build toolchain, direct Python module imports, reverse proxy compatible |
+
+### 10.2 Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                        NORA WEB UI                            │
+│                                                              │
+│  Browser (any device)                                        │
+│  ┌─────────────────────────────────────────────────────────┐ │
+│  │  Bootstrap 5 (responsive)  +  HTMX (partial updates)   │ │
+│  │  No npm / JS build toolchain                            │ │
+│  └───────────────────────────┬─────────────────────────────┘ │
+│                              │ HTTP / SSE                     │
+│  ┌───────────────────────────┴─────────────────────────────┐ │
+│  │  FastAPI Application                                    │ │
+│  │                                                         │ │
+│  │  Routes:                                                │ │
+│  │    /              Dashboard (system status, recent jobs) │ │
+│  │    /pipeline      Pipeline form + submit                │ │
+│  │    /jobs          Job list + detail + SSE log stream     │ │
+│  │    /query         Query form + async results            │ │
+│  │    /environments  Environment CRUD                       │ │
+│  │    /files         Shared folder browser                  │ │
+│  │    /metrics       Observability dashboard                │ │
+│  │                                                         │ │
+│  │  Infrastructure:                                        │ │
+│  │    JobQueue       SQLite (aiosqlite, WAL mode)          │ │
+│  │    MetricsStore   SQLite (separate DB, WAL mode)        │ │
+│  │    PathMapper     Windows UNC ↔ Linux path translation  │ │
+│  │    ResourceSampler  CPU/RAM/GPU from /proc + nvidia-smi │ │
+│  └─────────────────────────────────────────────────────────┘ │
+│                              │                               │
+│  ┌───────────────────────────┴─────────────────────────────┐ │
+│  │  Pipeline Backend (existing src/pipeline/)              │ │
+│  │  PipelineRunner + PipelineContext + 9 Stage Functions   │ │
+│  └─────────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────────┘
+```
+
+**Key design points:**
+- Pipeline jobs run as `asyncio.create_task()` background tasks — the HTTP response returns immediately with a job ID
+- Server-Sent Events (SSE) stream job logs in real time (1s polling interval)
+- HTMX enables partial page updates without full-page reloads or JavaScript frameworks
+- All templates use Jinja2 with `{{ root_path }}` prefix for reverse proxy compatibility
+- Static assets (CSS, JS) served via FastAPI's `StaticFiles` mount
+
+### 10.3 Path Mapping (Windows ↔ Linux)
+
+Team members access shared network folders from Windows PCs (`\\SERVER\OADocs\alice\documents\`), while the Linux server mounts the same storage at a different path (`/mnt/oa_docs/alice/documents/`). The `PathMapper` module translates between the two:
+
+```json
+{
+    "path_mappings": [
+        {
+            "windows": "\\\\SERVER\\OADocs",
+            "linux": "/mnt/oa_docs",
+            "label": "OA Documents"
+        }
+    ]
+}
+```
+
+- Case-insensitive Windows path matching
+- Backslash/forward slash normalization
+- `is_within_roots()` security check prevents directory traversal outside configured roots
+- Users can paste Windows paths in the web form; the server resolves them to Linux paths
+
+### 10.4 Job Queue and Background Execution
+
+The `JobQueue` persists job state in SQLite with WAL mode for safe concurrent access:
+
+- **Job states:** pending → running → completed / failed / cancelled
+- **Job types:** pipeline, query
+- **Tracking:** submitted_by, timestamps (submitted/started/completed), stages, current_stage, progress percentage
+- **Log storage:** Separate `job_logs` table with sequential line numbers for SSE streaming
+- **Cancellation:** Sets status to cancelled; background task checks status periodically
+
+Pipeline submission flow:
+1. User fills form (document path, stages, model, environment)
+2. `POST /api/pipeline/submit` validates input, creates Job (status=pending)
+3. `asyncio.create_task(run_pipeline_background(job_id, ...))` launches execution
+4. Background task creates `PipelineContext`, runs stages via `PipelineRunner`, updates job progress/logs/status
+5. User monitors via `/jobs/{id}` page with SSE auto-updating log and progress bar
+
+### 10.5 Metrics and Observability
+
+Metrics follow the existing compact report philosophy (RPT/HW/MDL lines) extended with:
+
+| Category | Prefix | What it captures |
+|----------|--------|-----------------|
+| Request metrics | `REQ` | Endpoint, method, status code, response time (ms) |
+| LLM metrics | `LLM` | Model, total duration, eval tokens, tokens/second |
+| Pipeline metrics | `PIP` | Stage name, duration, item counts |
+| Resource metrics | `RES` | CPU%, RAM%, disk%, GPU util%, GPU memory% |
+| General metrics | `MET` | Any custom metric |
+
+**Implementation:**
+- `MetricsMiddleware` records request timing (fire-and-forget via `asyncio.create_task`, never blocks responses)
+- `MetricsStore` persists to SQLite with `record()`, `query()`, `summary()` (aggregates with p95), `compact_report()` producing pasteable MET lines
+- `ResourceSampler` background task samples CPU/RAM/disk/GPU every 30s — reads from `/proc/stat`, `/proc/meminfo`, `os.statvfs()`, and `nvidia-smi` subprocess (no psutil dependency)
+- `OllamaProvider.last_call_stats` captures per-call LLM performance (total_duration, eval_count, tokens/second)
+- Cleanup: `cleanup_old()` removes metrics older than configurable threshold
+
+### 10.6 Reverse Proxy Support
+
+NORA is deployed behind a reverse proxy for firewall compliance (avoids whitelisting every service port). Configuration:
+
+```json
+{
+    "root_path": "/nora"
+}
+```
+
+- FastAPI's `root_path` parameter handles URL prefix
+- All template URLs use `{{ root_path }}` Jinja2 variable
+- Static file mounts work correctly under prefix
+- `<body data-root-path="{{ root_path }}">` makes prefix available to JavaScript
+- Health check at `/api/health` reports Ollama connectivity and uptime
+
+---
+
+## 11. Risks and Mitigations
 
 | # | Risk | Severity | Likelihood | Mitigation |
 |---|------|----------|-----------|------------|
@@ -1675,6 +1824,9 @@ Referenced Standards Release:
 | Knowledge graph | NetworkX | In-memory, sufficient for single MNO+release PoC |
 | Vector store | FAISS or ChromaDB | Local, with metadata filtering support |
 | Embedding model | text-embedding-3-large (or similar) | Evaluate retrieval quality; consider domain adaptation if needed |
+| Web UI | FastAPI + Jinja2 + Bootstrap 5 + HTMX | Browser-based team access, no npm/JS build |
+| Web persistence | SQLite (aiosqlite, WAL mode) | Job queue + metrics store |
+| Real-time streaming | Server-Sent Events (SSE) | Job log streaming to browser |
 | Orchestration | Python scripts | No framework needed for PoC |
 
 ## Appendix C: Technology Considerations (Production)

@@ -9,13 +9,58 @@ Admin creates environment → Member runs pipeline → Reviews artifacts
 → Makes corrections → Re-runs → Reports results (compact format)
 ```
 
-## Getting Started
+There are two ways to interact with NORA: the **Web UI** (recommended for most team members) and the **CLI** (for advanced users).
+
+## Getting Started — Web UI (Recommended)
+
+The web UI provides browser-based access to all pipeline features. No terminal experience required.
+
+1. Open NORA in your browser: `http://<server>:<port>` (or the URL provided by your admin, e.g., `https://yourserver.com/nora`)
+
+2. **Create/view your environment:**
+   - Go to **Environments** in the sidebar
+   - If your environment doesn't exist yet, ask your admin to create one, or click **New Environment**
+
+3. **Run the pipeline:**
+   - Go to **Pipeline** in the sidebar
+   - Enter your document path (you can paste a Windows path like `\\SERVER\OADocs\alice\documents`)
+   - Select which stages to run and which model to use
+   - Click **Submit** — you'll be redirected to the job monitoring page
+
+4. **Monitor your job:**
+   - Go to **Jobs** in the sidebar to see all jobs
+   - Click on your job to see real-time logs streaming as the pipeline runs
+   - Progress bar shows completion percentage
+
+5. **Query the knowledge graph:**
+   - Go to **Query** in the sidebar
+   - Type your question (e.g., "What is the T3402 timer behavior?")
+   - Results include answer, citations, and pipeline stats
+
+6. **Browse shared files:**
+   - Go to **Files** in the sidebar
+   - Browse the shared network folders to find documents or pipeline outputs
+
+7. **Check system health:**
+   - The **Dashboard** shows Ollama status, GPU info, and recent jobs
+   - The **Metrics** page shows request timing, LLM stats, and resource usage
+
+## Getting Started — CLI
+
+For advanced users who prefer the terminal:
 
 1. Clone the repo and run setup:
    ```bash
    git clone <repo-url>
    cd req-agent
    ./setup_env.sh
+   ```
+
+   If you're in a proxy-restricted environment where `curl` HTTPS fails:
+   ```bash
+   # Download files listed in download_urls.txt on another machine
+   # Transfer them to a directory, then:
+   ./setup_env.sh --download-dir /path/to/downloads
    ```
 
 2. Ask the admin for your environment name, then check it:
@@ -195,7 +240,7 @@ python -m src.pipeline.run_cli --fix-template taxonomy
 └── reports/          # Auto-generated pipeline reports
 ```
 
-## Common Commands
+## Common Commands (CLI)
 
 ```bash
 # List available stages
@@ -215,4 +260,32 @@ python -m src.env.env_cli show my-env
 
 # List all environments
 python -m src.env.env_cli list
+
+# Start the web UI server
+python -m src.web.app
 ```
+
+## Web UI Admin Tasks
+
+The admin can configure the web UI via `web/config.json`:
+
+```json
+{
+    "host": "0.0.0.0",
+    "port": 8000,
+    "root_path": "/nora",
+    "ollama_url": "http://localhost:11434",
+    "default_model": "gemma3:12b",
+    "path_mappings": [
+        {
+            "windows": "\\\\SERVER\\OADocs",
+            "linux": "/mnt/oa_docs",
+            "label": "OA Documents"
+        }
+    ]
+}
+```
+
+**Path mappings** allow team members to use Windows network paths (e.g., `\\SERVER\OADocs\alice\`) in forms — the server translates them to Linux paths automatically.
+
+**Reverse proxy:** Set `root_path` to your proxy prefix (e.g., `/nora`). All UI links will be prefixed correctly.

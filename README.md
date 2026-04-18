@@ -2,7 +2,7 @@
 
 AI system for intelligent querying, cross-referencing, and compliance analysis of US MNO device requirement specifications. Uses a Knowledge Graph + RAG hybrid architecture.
 
-**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending. Local LLM (Ollama + Gemma 4 E4B) integrated. Citation quality improved with few-shot prompting and context-based fallback. Automated pipeline runner, multi-user environment system, and collaboration tooling added for team workflows.
+**Current status:** PoC Steps 1, 2, 3, 5, 6, 7, 8, 9, 10, 11 implemented. Step 4 pending. Local LLM (Ollama + Gemma 3 12B / Gemma 4 E4B) integrated. Citation quality improved with few-shot prompting and context-based fallback. Automated pipeline runner, multi-user environment system, and collaboration tooling added for team workflows. **Web UI** (FastAPI + Bootstrap 5 + HTMX) provides browser-based access for team members who primarily work on Windows PCs. Metrics and observability instrumentation with persistent SQLite storage.
 
 ## Prerequisites
 
@@ -53,6 +53,18 @@ ollama list
 
 CPU inference runs at ~10-13 tok/s on Intel Core Ultra 9 185H, producing answers in ~2-4 minutes per query.
 
+### Offline Install (proxy-restricted environments)
+
+If `curl` HTTPS downloads fail (e.g., corporate proxy with self-signed certificates):
+
+1. Download files listed in `download_urls.txt` on a machine with browser access
+2. Transfer to the target machine
+3. Run: `./setup_env.sh --download-dir /path/to/downloads`
+
+For Ollama model install when `ollama pull` fails, see:
+- `gemma3_12b_manual_install.md` — step-by-step for gemma3:12b
+- `gemma4_e4b_manual_install.md` — step-by-step for gemma4:e4b
+
 ### System Dependencies (optional)
 
 - **LibreOffice** — required for automatic DOC→DOCX conversion of 3GPP spec downloads. Install with `apt install libreoffice` or equivalent. If not available, the system will log a warning; you can manually convert DOC files.
@@ -99,6 +111,49 @@ PRS OK 0s req=711 dep=11 docs=5
 RES WARN 0s int=301 xp=1 std=320
 ERR none
 ```
+
+## Web UI (Browser-Based Access)
+
+For team members who prefer a browser-based interface over the CLI:
+
+```bash
+# Start the web server
+python -m src.web.app
+
+# Access at http://localhost:8000
+# Or behind a reverse proxy at the configured root_path (e.g., /nora)
+```
+
+**Features:**
+- **Dashboard** — System status, Ollama connectivity, GPU info, recent jobs
+- **Pipeline** — Submit pipeline runs via form (select stages, model, document path)
+- **Jobs** — Monitor running jobs with real-time log streaming (SSE)
+- **Query** — Submit questions against the knowledge graph, view results
+- **Environments** — Create/manage team member environments
+- **Files** — Browse shared network folders (Windows paths auto-mapped to Linux)
+- **Metrics** — Observability dashboard with request timing, LLM stats, resource usage
+
+**Configuration** (`web/config.json`):
+```json
+{
+    "host": "0.0.0.0",
+    "port": 8000,
+    "root_path": "/nora",
+    "ollama_url": "http://localhost:11434",
+    "default_model": "gemma3:12b",
+    "path_mappings": [
+        {
+            "windows": "\\\\SERVER\\OADocs",
+            "linux": "/mnt/oa_docs",
+            "label": "OA Documents"
+        }
+    ]
+}
+```
+
+**Path mappings** translate Windows UNC paths (used by team members on Windows PCs) to Linux mount points on the server. Team members can paste Windows paths in forms; the server resolves them automatically.
+
+**Reverse proxy:** Set `root_path` to match your reverse proxy prefix (e.g., `/nora`). All URLs in the UI will be prefixed accordingly.
 
 ## Environment Management
 
@@ -269,7 +324,9 @@ python -m pytest tests/test_eval.py -v               # Step 11: Evaluation frame
 | `test_vectorstore.py` | 57 | Config, protocols, chunk builder, deduplication, builder, integration with real data | `data/parsed/`, `data/taxonomy/` |
 | `test_query.py` | 60 | Schema models, analyzer, resolver, graph scoper, RAG retriever, context builder (few-shot, reminder), synthesizer (citation fallback), pipeline orchestration, integration | `networkx` |
 | `test_eval.py` | 36 | Question set structure, metric scoring, report serialization, A/B comparison, runner integration with synthetic graph | `networkx` |
-| **Total** | **383** | | |
+| `test_web_path_mapper.py` | 19 | PathMapper Windows↔Linux translation, security checks, resolve, list_roots | None |
+| `test_web_jobs.py` | 24 | JobQueue CRUD, status transitions, log streaming, cancel, cleanup, async | `aiosqlite` |
+| **Total** | **426** | | |
 
 ## Step-by-Step Details
 
@@ -785,7 +842,7 @@ req-agent/
 ├── SESSION_SUMMARY.md                     # Session context for continuity
 ├── README.md                              # This file
 ├── CONTRIBUTING.md                        # Team contribution guide (file ownership, QC templates, correction workflow)
-├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.4)
+├── TDD_Telecom_Requirements_AI_System.md  # Full technical design (v0.5)
 ├── requirements.txt                       # Python dependencies
 ├── setup_env.sh                           # One-command setup script (deps, Ollama, model, verification)
 ├── environments/                          # Environment configs (JSON, one per team member workspace)
@@ -805,8 +862,9 @@ req-agent/
 │   ├── query/                             # Step 10: Query pipeline (6-stage)
 │   ├── eval/                              # Step 11: Evaluation framework
 │   ├── env/                               # Environment config system (multi-user workspaces)
-│   └── pipeline/                          # Pipeline runner (stage orchestration, reports, error codes)
-├── tests/                                 # 383 tests across 11 test files
+│   ├── pipeline/                          # Pipeline runner (stage orchestration, reports, error codes)
+│   └── web/                               # Web UI (FastAPI + Bootstrap 5 + HTMX, 7 route modules)
+├── tests/                                 # 426 tests across 13 test files
 ├── data/
 │   ├── extracted/                        # Step 1 output: IR JSON files
 │   ├── parsed/                           # Step 3 output: RequirementTree JSON files
