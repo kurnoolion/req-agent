@@ -870,7 +870,7 @@ No base class inheritance required. See `src/llm/base.py` for full documentation
 ## Project Structure
 
 ```
-req-agent/
+nora/
 ├── CLAUDE.md                              # Claude Code instructions
 ├── SESSION_SUMMARY.md                     # Session context for continuity
 ├── README.md                              # This file

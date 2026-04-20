@@ -1049,7 +1049,7 @@ for i, item in enumerate(summary_items):
     r.font.name = "Calibri"
 
 add_text_box(slide, Inches(1), Inches(6.5), Inches(11), Inches(0.4),
-             "github.com/kurnoolion/req-agent", font_size=13,
+             "github.com/kurnoolion/nora", font_size=13,
              color=RGBColor(0x88, 0xAA, 0xCC), alignment=PP_ALIGN.CENTER)
 
 

@@ -59,7 +59,7 @@ For advanced users who prefer the terminal:
 1. Clone the repo and run setup:
    ```bash
    git clone <repo-url>
-   cd req-agent
+   cd nora
    ./setup_env.sh
    ```
 
