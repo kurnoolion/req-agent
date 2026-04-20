@@ -414,7 +414,7 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 ## Project File Structure
 
 ```
-req-agent/
+nora/
 ├── CLAUDE.md                              # Claude Code instructions
 ├── SESSION_SUMMARY.md                     # This file
 ├── README.md                              # How to run and test all PoC steps

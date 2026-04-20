@@ -22,7 +22,7 @@ TEAL = RGBColor(0x16, 0xA0, 0x85)
 SLIDE_W = Inches(13.333)
 SLIDE_H = Inches(7.5)
 
-prs = Presentation("/home/mohan/work/req-agent/NORA_Overview.pptx")
+prs = Presentation("/home/mohan/work/nora/NORA_Overview.pptx")
 
 
 def add_shape(slide, left, top, width, height, fill_color, border_color=None):
@@ -320,6 +320,6 @@ for shape in closing_slide.shapes:
 # ============================================================================
 # Save
 # ============================================================================
-prs.save("/home/mohan/work/req-agent/NORA_Overview.pptx")
+prs.save("/home/mohan/work/nora/NORA_Overview.pptx")
 print("Presentation updated with Human Filter slide and references.")
 print(f"Total slides: {len(prs.slides)}")
