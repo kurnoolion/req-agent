@@ -127,31 +127,35 @@ NORA surfaces this as `ERR PIP-E001: Unhandled error: ...`.
 
 NORA auto-detects a cached model and enables `HF_HUB_OFFLINE=1` automatically (see `src/vectorstore/hf_offline.py`), so the only action required is getting the cache onto the Work PC.
 
-**On an internet-connected machine** (if the model isn't already cached, run any embedder call once to populate `~/.cache/huggingface/hub/`):
+**Option A — use the tarball vendored in this repo (default model only).**
 
-```bash
-# One-time warm-up if the cache is empty
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
-
-# Bundle the cache
-cd ~/.cache/huggingface
-tar czf /tmp/hf_cache.tgz hub/models--sentence-transformers--all-MiniLM-L6-v2
-```
-
-Substitute the model name in the tar path if your env uses a different one (e.g., `models--sentence-transformers--all-mpnet-base-v2`, `models--BAAI--bge-small-en-v1.5`).
-
-**On the Work PC:**
+`assets/hf_cache/all-MiniLM-L6-v2.tgz` (80 MB) is checked into the repo and pulled with `git pull`. On the Work PC:
 
 ```bash
 mkdir -p ~/.cache/huggingface
 cd ~/.cache/huggingface
-tar xzf /path/to/hf_cache.tgz
+tar xzf /path/to/nora/assets/hf_cache/all-MiniLM-L6-v2.tgz
 
 # Verify a snapshot with config.json exists
 ls hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/*/config.json
 ```
 
 No env vars to export. Next pipeline run, `enable_offline_if_cached` finds the snapshot, flips `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`, patches `huggingface_hub.constants.HF_HUB_OFFLINE = True`, and the revision HEAD call is skipped entirely.
+
+**Option B — build a tarball for a different model.**
+
+If your env uses something other than `all-MiniLM-L6-v2` (e.g., `all-mpnet-base-v2`, `BAAI/bge-small-en-v1.5`), build the tarball yourself on an internet-connected machine:
+
+```bash
+# One-time warm-up if the cache is empty
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-mpnet-base-v2')"
+
+# Bundle the cache — substitute the model name
+cd ~/.cache/huggingface
+tar czf /tmp/hf_cache.tgz hub/models--sentence-transformers--all-mpnet-base-v2
+```
+
+Then transfer `/tmp/hf_cache.tgz` to the Work PC and extract under `~/.cache/huggingface/` as in Option A.
 
 ### Manual override
 
