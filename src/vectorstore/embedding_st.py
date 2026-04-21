@@ -36,6 +36,11 @@ class SentenceTransformerEmbedder:
         batch_size: int = 64,
         normalize: bool = True,
     ) -> None:
+        # Must run before sentence_transformers imports huggingface_hub so
+        # the HF_HUB_OFFLINE env var is read during constants init.
+        from src.vectorstore.hf_offline import enable_offline_if_cached
+        enable_offline_if_cached(model_name)
+
         from sentence_transformers import SentenceTransformer
 
         self._model_name = model_name

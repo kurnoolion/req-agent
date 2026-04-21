@@ -61,9 +61,7 @@ If `curl` HTTPS downloads fail (e.g., corporate proxy with self-signed certifica
 2. Transfer to the target machine
 3. Run: `./setup_env.sh --download-dir /path/to/downloads`
 
-For Ollama model install when `ollama pull` fails, see:
-- `gemma3_12b_manual_install.md` — step-by-step for gemma3:12b
-- `gemma4_e4b_manual_install.md` — step-by-step for gemma4:e4b
+For full offline setup on a Work PC with no internet — Ollama runtime, Gemma model weights (gemma3:12b / gemma4:e4b), and the HuggingFace sentence-embedding model — see `SETUP_OFFLINE.md`.
 
 ### System Dependencies (optional)
 
