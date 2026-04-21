@@ -327,8 +327,7 @@ Note: `test_pipeline.py` (30 tests) requires `pymupdf`; `test_standards.py` spec
 #### Offline Ollama Install Workflow (DONE, committed)
 - **`setup_env.sh`** — Added `--download-dir <path>` flag for offline installs. Auto-retries with `OLLAMA_INSECURE=1` when normal `ollama pull` fails. Supports local tarball and install script.
 - **`download_urls.txt`** — URL list for manual browser downloads. Updated to Ollama v0.21.0 (CUDA bundled in `ollama-linux-amd64.tar.zst`, 2GB).
-- **`gemma3_12b_manual_install.md`** — Step-by-step browser download guide for gemma3:12b (5 blob URLs from Ollama registry, manifest creation, sha256 rename).
-- **`gemma4_e4b_manual_install.md`** — Same format for gemma4:e4b (4 blob URLs, 9.6GB model weights).
+- **`SETUP_OFFLINE.md`** — Consolidated offline setup runbook: Ollama+CUDA runtime, manual Gemma install for both gemma3:12b (5 blobs) and gemma4:e4b (4 blobs, 9.6GB) via Ollama registry blob URLs + manifest + sha256 rename, and HuggingFace embedding-cache pre-population (tied to `src/vectorstore/hf_offline.py` auto-detect).
 - **Ollama v0.21.0 packaging change:** CUDA now bundled in main package (no separate `-cuda.tgz`), format changed from `.tgz` to `.tar.zst`, installed via `sudo tar --use-compress-program=unzstd -xf`.
 
 ### Remaining Steps
@@ -423,8 +422,7 @@ nora/
 ├── requirements.txt                       # Python dependencies
 ├── setup_env.sh                           # One-command setup script (--download-dir for offline)
 ├── download_urls.txt                      # Manual download URLs for proxy-restricted environments
-├── gemma3_12b_manual_install.md           # Manual Ollama model install guide (gemma3:12b)
-├── gemma4_e4b_manual_install.md           # Manual Ollama model install guide (gemma4:e4b)
+├── SETUP_OFFLINE.md                       # Offline setup runbook (Ollama + Gemma + HF cache)
 ├── environments/                          # Environment configs (JSON)
 ├── profiles/
 │   └── vzw_oa_profile.json               # VZW OA document profile
