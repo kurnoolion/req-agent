@@ -1,50 +1,57 @@
-<!-- retrofit: skeleton -->
 # web
 
 **Purpose**
-TODO — retrofit skeleton; please fill in. (Observed: FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members. Pipeline submission via form, SSE log streaming, job queue with SQLite persistence, shared folder browser with Windows↔Linux path mapping, query interface, corrections UI, metrics, reverse-proxy support via root_path.)
+FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides pipeline submission with SSE-streamed logs, a persistent job queue, a shared-folder browser with Windows↔Linux path translation, a query console, a corrections editor, and a metrics dashboard (D-009). Runs behind a reverse proxy (`root_path` support), works fully offline (vendored Bootstrap / Icons / HTMX), and never blocks a request on metric writes.
 
 **Public surface**
-<!-- Candidates observed in code (to be curated, not copied verbatim): -->
-<!-- App: -->
-<!-- - app (app.py, FastAPI application) -->
-<!-- Config: -->
-<!-- - WebConfig, PathMapping (config.py) -->
-<!-- Jobs: -->
-<!-- - JobQueue, Job (jobs.py) -->
-<!-- Metrics: -->
-<!-- - MetricsStore, MetricRecord (metrics.py) — 5 categories REQ/LLM/PIP/RES/MET; persistent SQLite -->
-<!-- - MetricsMiddleware (middleware.py) — fire-and-forget; never blocks responses -->
-<!-- Path: -->
-<!-- - PathMapper (path_mapper.py) — Windows↔Linux path translation -->
-<!-- Resource: -->
-<!-- - ResourceSampler (resource_sampler.py) — /proc + nvidia-smi, no psutil -->
-<!-- Routes: under routes/ subdirectory (promoted to first-class module only if public surface grows) -->
-<!-- Static/Templates: vendored Bootstrap, Bootstrap Icons, HTMX for offline -->
-TODO
+- App (app.py):
+  - `app: FastAPI` — the ASGI application; wires middleware, static mounts, routers, templates
+- Config (config.py):
+  - `WebConfig` — host, port, root_path, path_mappings, ollama_url, default_model, db_path; `from_dict()`
+  - `PathMapping` — `(windows, linux, label)` entry
+  - `load_config(path=None) -> WebConfig`
+- Jobs (jobs.py):
+  - `Job` dataclass — id, job_type (`pipeline | query | eval`), status, pipeline/query fields, progress, log_lines, result, error
+  - `JobQueue(db_path)` — aiosqlite-backed queue; `init_db()`, submit / update / list / cancel / load / append-log
+- Metrics (metrics.py):
+  - `MetricRecord` — timestamp, category (`request | llm | pipeline | resource | eval`), name, value, unit, tags
+  - `MetricsStore(db_path)` — aiosqlite store with indexes on category / name / timestamp; `init_db()`, `record()`, query helpers
+- `MetricsMiddleware` (middleware.py) — captures every request's timing and error count; fire-and-forget
+- `PathMapper(mappings)` (path_mapper.py) — `to_linux()`, `to_windows()`; translates Windows UNC paths to Linux mount points
+- `ResourceSampler` (resource_sampler.py) — background task sampling CPU / memory / disk / GPU via `/proc` and `nvidia-smi` (no `psutil` dependency)
+- Routers (routes/): dashboard, environments, pipeline, jobs, query, corrections, files, metrics_route — each mounted via `app.include_router`
+- Static + Templates: vendored under `static/` and `templates/` — no CDN at runtime
 
 **Invariants**
-<!-- Candidate: MetricsMiddleware is fire-and-forget — never blocks an HTTP response. -->
-<!-- Candidate: zero npm/JS build — server-side jinja2 + HTMX partials only. -->
-<!-- Candidate: static assets vendored; no CDN fetch at runtime. -->
-<!-- Candidate: reverse-proxy compatible via root_path config. -->
-TODO
+- `MetricsMiddleware` is **fire-and-forget** — it never blocks or crashes a response. Metric failures are swallowed at `logger.debug`.
+- Zero npm / JS build step. Server-side jinja2 + HTMX partials only; Bootstrap 5 + Bootstrap Icons + HTMX are **vendored** under `static/`. Runtime never fetches from a CDN.
+- **Reverse-proxy compatible**: `root_path` is injected into every template context via `_template_response()`. Links built with `url_for` or prefixed by `{{ root_path }}` work behind a sub-path proxy mount.
+- SQLite uses WAL journal mode (both jobs and metrics DBs) — supports concurrent reads while a background job writes.
+- Jobs and metrics DBs are separate files (`web/nora.db`, `web/nora_metrics.db`) — metrics can be truncated for retention without touching job history.
+- `PathMapper` is case-insensitive for Windows paths (UNC paths are not case-sensitive); it returns `None` when no mapping matches — callers surface that as a user error, not a 500.
+- Resource sampler runs on a 30s interval, reads CPU from `/proc/stat`, memory from `/proc/meminfo`, GPU via `nvidia-smi` subprocess — deliberately dependency-free because the host may be locked down.
+- No proprietary document content in metric tags, job log lines sent to SSE, or error-message templates. Verbose logs persist to disk; chat-facing surfaces stay clean (D-012).
 
 **Key choices**
-<!-- Candidate: FastAPI + Bootstrap 5 + HTMX chosen over Streamlit/Gradio/Airflow (SESSION_SUMMARY §19). -->
-<!-- Candidate: asyncio.create_task() for background jobs; SSE for log streaming. -->
-TODO
+- FastAPI over Streamlit / Gradio because the UI needs fine-grained routing (corrections, files, jobs) and reverse-proxy deployment — SESSION_SUMMARY §19.
+- HTMX over a SPA framework — dramatically less JS, server renders HTML fragments, state lives in SQLite. Matches the "no npm build" invariant.
+- `asyncio.create_task()` for background jobs + SSE for log streaming — one process, no broker, deploys as a single service.
+- `ResourceSampler` reads `/proc` directly rather than importing `psutil` — one less pip install on restricted hosts and works inside containers without privileges.
+- Separate metrics DB so the metrics retention / truncation policy can be aggressive without touching the job history.
+- Ollama URL and default model live in `WebConfig` rather than env vars — the UI exposes them in settings; `PipelineContext` reads the same config when it creates a provider.
 
 **Non-goals**
-<!-- Candidate: no multi-user auth / RBAC in v1 (Open question — authentication model for production). -->
-TODO
+- No multi-user auth / RBAC in v1. Open question in PROJECT.md — when real authn is added, it's a distinct cross-cutting change, not a router plugin.
+- Not a deployment platform. Production deployment (systemd / container / proxy config) is the user's responsibility; app only exposes the right ASGI entrypoint.
+- No WebSocket real-time — SSE is sufficient for unidirectional log streaming; WS adds reconnect complexity we don't need.
+- No state beyond SQLite + filesystem. Caches are HTTP-level (browser) or derived artifacts in `<doc_root>/output/`; there is no Redis, no memcached, no in-process dict that outlives a request.
 
 <!-- BEGIN:STRUCTURE -->
 <!-- Regenerated by regen-map. Do not hand-edit. -->
 <!-- END:STRUCTURE -->
 
 **Depends on**
-TODO — link peer MODULE.md files. (Candidate: src/pipeline/, src/query/, src/corrections/, src/env/.)
+[env](../env/MODULE.md), [pipeline](../pipeline/MODULE.md), [query](../query/MODULE.md), [corrections](../corrections/MODULE.md).
 
 **Depended on by**
-TODO — link peer MODULE.md files. (No internal callers — it's the top of the stack.)
+None — top of the stack.

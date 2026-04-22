@@ -1,39 +1,42 @@
-<!-- retrofit: skeleton -->
 # standards
 
 **Purpose**
-TODO — retrofit skeleton; please fill in. (Observed: 3GPP standards ingestion — generic: no hardcoded spec lists, all specs and versions derived from how they're referenced in MNO requirement documents. Hybrid Selective — only ingest referenced sections + parent + siblings + definitions.)
+3GPP standards ingestion — generic, release-aware, LLM-free (TDD §5.6, D-004). Collects references from parsed/resolved MNO docs, downloads the matching 3GPP spec archives, parses them into section trees, and extracts **only the referenced sections plus local context** (Option C "Hybrid Selective"). Every spec and version is derived from what the MNO docs actually cite — no hardcoded spec list, no per-MNO branching.
 
 **Public surface**
-<!-- Candidates observed in code (to be curated, not copied verbatim): -->
-<!-- - SpecResolver, ResolvedSpec (spec_resolver.py) — maps spec+release to FTP download URL -->
-<!-- - SpecDownloader (spec_downloader.py) — downloads ZIP, extracts DOC/DOCX, LibreOffice headless DOC→DOCX conversion -->
-<!-- - SpecParser (spec_parser.py) — parses 3GPP DOCX into section tree -->
-<!-- - SectionExtractor (section_extractor.py) — extracts referenced sections + context -->
-<!-- - StandardsReferenceCollector (reference_collector.py) — aggregates references from manifests and tree text -->
-<!-- - SpecReference, AggregatedSpecRef, StandardsReferenceIndex, SpecSection, SpecDocument, ExtractedSpecContent (schema.py) -->
-<!-- - standards_cli.main (CLI entrypoint) -->
-TODO
+- Reference collection: `StandardsReferenceCollector` (reference_collector.py) — aggregates `SpecReference`s from resolver manifests and tree text into a `StandardsReferenceIndex`
+- Spec resolution & download: `SpecResolver`, `ResolvedSpec` (spec_resolver.py) — maps `(spec, release)` to a 3GPP FTP URL; `SpecDownloader` (spec_downloader.py) — downloads ZIPs, unpacks DOC/DOCX, runs headless LibreOffice DOC→DOCX conversion when needed
+- Parsing: `SpecParser` (spec_parser.py) — turns a 3GPP DOCX into a `SpecDocument` with a nested `SpecSection` tree
+- Selective extraction: `SectionExtractor` (section_extractor.py) — given referenced section numbers, returns those sections plus parents and local siblings as `ExtractedSpecContent`
+- Schema (schema.py): `SpecReference`, `AggregatedSpecRef`, `StandardsReferenceIndex`, `SpecSection`, `SpecDocument`, `ExtractedSpecContent` — all dataclasses; top-level ones have `to_dict` / `save_json` / `load_json`
+- CLI: `standards_cli.main` — collect | resolve | download | parse | extract
 
 **Invariants**
-<!-- Candidate: generic — works for any MNO without hardcoded spec lists. -->
-<!-- Candidate: release-aware — different MNO releases may reference different 3GPP releases; separate Standard_Section nodes per release. -->
-<!-- Candidate: LLM-free. -->
-TODO
+- **Generic**: no hardcoded `ALLOWED_SPECS`. Every `AggregatedSpecRef` comes from `SpecReference`s the resolver collected from document text. Adding a new MNO or release requires no code change.
+- **Release-aware**: the index key is `(spec, release)`, not spec alone. Different MNO releases often cite different 3GPP releases of the same spec, and they must produce separate ingested artifacts.
+- **LLM-free**: parsing, section matching, and extraction are deterministic.
+- Cache is path-structured under `data/standards/TS_{spec}/Rel-{N}/`. Manual placement is supported — if a DOC/DOCX is already in the cache dir, the downloader skips the download. This matters on offline work machines.
+- `ExtractedSpecContent` is the **only** artifact that downstream stages consume directly. The full `SpecDocument` is kept for debugging but is not what the graph/query layer indexes.
+- Option C Hybrid Selective: extract referenced sections + their parent chain + immediate siblings. Not full specs (too large, low signal-to-noise), not just referenced sections (loses definitional context).
 
 **Key choices**
-<!-- Candidate: Option C Hybrid Selective — referenced sections + context, not full specs (TDD §5.6, SESSION_SUMMARY §4). -->
-TODO
+- 3GPP FTP as the canonical source — public, versioned, stable. `SpecResolver` encodes the FTP naming convention so a new release just needs the resolver to recognize the new format if it changes.
+- DOC→DOCX via headless LibreOffice subprocess (no Python-level `.doc` reader) — older specs ship in .doc; python-docx only handles .docx.
+- `StandardsReferenceCollector` accepts both structured `ResolvedStandardsRef` from the resolver manifests and raw regex hits from tree text — text hits catch citations the parser missed.
+- Separate `SpecDocument` and `ExtractedSpecContent` schemas so a single spec parse can serve many selective extractions without re-parsing.
 
 **Non-goals**
-TODO
+- Not a general document scraper — only 3GPP TS/TR specs. GSMA / RFC citations are out of scope for v1.
+- Not a reference resolver for MNO-to-MNO cross-plan links — that's [resolver](../resolver/MODULE.md).
+- No full-spec storage in the graph or vector store — Hybrid Selective is the contract; changing to full-spec ingestion is a D-004-level decision.
+- No LLM-based section matching or summarization — if heuristics miss, the fix is to improve the regex or extend the collector, not add a language model.
 
 <!-- BEGIN:STRUCTURE -->
 <!-- Regenerated by regen-map. Do not hand-edit. -->
 <!-- END:STRUCTURE -->
 
 **Depends on**
-TODO — link peer MODULE.md files. (Candidate: src/resolver/, src/parser/.)
+[parser](../parser/MODULE.md) (for `RequirementTree`, `StandardsRef`), [resolver](../resolver/MODULE.md) (for `CrossReferenceManifest`, `ResolvedStandardsRef`).
 
 **Depended on by**
-TODO — link peer MODULE.md files. (Candidate: src/graph/, src/query/, src/pipeline/.)
+[graph](../graph/MODULE.md), [query](../query/MODULE.md), [pipeline](../pipeline/MODULE.md).

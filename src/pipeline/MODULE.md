@@ -1,36 +1,48 @@
-<!-- retrofit: skeleton -->
 # pipeline
 
 **Purpose**
-TODO — retrofit skeleton; please fill in. (Observed: staged pipeline runner orchestrating extract → profile → parse → resolve → taxonomy → standards → graph → vectorstore → eval. Typed error codes for remote debugging.)
+Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract → profile → parse → resolve → taxonomy → standards → graph → vectorstore → eval`. Owns the error-code catalog, compact-report formatters, stage dispatch table, and the shared `PipelineContext`. This is the layer that makes D-012 real — stable prefixed error codes + compact reports that the user can paste back from a work laptop without exposing proprietary content.
 
 **Public surface**
-<!-- Candidates observed in code (to be curated, not copied verbatim): -->
-<!-- - PipelineRunner, PipelineContext (runner.py) -->
-<!-- - StageResult (stages.py) + run_extract, run_profile, run_parse, run_resolve, run_taxonomy, run_standards, run_graph, run_vectorstore, run_eval (stages.py) -->
-<!-- - ErrorDef, PipelineError (error_codes.py) — stable prefixed error-code catalog (EXT-, PRF-, PRS-, RES-, TAX-, STD-, GRA-, VEC-, EVL-) -->
-<!-- - run_cli.main (CLI entrypoint) -->
-TODO
+- Orchestration (runner.py):
+  - `PipelineContext` — shared state (documents_dir, corrections_dir, eval_dir, stage_dirs, model_provider/name/timeout, mnos, releases, state); `stage_output(stage)`, `correction(filename)`, `create_llm_provider(require_real=False)`
+  - `PipelineRunner(ctx)` — `run(stages, continue_on_error=False) -> list[StageResult]`
+- Stage functions (stages.py): `run_extract`, `run_profile`, `run_parse`, `run_resolve`, `run_taxonomy`, `run_standards`, `run_graph`, `run_vectorstore`, `run_eval` — each `PipelineContext -> StageResult`
+- `StageResult` — `stage`, `status` (`OK | WARN | FAIL | SKIP`), `elapsed_seconds`, `stats`, optional `error_code`, `error_message`
+- `STAGE_FUNCS` — the stage-name → function dispatch table
+- Error catalog (error_codes.py):
+  - `ErrorDef` (code, message, hint), `PipelineError` (raised by stages)
+  - `CODES` dict — every EXT-, PRF-, PRS-, RES-, TAX-, STD-, GRF-, VEC-, EVL-, PIP-, ENV-, MDL- code with human-readable hint
+- Reporting (report.py): `format_compact_report()`, `format_verbose_report()`, `print_qc_template()`, `print_fix_template()`
+- CLI: `run_cli.main` — `stages | detect-hw | run ...`
 
 **Invariants**
-<!-- Candidate: every pipeline failure emits a stable prefixed error code registered in error_codes.py. Verbose logs persist to disk. Collaboration surface is `code + observation`. -->
-<!-- Candidate: each stage is re-runnable and idempotent; partial reruns pick up corrections from <doc_root>/corrections/. -->
-<!-- Candidate: each stage emits PIP metrics (timing, counts, pass/fail) and RPT compact-report lines. -->
-TODO
+- **Every failure surfaces a stable prefixed code** registered in `error_codes.CODES`. Ad-hoc strings are a D-012 violation — the user can't diagnose chat-pasted logs without the code.
+- Each stage is **re-runnable and idempotent** over the same inputs. Outputs go under `<doc_root>/output/<stage>/`; `corrections/*.json` is picked up automatically on the next run (D-011).
+- Stage order is fixed and matches `env.config.PIPELINE_STAGES`. Running a downstream stage without its prerequisites emits `PIP-E002` (required input missing) rather than silently failing later.
+- `StageResult.status` uses four discrete values: `OK` (clean), `WARN` (completed but flagged), `FAIL` (aborted), `SKIP` (not run this invocation). Collapsing WARN into OK loses the signal that drives compact QC reports.
+- `PipelineContext.create_llm_provider()` falls back to `MockLLMProvider` when Ollama is unreachable unless `require_real=True`. This keeps offline stages runnable on work laptops without an LLM server.
+- Compact reports (`format_compact_report`) contain **no proprietary content** — only stage names, codes, counts, and timings. Verbose reports (separate function) may contain content and go to disk, not chat.
 
 **Key choices**
-TODO
+- Plain functions per stage + dispatch dict instead of a class hierarchy — each stage is independently runnable from the CLI or tests without instantiating anything upstream.
+- Prefix-per-module error codes (EXT / PRF / PRS / RES / TAX / STD / GRF / VEC / EVL / PIP / ENV / MDL) — the prefix points the user at the right module without needing to read the message.
+- LLM provider creation is centralized in `PipelineContext` so stages don't each invent their own fallback policy; the "Ollama → Mock" fallback lives in one place.
+- Two report formats (compact vs verbose): compact is chat-pasteable and content-free; verbose goes to disk and may include context. The split is explicit because mixing them is exactly how proprietary content leaks.
+- `continue_on_error` is opt-in — default is fail-fast, because downstream stages usually can't recover from a missing input.
 
 **Non-goals**
-<!-- Candidate: not real-time — batch processing is sufficient for quarterly release cadence. -->
-TODO
+- Not a DAG/parallel executor — stages are serial and batch. Quarterly release cadence doesn't justify parallel infrastructure.
+- Not a scheduler — the Web UI's job queue ([web](../web/MODULE.md)) handles submission/persistence; pipeline just runs to completion when invoked.
+- No metrics persistence. Observability IDs (REQ/LLM/PIP/RES/MET) and the SQLite metrics DB live in [web](../web/MODULE.md); pipeline emits timings and counts but doesn't own storage.
+- No retry logic. A failed stage is re-runnable — rerun via CLI or fix the underlying input. Automated retries hide real errors.
 
 <!-- BEGIN:STRUCTURE -->
 <!-- Regenerated by regen-map. Do not hand-edit. -->
 <!-- END:STRUCTURE -->
 
 **Depends on**
-TODO — link peer MODULE.md files. (Candidate: src/extraction/, src/profiler/, src/parser/, src/resolver/, src/taxonomy/, src/standards/, src/graph/, src/vectorstore/, src/eval/, src/corrections/, src/env/.)
+[env](../env/MODULE.md), [corrections](../corrections/MODULE.md), [extraction](../extraction/MODULE.md), [profiler](../profiler/MODULE.md), [parser](../parser/MODULE.md), [resolver](../resolver/MODULE.md), [taxonomy](../taxonomy/MODULE.md), [standards](../standards/MODULE.md), [graph](../graph/MODULE.md), [vectorstore](../vectorstore/MODULE.md), [eval](../eval/MODULE.md), [llm](../llm/MODULE.md) (via `PipelineContext.create_llm_provider`).
 
 **Depended on by**
-TODO — link peer MODULE.md files. (Candidate: src/web/.)
+[web](../web/MODULE.md) (submits jobs via the pipeline runner).

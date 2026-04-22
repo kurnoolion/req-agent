@@ -1,49 +1,49 @@
-<!-- retrofit: skeleton -->
 # query
 
 **Purpose**
-TODO — retrofit skeleton; please fill in. (Observed: online query pipeline — analysis → MNO/release resolution → graph scoping → targeted RAG retrieval → context assembly → LLM synthesis with grounded citations.)
+Online query pipeline (TDD §7). A 6-stage chain that turns a natural-language question into a grounded, citation-bearing answer: `Analysis → MNO/Release Resolution → Graph Scoping → Targeted RAG → Context Assembly → LLM Synthesis`. Implements D-001: the **graph routes, RAG ranks** — retrieval never runs unscoped, and the graph decides which subset of the corpus is even eligible.
 
 **Public surface**
-<!-- Candidates observed in code (to be curated, not copied verbatim): -->
-<!-- Entry point: -->
-<!-- - QueryPipeline (pipeline.py) -->
-<!-- Stages: -->
-<!-- - LLMQueryAnalyzer, MockQueryAnalyzer (analyzer.py) -->
-<!-- - MNOReleaseResolver (resolver.py) -->
-<!-- - GraphScoper (graph_scope.py) -->
-<!-- - RAGRetriever (rag_retriever.py) -->
-<!-- - ContextBuilder (context_builder.py) -->
-<!-- - LLMSynthesizer, MockSynthesizer (synthesizer.py) -->
-<!-- Schema: -->
-<!-- - QueryType, DocTypeScope, QueryIntent, MNOScope, ScopedQuery (schema.py) -->
-<!-- - CandidateNode, CandidateSet, RetrievedChunk (schema.py) -->
-<!-- - StandardsContext, ChunkContext, AssembledContext (schema.py) -->
-<!-- - Citation, QueryResponse (schema.py) -->
-<!-- CLI: -->
-<!-- - query_cli.main -->
-TODO
+- Entry point: `QueryPipeline(graph, embedder, store, analyzer=None, synthesizer=None, top_k=10, max_depth=None, max_context_chars=30000)` (pipeline.py) — `query(raw_query) -> QueryResponse`
+- Stages (each replaceable by injection):
+  - `LLMQueryAnalyzer`, `MockQueryAnalyzer` (analyzer.py) — Stage 1
+  - `MNOReleaseResolver` (resolver.py) — Stage 2
+  - `GraphScoper` (graph_scope.py) — Stage 3
+  - `RAGRetriever` (rag_retriever.py) — Stage 4
+  - `ContextBuilder` (context_builder.py) — Stage 5
+  - `LLMSynthesizer`, `MockSynthesizer` (synthesizer.py) — Stage 6
+- Schema (schema.py):
+  - Enums: `QueryType` (single_doc, cross_doc, cross_mno_comparison, release_diff, standards_comparison, traceability, feature_level, general), `DocTypeScope`
+  - Per-stage dataclasses: `QueryIntent`, `MNOScope`, `ScopedQuery`, `CandidateNode`, `CandidateSet`, `RetrievedChunk`, `StandardsContext`, `ChunkContext`, `AssembledContext`, `Citation`, `QueryResponse`
+- CLI: `query_cli.main`
 
 **Invariants**
-<!-- Candidate: vector retrieval never runs unscoped — always within a graph-scoped candidate set. -->
-<!-- Candidate: synthesis always grounds citations to specific requirement IDs and document sections. -->
-TODO
+- **Graph-first, then RAG.** Vector retrieval is always filtered to the `requirement_ids` produced by `GraphScoper`. Unscoped retrieval is a D-001 violation, not a shortcut.
+- The 6 stages pass typed dataclasses — each stage's output is the next stage's only input. No stage reaches back for state.
+- Every stage is injectable — `QueryPipeline(analyzer=MyAnalyzer())` swaps Stage 1 without touching the rest. Mocks (`MockQueryAnalyzer`, `MockSynthesizer`) exist so the pipeline runs without any LLM for offline debugging.
+- `QueryResponse.citations` reference **specific** `(req_id, plan_id, section_number)` tuples (plus optional standards spec/section). Answers without citations are a bug in the synthesizer, not the default.
+- `max_context_chars` caps Stage 5 output — truncation is deterministic (preserves top-scored chunks first), never silent.
+- Graph and vector store are **inputs** to the pipeline, not owned by it — built offline by [graph](../graph/MODULE.md) and [vectorstore](../vectorstore/MODULE.md), loaded once at startup, reused per query.
 
 **Key choices**
-<!-- Candidate: KG+RAG hybrid — graph routes, RAG ranks (TDD §7, SESSION_SUMMARY §1, §2). -->
-<!-- Candidate: few-shot prompting + context fallback for citation quality (post-bug-fix work). -->
-TODO
+- Six stages instead of a single monolithic retriever so each can be tested and swapped independently — the mock analyzer/synthesizer is what makes the pipeline testable on a work laptop without LLM access.
+- `QueryType` carved into eight concrete kinds (release_diff, traceability, etc.) because each needs different graph scoping and different prompting. A generic pipeline that treats every query the same loses signal.
+- `CandidateSet` keeps `requirement_nodes`, `standards_nodes`, `feature_nodes` separate — retrieval filters on req IDs, context assembly attaches standards text by node, and future reranking can use feature nodes without re-traversing.
+- Prompting is few-shot + explicit grounding instructions; `LLMSynthesizer` includes a context fallback path for cases where the LLM skips citations (fix kept because dropping it caused regression in internal tests).
+- Pipeline defaults (`top_k=10`, `max_context_chars=30000`) live on the class, not in env config — most callers accept defaults; eval overrides.
 
 **Non-goals**
-<!-- Candidate: not a compliance checker (post-PoC, separate workflow). -->
-TODO
+- Not a compliance checker. "Is device X compliant with plan Y?" is a separate workflow that uses this pipeline as a primitive; don't collapse the two.
+- No retrieval reranking layer (cross-encoder, listwise) in v1 — vector-similarity + graph-scope is the baseline; add reranking only if eval shows the gap.
+- No multi-turn conversation state. Each `query()` call is independent; chat-like flows are assembled by the caller (web UI).
+- No write path — query never mutates the graph or vector store.
 
 <!-- BEGIN:STRUCTURE -->
 <!-- Regenerated by regen-map. Do not hand-edit. -->
 <!-- END:STRUCTURE -->
 
 **Depends on**
-TODO — link peer MODULE.md files. (Candidate: src/graph/, src/vectorstore/, src/llm/, src/resolver/, src/standards/, src/taxonomy/.)
+[graph](../graph/MODULE.md), [vectorstore](../vectorstore/MODULE.md), [llm](../llm/MODULE.md), [resolver](../resolver/MODULE.md) (types only), [standards](../standards/MODULE.md) (types for `StandardsContext`), [taxonomy](../taxonomy/MODULE.md) (feature nodes).
 
 **Depended on by**
-TODO — link peer MODULE.md files. (Candidate: src/web/, src/eval/, src/pipeline/.)
+[eval](../eval/MODULE.md), [web](../web/MODULE.md), [pipeline](../pipeline/MODULE.md) (not a runtime dep — pipeline emits the artifacts query consumes; listed here because stage ordering and artifact contracts are shared).
