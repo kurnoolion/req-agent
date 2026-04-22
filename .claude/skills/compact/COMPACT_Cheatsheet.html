@@ -1,0 +1,541 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>COMPACT Cheatsheet</title>
+<style>
+  html,body { margin:0; padding:0; background:#f5f5f5; }
+  body { padding:24px; display:flex; justify-content:center; font-family:Helvetica,Arial,sans-serif; }
+  .card { background:#fff; box-shadow:0 6px 24px rgba(0,0,0,0.12); border-radius:6px; overflow:hidden; max-width:1400px; width:100%; }
+  .card svg { display:block; width:100%; height:auto; }
+</style>
+</head>
+<body>
+<div class="card">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1400 2420" font-family="Helvetica, Arial, sans-serif">
+  <defs>
+    <style>
+      .t-title    { font-size: 64px; font-weight: 800; fill: #111; }
+      .t-tag      { font-size: 20px; fill: #555; }
+      .t-qual     { font-size: 14px; fill: #2ea44f; font-weight: 700; letter-spacing: 0.5px; }
+      .t-small    { font-size: 13px; fill: #555; }
+      .t-section  { font-size: 24px; font-weight: 800; fill: #111; letter-spacing: 0.8px; }
+      .t-sub      { font-size: 14px; fill: #666; font-style: italic; }
+      .t-phase    { font-size: 26px; font-weight: 800; fill: #fff; letter-spacing: 0.6px; }
+      .t-phaselab { font-size: 12px; font-weight: 700; fill: #fff; letter-spacing: 1.2px; opacity: 0.85; }
+      .t-label    { font-size: 12px; font-weight: 700; fill: #555; letter-spacing: 1px; }
+      .t-body     { font-size: 14px; fill: #222; }
+      .t-bodys    { font-size: 13px; fill: #222; }
+      .t-mono     { font-family: 'Menlo','Consolas',monospace; font-size: 13px; fill: #222; }
+      .t-monos    { font-family: 'Menlo','Consolas',monospace; font-size: 11px; fill: #444; }
+      .t-monob    { font-family: 'Menlo','Consolas',monospace; font-size: 14px; font-weight: 700; fill: #111; }
+      .t-skill    { font-family: 'Menlo','Consolas',monospace; font-size: 16px; font-weight: 700; fill: #111; }
+      .t-num      { font-size: 15px; font-weight: 800; fill: #fff; }
+      .t-flowname { font-size: 14px; font-weight: 700; fill: #111; }
+      .t-flowstep { font-size: 11px; fill: #222; }
+      .t-flowmono { font-family: 'Menlo','Consolas',monospace; font-size: 11px; fill: #111; font-weight: 600; }
+    </style>
+    <marker id="arr" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#333"/>
+    </marker>
+    <marker id="arr-d" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#999"/>
+    </marker>
+    <marker id="arr-g" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2ea44f"/>
+    </marker>
+  </defs>
+
+  <rect width="1400" height="2420" fill="#ffffff"/>
+
+  <!-- =========================================================
+       TITLE
+       ========================================================= -->
+  <rect x="40" y="40" width="14" height="90" fill="#2ea44f"/>
+  <text x="74" y="100" class="t-title">COMPACT</text>
+  <text x="74" y="130" class="t-tag">Context · Memory · Prompt engineering for team AI-partnered software dev</text>
+  <text x="74" y="158" font-size="16" fill="#2ea44f" font-weight="700" font-style="italic">Automatic context management via explicit memory + prompt layers</text>
+  <text x="1360" y="65" class="t-qual" text-anchor="end">AUDITED · CO-DEVELOPED · TEAM-LOCKED</text>
+  <text x="1360" y="87" class="t-small" text-anchor="end">Portable scaffold — works in Claude Code and Cline</text>
+  <text x="1360" y="107" class="t-small" text-anchor="end">Phase prompts tuned with EIP (Emotional Intelligence Prompting)</text>
+  <text x="1360" y="127" class="t-small" text-anchor="end">Markdown files as the shared team memory</text>
+  <text x="1360" y="147" class="t-small" text-anchor="end">State lives in the repo, not the chat</text>
+  <line x1="40" y1="175" x2="1360" y2="175" stroke="#e0e0e0" stroke-width="1.2"/>
+
+  <!-- =========================================================
+       SECTION 1 — THE SCAFFOLD (artifacts)
+       ========================================================= -->
+  <text x="40" y="205" class="t-section">1 · THE SCAFFOLD</text>
+  <text x="290" y="205" class="t-sub">everything COMPACT needs lives in markdown files the team can read, diff, and review</text>
+
+  <!-- Column A: docs/compact/ -->
+  <rect x="40" y="225" width="430" height="330" rx="10" fill="#f7f9fb" stroke="#c8d0d8" stroke-width="1.2"/>
+  <rect x="40" y="225" width="430" height="30" rx="10" fill="#34495e"/>
+  <rect x="40" y="245" width="430" height="10" fill="#34495e"/>
+  <text x="55" y="246" class="t-phaselab">TEAM SCAFFOLD</text>
+  <text x="458" y="246" class="t-phaselab" text-anchor="end">docs/compact/</text>
+
+  <!-- PROJECT.md -->
+  <rect x="55" y="270" width="14" height="14" fill="#3498db"/>
+  <text x="78" y="282" class="t-monob">PROJECT.md</text>
+  <text x="78" y="298" class="t-bodys">Identity: who / why / scope / Contributors table</text>
+
+  <!-- requirements.md -->
+  <rect x="55" y="315" width="14" height="14" fill="#e67e22"/>
+  <text x="78" y="327" class="t-monob">requirements.md</text>
+  <text x="78" y="343" class="t-bodys">Behavioral specs — FR-N · NFR-N · Deferred</text>
+
+  <!-- STATUS.md -->
+  <rect x="55" y="360" width="14" height="14" fill="#7f8c8d"/>
+  <text x="78" y="372" class="t-monob">STATUS.md</text>
+  <text x="78" y="388" class="t-bodys">Active phase · Done / In progress / Next · Flags</text>
+
+  <!-- DECISIONS.md -->
+  <rect x="55" y="405" width="14" height="14" fill="#8e44ad"/>
+  <text x="78" y="417" class="t-monob">DECISIONS.md</text>
+  <text x="78" y="433" class="t-bodys">Append-only ADR log · D-XXX · immutable · supersede via new entry</text>
+
+  <!-- MAP.md -->
+  <rect x="55" y="450" width="14" height="14" fill="#16a085"/>
+  <text x="78" y="462" class="t-monob">MAP.md</text>
+  <text x="78" y="478" class="t-bodys">Module table + Mermaid dep graph — regenerated, never hand-edited</text>
+
+  <!-- phases/ -->
+  <rect x="55" y="495" width="14" height="14" fill="#2ea44f"/>
+  <text x="78" y="507" class="t-monob">phases/&lt;phase&gt;.md  (× 3 files)</text>
+  <text x="78" y="523" class="t-bodys">Per-phase persona — loaded by /switch-phase</text>
+  <text x="78" y="540" class="t-bodys">+ structure-conventions.md — what counts as a module</text>
+
+  <!-- Column B: src/**/MODULE.md -->
+  <rect x="485" y="225" width="430" height="330" rx="10" fill="#f7f9fb" stroke="#c8d0d8" stroke-width="1.2"/>
+  <rect x="485" y="225" width="430" height="30" rx="10" fill="#8e44ad"/>
+  <rect x="485" y="245" width="430" height="10" fill="#8e44ad"/>
+  <text x="500" y="246" class="t-phaselab">PER-MODULE CONTRACT</text>
+  <text x="903" y="246" class="t-phaselab" text-anchor="end">src/&lt;module&gt;/MODULE.md</text>
+
+  <text x="500" y="285" class="t-bodys"><tspan font-weight="700">Owner</tspan> (optional)  ·  who maintains it</text>
+  <text x="500" y="305" class="t-bodys"><tspan font-weight="700">Purpose</tspan>  ·  1–2 lines; serves FR-X, NFR-Y</text>
+  <text x="500" y="325" class="t-bodys"><tspan font-weight="700">Public surface</tspan>  ·  functions/types callers rely on</text>
+  <text x="500" y="345" class="t-bodys"><tspan font-weight="700">Invariants</tspan>  ·  guarantees (threading, ordering, state)</text>
+  <text x="500" y="365" class="t-bodys"><tspan font-weight="700">Key choices</tspan>  ·  links to [D-XXX] in DECISIONS.md</text>
+  <text x="500" y="385" class="t-bodys"><tspan font-weight="700">Non-goals</tspan>  ·  what this module deliberately does NOT do</text>
+  <text x="500" y="405" class="t-bodys"><tspan font-weight="700">Depends on</tspan> / <tspan font-weight="700">Depended on by</tspan>  ·  edges of the dep graph</text>
+  <text x="500" y="425" class="t-bodys"><tspan font-weight="700">Structure</tspan>  ·  regen markers — filled by /regen-map</text>
+  <text x="500" y="445" class="t-bodys"><tspan font-weight="700">Deferred</tspan> (optional)  ·  planned-but-unbuilt</text>
+
+  <rect x="500" y="465" width="400" height="75" rx="6" fill="#fff4e6" stroke="#e67e22" stroke-width="1"/>
+  <text x="510" y="482" class="t-label" fill="#c0651a">HARD vs SOFT EDITS</text>
+  <text x="510" y="502" class="t-bodys"><tspan font-weight="700">HARD</tspan> — signature / invariant / non-goal / dep change</text>
+  <text x="510" y="518" class="t-bodys">      ⟶ stop · /switch-phase architecture · log D-XXX</text>
+  <text x="510" y="534" class="t-bodys"><tspan font-weight="700">SOFT</tspan> — purely additive ⟶ accept at /close-session</text>
+
+  <!-- Column C: code -->
+  <rect x="930" y="225" width="430" height="330" rx="10" fill="#f7f9fb" stroke="#c8d0d8" stroke-width="1.2"/>
+  <rect x="930" y="225" width="430" height="30" rx="10" fill="#2c3e50"/>
+  <rect x="930" y="245" width="430" height="10" fill="#2c3e50"/>
+  <text x="945" y="246" class="t-phaselab">IMPLEMENTATION</text>
+  <text x="1348" y="246" class="t-phaselab" text-anchor="end">src/ code</text>
+
+  <text x="945" y="285" class="t-bodys">The actual code — must honor the MODULE.md contract</text>
+  <text x="945" y="305" class="t-bodys">above it, and the FR/NFR entries it claims to serve.</text>
+
+  <rect x="945" y="330" width="400" height="210" rx="6" fill="#eef5ee" stroke="#27ae60" stroke-width="1"/>
+  <text x="955" y="350" class="t-label" fill="#1e7d3a">THE R / D / I LAYERS</text>
+  <rect x="955" y="360" width="16" height="16" fill="#e67e22"/>
+  <text x="978" y="373" class="t-bodys"><tspan font-weight="700">R — Requirements</tspan>  requirements.md (FR/NFR)</text>
+  <rect x="955" y="385" width="16" height="16" fill="#8e44ad"/>
+  <text x="978" y="398" class="t-bodys"><tspan font-weight="700">D — Design</tspan>  MODULE.md + DECISIONS entries</text>
+  <rect x="955" y="410" width="16" height="16" fill="#2c3e50"/>
+  <text x="978" y="423" class="t-bodys"><tspan font-weight="700">I — Implementation</tspan>  code under src/</text>
+  <line x1="955" y1="437" x2="1335" y2="437" stroke="#cde4d1" stroke-width="1"/>
+  <text x="955" y="457" class="t-bodys">Each layer is authored and audited separately.</text>
+  <text x="955" y="477" class="t-bodys"><tspan class="t-flowmono">/drift-check</tspan> surfaces mismatches <tspan font-weight="700">without auto-fixing</tspan>:</text>
+  <text x="955" y="496" class="t-bodys">the user picks which layer changes to resolve each drift.</text>
+  <text x="955" y="520" class="t-small">Deferred items (in any layer) are NOT drift — surfaced separately.</text>
+
+  <!-- =========================================================
+       SECTION 2 — THE THREE PHASES
+       ========================================================= -->
+  <text x="40" y="600" class="t-section">2 · THREE PHASES</text>
+  <text x="290" y="600" class="t-sub">each phase loads an EIP-tuned persona + different artifacts — switch with /switch-phase &lt;name&gt;</text>
+
+  <!-- Phase 1: Requirements -->
+  <rect x="40" y="620" width="425" height="420" rx="10" fill="#ffffff" stroke="#e67e22" stroke-width="2"/>
+  <rect x="40" y="620" width="425" height="58" rx="10" fill="#e67e22"/>
+  <rect x="40" y="660" width="425" height="18" fill="#e67e22"/>
+  <text x="60" y="660" class="t-phase">REQUIREMENTS</text>
+  <text x="445" y="660" class="t-phaselab" text-anchor="end">PHASE 1</text>
+
+  <text x="55" y="705" class="t-label">PERSONA</text>
+  <text x="55" y="724" class="t-bodys">Requirements analyst + product thinking partner.</text>
+  <text x="55" y="742" class="t-bodys">Probe the problem, surface assumptions, avoid solutioning.</text>
+
+  <text x="55" y="775" class="t-label">LOADS</text>
+  <text x="55" y="794" class="t-mono">PROJECT.md  ·  STATUS.md  ·  requirements.md</text>
+  <text x="55" y="812" class="t-mono">phases/requirements.md</text>
+  <text x="55" y="832" class="t-small">(+ design-inputs/ or retrofit-snapshot.md if present)</text>
+
+  <text x="55" y="865" class="t-label">PRODUCES</text>
+  <text x="55" y="884" class="t-bodys">• <tspan class="t-flowmono">PROJECT.md</tspan> — identity + Contributors table</text>
+  <text x="55" y="902" class="t-bodys">• <tspan class="t-flowmono">requirements.md</tspan> — FR-N, NFR-N, Deferred</text>
+  <text x="55" y="920" class="t-bodys">• Open questions + key <tspan class="t-flowmono">DECISIONS.md</tspan> entries</text>
+
+  <text x="55" y="955" class="t-label">EXIT WHEN</text>
+  <text x="55" y="974" class="t-bodys">v1 scope + users + success criteria present;</text>
+  <text x="55" y="992" class="t-bodys">FR set stable enough to start architecting against.</text>
+
+  <text x="55" y="1022" class="t-small">Do NOT pre-load MODULE.md files — scope creep.</text>
+
+  <!-- Phase 2: Architecture -->
+  <rect x="487" y="620" width="425" height="420" rx="10" fill="#ffffff" stroke="#3498db" stroke-width="2"/>
+  <rect x="487" y="620" width="425" height="58" rx="10" fill="#3498db"/>
+  <rect x="487" y="660" width="425" height="18" fill="#3498db"/>
+  <text x="507" y="660" class="t-phase">ARCHITECTURE</text>
+  <text x="892" y="660" class="t-phaselab" text-anchor="end">PHASE 2</text>
+
+  <text x="502" y="705" class="t-label">PERSONA</text>
+  <text x="502" y="724" class="t-bodys">Senior architect + design partner. Design doc-first,</text>
+  <text x="502" y="742" class="t-bodys">one module at a time. Show trade-offs, flag over-engineering.</text>
+
+  <text x="502" y="775" class="t-label">LOADS</text>
+  <text x="502" y="794" class="t-mono">PROJECT.md  ·  STATUS.md  ·  MAP.md</text>
+  <text x="502" y="812" class="t-mono">structure-conventions.md  ·  MODULE.md for current</text>
+  <text x="502" y="830" class="t-mono">phases/architecture.md</text>
+  <text x="502" y="848" class="t-small">requirements.md on demand  ·  peer MODULE.md on demand</text>
+
+  <text x="502" y="880" class="t-label">PRODUCES</text>
+  <text x="502" y="899" class="t-bodys">• <tspan class="t-flowmono">MODULE.md</tspan> drafts — curated sections filled</text>
+  <text x="502" y="917" class="t-bodys">• <tspan class="t-flowmono">DECISIONS.md</tspan> entries — D-XXX, immutable</text>
+  <text x="502" y="935" class="t-bodys">• Contribution-surface modules for non-dev stakeholders</text>
+
+  <text x="502" y="967" class="t-label">EXIT WHEN</text>
+  <text x="502" y="986" class="t-bodys">Every planned module has a MODULE.md draft;</text>
+  <text x="502" y="1004" class="t-bodys">every FR/NFR has ≥1 owning module; dep graph acyclic.</text>
+
+  <text x="502" y="1024" class="t-small">No separate "risk register" — risks live in DECISIONS or STATUS Flags.</text>
+
+  <!-- Phase 3: Development -->
+  <rect x="934" y="620" width="425" height="420" rx="10" fill="#ffffff" stroke="#27ae60" stroke-width="2"/>
+  <rect x="934" y="620" width="425" height="58" rx="10" fill="#27ae60"/>
+  <rect x="934" y="660" width="425" height="18" fill="#27ae60"/>
+  <text x="954" y="660" class="t-phase">DEVELOPMENT</text>
+  <text x="1339" y="660" class="t-phaselab" text-anchor="end">PHASE 3</text>
+
+  <text x="949" y="705" class="t-label">PERSONA</text>
+  <text x="949" y="724" class="t-bodys">Senior engineering partner. Build in small pieces,</text>
+  <text x="949" y="742" class="t-bodys">honor the MODULE.md contract, flag contract drift.</text>
+
+  <text x="949" y="775" class="t-label">LOADS</text>
+  <text x="949" y="794" class="t-mono">STATUS.md  ·  MODULE.md for current</text>
+  <text x="949" y="812" class="t-mono">MODULE.md of direct deps  ·  phases/development.md</text>
+  <text x="949" y="832" class="t-small">requirements.md — Tier-2, only when task cites an FR/NFR</text>
+
+  <text x="949" y="865" class="t-label">PRODUCES</text>
+  <text x="949" y="884" class="t-bodys">• Code + tests + debug instrumentation</text>
+  <text x="949" y="902" class="t-bodys">• Soft-flag MODULE.md deltas (additive edits)</text>
+  <text x="949" y="920" class="t-bodys">• Session state updates at <tspan class="t-flowmono">/close-session</tspan></text>
+
+  <text x="949" y="955" class="t-label">EXIT WHEN</text>
+  <text x="949" y="974" class="t-bodys">Feature works · tests pass · MODULE.md contracts honored</text>
+  <text x="949" y="992" class="t-bodys">· no unresolved hard-flag changes in working tree.</text>
+
+  <text x="949" y="1022" class="t-small">About to change a curated section? STOP. Switch to architecture first.</text>
+
+  <!-- Switch-phase arrows between phases -->
+  <path d="M467,810 L485,810" stroke="#333" stroke-width="1.8" fill="none" marker-end="url(#arr)"/>
+  <path d="M485,830 L467,830" stroke="#333" stroke-width="1.8" fill="none" marker-end="url(#arr)"/>
+  <path d="M914,810 L932,810" stroke="#333" stroke-width="1.8" fill="none" marker-end="url(#arr)"/>
+  <path d="M932,830 L914,830" stroke="#333" stroke-width="1.8" fill="none" marker-end="url(#arr)"/>
+  <text x="476" y="800" class="t-monos" text-anchor="middle">/switch-phase</text>
+  <text x="923" y="800" class="t-monos" text-anchor="middle">/switch-phase</text>
+
+  <!-- =========================================================
+       SECTION 3 — THE SIX SKILLS
+       ========================================================= -->
+  <text x="40" y="1090" class="t-section">3 · SIX SKILLS</text>
+  <text x="260" y="1090" class="t-sub">the only commands you invoke — each writes a narrow, documented surface</text>
+
+  <!-- Skill 1: /project-init -->
+  <rect x="40" y="1110" width="430" height="135" rx="10" fill="#fffbea" stroke="#f39c12" stroke-width="1.5"/>
+  <circle cx="66" cy="1136" r="16" fill="#f39c12"/>
+  <text x="66" y="1142" class="t-num" text-anchor="middle">1</text>
+  <text x="92" y="1142" class="t-skill">/project-init</text>
+  <text x="92" y="1163" class="t-bodys">Scaffold a new project (or <tspan class="t-flowmono">--retrofit</tspan> an existing one).</text>
+  <text x="92" y="1181" class="t-bodys">Interview → generate phase prompts + skeleton.</text>
+  <text x="55" y="1208" class="t-label">WRITES</text>
+  <text x="55" y="1227" class="t-monos">docs/compact/* · phases/* · structure-conventions.md</text>
+  <text x="55" y="1241" class="t-monos">(retrofit) retrofit-snapshot.md · MODULE.md skeletons</text>
+
+  <!-- Skill 2: /switch-phase -->
+  <rect x="487" y="1110" width="430" height="135" rx="10" fill="#fffbea" stroke="#f39c12" stroke-width="1.5"/>
+  <circle cx="513" cy="1136" r="16" fill="#f39c12"/>
+  <text x="513" y="1142" class="t-num" text-anchor="middle">2</text>
+  <text x="539" y="1142" class="t-skill">/switch-phase &lt;phase&gt;</text>
+  <text x="539" y="1163" class="t-bodys">phase ∈ {requirements, architecture, development}.</text>
+  <text x="539" y="1181" class="t-bodys">Reloads persona; flags intent/phase mismatch.</text>
+  <text x="502" y="1208" class="t-label">WRITES</text>
+  <text x="502" y="1227" class="t-monos">STATUS.md — Active phase + Last updated lines only</text>
+
+  <!-- Skill 3: /regen-map -->
+  <rect x="934" y="1110" width="425" height="135" rx="10" fill="#fffbea" stroke="#f39c12" stroke-width="1.5"/>
+  <circle cx="960" cy="1136" r="16" fill="#f39c12"/>
+  <text x="960" y="1142" class="t-num" text-anchor="middle">3</text>
+  <text x="986" y="1142" class="t-skill">/regen-map</text>
+  <text x="986" y="1163" class="t-bodys">Mechanical: regenerate MAP.md + each MODULE.md's</text>
+  <text x="986" y="1181" class="t-bodys">Structure section. Usually auto-called by /close-session.</text>
+  <text x="949" y="1208" class="t-label">WRITES</text>
+  <text x="949" y="1227" class="t-monos">MAP.md · MODULE.md Structure sections (regen markers only)</text>
+
+  <!-- Skill 4: /close-session -->
+  <rect x="40" y="1260" width="430" height="135" rx="10" fill="#fffbea" stroke="#f39c12" stroke-width="1.5"/>
+  <circle cx="66" cy="1286" r="16" fill="#f39c12"/>
+  <text x="66" y="1292" class="t-num" text-anchor="middle">4</text>
+  <text x="92" y="1292" class="t-skill">/close-session</text>
+  <text x="92" y="1313" class="t-bodys">End-of-session ritual. 10 steps: triage decisions,</text>
+  <text x="92" y="1331" class="t-bodys">audit MODULE.md deltas, regen map, run doctor, commit.</text>
+  <text x="55" y="1358" class="t-label">WRITES</text>
+  <text x="55" y="1377" class="t-monos">STATUS.md · DECISIONS.md (append) · MODULE.md (soft flags)</text>
+  <text x="55" y="1391" class="t-monos">+ git commit for the session</text>
+
+  <!-- Skill 5: /drift-check -->
+  <rect x="487" y="1260" width="430" height="135" rx="10" fill="#fffbea" stroke="#f39c12" stroke-width="1.5"/>
+  <circle cx="513" cy="1286" r="16" fill="#f39c12"/>
+  <text x="513" y="1292" class="t-num" text-anchor="middle">5</text>
+  <text x="539" y="1292" class="t-skill">/drift-check &lt;mode&gt;</text>
+  <text x="539" y="1313" class="t-bodys">mode ∈ {requirements, design, dev-full, dev-module, all}.</text>
+  <text x="539" y="1331" class="t-bodys">Interactive — user picks direction per drift.</text>
+  <text x="502" y="1358" class="t-label">WRITES</text>
+  <text x="502" y="1377" class="t-monos">only on user-approved resolutions — layer the user picked</text>
+  <text x="502" y="1391" class="t-monos">+ STATUS.md marker line</text>
+
+  <!-- Skill 6: /doctor -->
+  <rect x="934" y="1260" width="425" height="135" rx="10" fill="#fffbea" stroke="#f39c12" stroke-width="1.5"/>
+  <circle cx="960" cy="1286" r="16" fill="#f39c12"/>
+  <text x="960" y="1292" class="t-num" text-anchor="middle">6</text>
+  <text x="986" y="1292" class="t-skill">/doctor</text>
+  <text x="986" y="1313" class="t-bodys">12-check scaffold audit: schema, cross-refs, step</text>
+  <text x="986" y="1331" class="t-bodys">references, retrofit scope. Read-only — reports, no edits.</text>
+  <text x="949" y="1358" class="t-label">WRITES</text>
+  <text x="949" y="1377" class="t-monos">nothing — prints findings for maintainer to fix</text>
+  <text x="949" y="1391" class="t-monos">runs unconditionally at end of /close-session</text>
+
+  <!-- =========================================================
+       SECTION 4 — USE-CASE FLOWS
+       ========================================================= -->
+  <text x="40" y="1450" class="t-section">4 · USE-CASE FLOWS</text>
+  <text x="310" y="1450" class="t-sub">how the skills compose for the common scenarios</text>
+
+  <!-- Flow helper macro: box + arrow -->
+  <!-- Flow 1: Greenfield new project -->
+  <rect x="40" y="1470" width="1319" height="88" rx="8" fill="#f0f7ff" stroke="#3498db" stroke-width="1.2"/>
+  <circle cx="68" cy="1498" r="18" fill="#3498db"/>
+  <text x="68" y="1504" class="t-num" text-anchor="middle">A</text>
+  <text x="96" y="1494" class="t-flowname">NEW PROJECT — greenfield</text>
+  <text x="96" y="1512" class="t-small">Start from scratch. Interview drives scaffold generation.</text>
+
+  <g transform="translate(40,1525)">
+    <rect x="56"  y="0" width="135" height="22" rx="4" fill="#fff" stroke="#3498db"/>
+    <text x="124" y="15" class="t-flowmono" text-anchor="middle">/project-init</text>
+    <path d="M191,11 L215,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="215" y="0" width="130" height="22" rx="4" fill="#fff" stroke="#3498db"/>
+    <text x="280" y="15" class="t-flowstep" text-anchor="middle">interview (7 topics)</text>
+    <path d="M345,11 L369,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="369" y="0" width="170" height="22" rx="4" fill="#fff" stroke="#3498db"/>
+    <text x="454" y="15" class="t-flowstep" text-anchor="middle">generate phase prompts + scaffold</text>
+    <path d="M539,11 L563,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="563" y="0" width="190" height="22" rx="4" fill="#fff" stroke="#3498db"/>
+    <text x="658" y="15" class="t-flowmono" text-anchor="middle">/switch-phase requirements</text>
+    <path d="M753,11 L777,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="777" y="0" width="130" height="22" rx="4" fill="#fff" stroke="#3498db"/>
+    <text x="842" y="15" class="t-flowstep" text-anchor="middle">fill PROJECT + FR/NFR</text>
+    <path d="M907,11 L931,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="931" y="0" width="145" height="22" rx="4" fill="#fff" stroke="#3498db"/>
+    <text x="1003" y="15" class="t-flowmono" text-anchor="middle">/switch-phase ...</text>
+    <path d="M1076,11 L1100,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="1100" y="0" width="150" height="22" rx="4" fill="#fff" stroke="#3498db"/>
+    <text x="1175" y="15" class="t-flowmono" text-anchor="middle">/close-session</text>
+  </g>
+
+  <!-- Flow 2: Retrofit early-stage -->
+  <rect x="40" y="1574" width="1319" height="88" rx="8" fill="#fff4e6" stroke="#e67e22" stroke-width="1.2"/>
+  <circle cx="68" cy="1602" r="18" fill="#e67e22"/>
+  <text x="68" y="1608" class="t-num" text-anchor="middle">B</text>
+  <text x="96" y="1598" class="t-flowname">RETROFIT — early-stage codebase (has reqs + some design, little code)</text>
+  <text x="96" y="1616" class="t-small">Reconcile design intent with observed code. Requirement IDs preserved verbatim.</text>
+
+  <g transform="translate(40,1629)">
+    <rect x="56"  y="0" width="180" height="22" rx="4" fill="#fff" stroke="#e67e22"/>
+    <text x="146" y="15" class="t-flowmono" text-anchor="middle">/project-init --retrofit</text>
+    <path d="M236,11 L260,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="260" y="0" width="165" height="22" rx="4" fill="#fff" stroke="#e67e22"/>
+    <text x="342" y="15" class="t-flowstep" text-anchor="middle">scan → retrofit-snapshot.md</text>
+    <path d="M425,11 L449,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="449" y="0" width="180" height="22" rx="4" fill="#fff" stroke="#e67e22"/>
+    <text x="539" y="15" class="t-flowstep" text-anchor="middle">seed MODULE.md skeletons</text>
+    <path d="M629,11 L653,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="653" y="0" width="190" height="22" rx="4" fill="#fff" stroke="#e67e22"/>
+    <text x="748" y="15" class="t-flowmono" text-anchor="middle">/switch-phase requirements</text>
+    <path d="M843,11 L867,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="867" y="0" width="205" height="22" rx="4" fill="#fff" stroke="#e67e22"/>
+    <text x="969" y="15" class="t-flowstep" text-anchor="middle">extract FR/NFR · reconcile w/ code</text>
+    <path d="M1072,11 L1096,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="1096" y="0" width="155" height="22" rx="4" fill="#fff" stroke="#e67e22"/>
+    <text x="1173" y="15" class="t-flowmono" text-anchor="middle">/drift-check all</text>
+  </g>
+
+  <!-- Flow 3: Retrofit ongoing -->
+  <rect x="40" y="1678" width="1319" height="88" rx="8" fill="#f4efff" stroke="#8e44ad" stroke-width="1.2"/>
+  <circle cx="68" cy="1706" r="18" fill="#8e44ad"/>
+  <text x="68" y="1712" class="t-num" text-anchor="middle">C</text>
+  <text x="96" y="1702" class="t-flowname">RETROFIT — ongoing codebase (has reqs + design + significant code)</text>
+  <text x="96" y="1720" class="t-small">Prioritize architecture curation; `&lt;!-- retrofit: skeleton --&gt;` sentinel gives grace period from drift-check.</text>
+
+  <g transform="translate(40,1733)">
+    <rect x="56"  y="0" width="180" height="22" rx="4" fill="#fff" stroke="#8e44ad"/>
+    <text x="146" y="15" class="t-flowmono" text-anchor="middle">/project-init --retrofit</text>
+    <path d="M236,11 L260,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="260" y="0" width="190" height="22" rx="4" fill="#fff" stroke="#8e44ad"/>
+    <text x="355" y="15" class="t-flowmono" text-anchor="middle">/switch-phase architecture</text>
+    <path d="M450,11 L474,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="474" y="0" width="210" height="22" rx="4" fill="#fff" stroke="#8e44ad"/>
+    <text x="579" y="15" class="t-flowstep" text-anchor="middle">curate each MODULE.md skeleton</text>
+    <path d="M684,11 L708,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="708" y="0" width="210" height="22" rx="4" fill="#fff" stroke="#8e44ad"/>
+    <text x="813" y="15" class="t-flowstep" text-anchor="middle">remove retrofit: skeleton sentinel</text>
+    <path d="M918,11 L942,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="942" y="0" width="150" height="22" rx="4" fill="#fff" stroke="#8e44ad"/>
+    <text x="1017" y="15" class="t-flowmono" text-anchor="middle">/drift-check design</text>
+    <path d="M1092,11 L1116,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="1116" y="0" width="140" height="22" rx="4" fill="#fff" stroke="#8e44ad"/>
+    <text x="1186" y="15" class="t-flowmono" text-anchor="middle">/drift-check dev-full</text>
+  </g>
+
+  <!-- Flow 4: Daily session -->
+  <rect x="40" y="1782" width="1319" height="88" rx="8" fill="#eef9f1" stroke="#27ae60" stroke-width="1.2"/>
+  <circle cx="68" cy="1810" r="18" fill="#27ae60"/>
+  <text x="68" y="1816" class="t-num" text-anchor="middle">D</text>
+  <text x="96" y="1806" class="t-flowname">TYPICAL WORK SESSION</text>
+  <text x="96" y="1824" class="t-small">Day-to-day loop. Memory only gets made at /close-session — everything mid-session is working tree.</text>
+
+  <g transform="translate(40,1837)">
+    <rect x="56"  y="0" width="180" height="22" rx="4" fill="#fff" stroke="#27ae60"/>
+    <text x="146" y="15" class="t-flowstep" text-anchor="middle">open repo · read STATUS.md</text>
+    <path d="M236,11 L260,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="260" y="0" width="175" height="22" rx="4" fill="#fff" stroke="#27ae60"/>
+    <text x="347" y="15" class="t-flowmono" text-anchor="middle">/switch-phase &lt;phase&gt;</text>
+    <path d="M435,11 L459,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="459" y="0" width="205" height="22" rx="4" fill="#fff" stroke="#27ae60"/>
+    <text x="561" y="15" class="t-flowstep" text-anchor="middle">work (code / design / discuss)</text>
+    <path d="M664,11 L688,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="688" y="0" width="165" height="22" rx="4" fill="#fff" stroke="#27ae60"/>
+    <text x="770" y="15" class="t-flowstep" text-anchor="middle">hit intent mismatch?</text>
+    <path d="M853,11 L877,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="877" y="0" width="170" height="22" rx="4" fill="#fff" stroke="#27ae60"/>
+    <text x="962" y="15" class="t-flowmono" text-anchor="middle">/switch-phase ...</text>
+    <path d="M1047,11 L1071,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="1071" y="0" width="185" height="22" rx="4" fill="#fff" stroke="#27ae60"/>
+    <text x="1163" y="15" class="t-flowmono" text-anchor="middle">/close-session  (→ commit)</text>
+  </g>
+
+  <!-- Flow 5: Drift + doctor -->
+  <rect x="40" y="1886" width="1319" height="88" rx="8" fill="#fff5f5" stroke="#c0392b" stroke-width="1.2"/>
+  <circle cx="68" cy="1914" r="18" fill="#c0392b"/>
+  <text x="68" y="1920" class="t-num" text-anchor="middle">E</text>
+  <text x="96" y="1910" class="t-flowname">DRIFT DETECTION + CONSISTENCY AUDIT</text>
+  <text x="96" y="1928" class="t-small">Invoke when R/D/I layers may have diverged, or before a release. Interactive — user drives every resolution.</text>
+
+  <g transform="translate(40,1941)">
+    <rect x="56"  y="0" width="175" height="22" rx="4" fill="#fff" stroke="#c0392b"/>
+    <text x="143" y="15" class="t-flowmono" text-anchor="middle">/drift-check &lt;mode&gt;</text>
+    <path d="M231,11 L255,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="255" y="0" width="175" height="22" rx="4" fill="#fff" stroke="#c0392b"/>
+    <text x="342" y="15" class="t-flowstep" text-anchor="middle">findings: [DRIFT-N] list</text>
+    <path d="M430,11 L454,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="454" y="0" width="240" height="22" rx="4" fill="#fff" stroke="#c0392b"/>
+    <text x="574" y="15" class="t-flowstep" text-anchor="middle">resolve each: a/b/c/d/e (user picks)</text>
+    <path d="M694,11 L718,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="718" y="0" width="170" height="22" rx="4" fill="#fff" stroke="#c0392b"/>
+    <text x="803" y="15" class="t-flowstep" text-anchor="middle">apply edits · confirm diff</text>
+    <path d="M888,11 L912,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="912" y="0" width="165" height="22" rx="4" fill="#fff" stroke="#c0392b"/>
+    <text x="994" y="15" class="t-flowstep" text-anchor="middle">cascade? (R→D→I)</text>
+    <path d="M1077,11 L1101,11" stroke="#333" stroke-width="1.4" marker-end="url(#arr)"/>
+    <rect x="1101" y="0" width="155" height="22" rx="4" fill="#fff" stroke="#c0392b"/>
+    <text x="1178" y="15" class="t-flowmono" text-anchor="middle">/doctor (audit)</text>
+  </g>
+
+  <!-- =========================================================
+       SECTION 5 — PROGRESSIVE CONTEXT LOADING
+       ========================================================= -->
+  <text x="40" y="2020" class="t-section">5 · WHAT'S IN CONTEXT AT ANY TIME</text>
+  <text x="560" y="2020" class="t-sub">progressive loading — each phase is narrow on purpose; more context ≠ better reasoning</text>
+
+  <!-- Requirements context -->
+  <rect x="40" y="2040" width="425" height="300" rx="10" fill="#fffaf3" stroke="#e67e22" stroke-width="1.3"/>
+  <rect x="40" y="2040" width="425" height="34" rx="10" fill="#e67e22"/>
+  <rect x="40" y="2060" width="425" height="14" fill="#e67e22"/>
+  <text x="55" y="2062" class="t-phaselab">REQUIREMENTS CONTEXT</text>
+
+  <text x="55" y="2098" class="t-label">TIER 1 · ALWAYS LOADED</text>
+  <text x="55" y="2116" class="t-mono">PROJECT.md</text>
+  <text x="55" y="2134" class="t-mono">STATUS.md</text>
+  <text x="55" y="2152" class="t-mono">requirements.md</text>
+  <text x="55" y="2170" class="t-mono">phases/requirements.md</text>
+
+  <text x="55" y="2198" class="t-label">TIER 2 · ON DEMAND</text>
+  <text x="55" y="2216" class="t-bodys">design-inputs/ (if present)</text>
+  <text x="55" y="2232" class="t-bodys">retrofit-snapshot.md (if retrofit)</text>
+
+  <text x="55" y="2260" class="t-label">NEVER PRE-LOADED</text>
+  <text x="55" y="2278" class="t-bodys">MODULE.md files · code · MAP.md</text>
+  <text x="55" y="2296" class="t-bodys">DECISIONS.md (read on triage, not on entry)</text>
+
+  <!-- Architecture context -->
+  <rect x="487" y="2040" width="425" height="300" rx="10" fill="#f3f9ff" stroke="#3498db" stroke-width="1.3"/>
+  <rect x="487" y="2040" width="425" height="34" rx="10" fill="#3498db"/>
+  <rect x="487" y="2060" width="425" height="14" fill="#3498db"/>
+  <text x="502" y="2062" class="t-phaselab">ARCHITECTURE CONTEXT</text>
+
+  <text x="502" y="2098" class="t-label">TIER 1 · ALWAYS LOADED</text>
+  <text x="502" y="2116" class="t-mono">PROJECT.md · STATUS.md</text>
+  <text x="502" y="2134" class="t-mono">MAP.md · structure-conventions.md</text>
+  <text x="502" y="2152" class="t-mono">MODULE.md for current design target</text>
+  <text x="502" y="2170" class="t-mono">phases/architecture.md</text>
+
+  <text x="502" y="2198" class="t-label">TIER 2 · ON DEMAND</text>
+  <text x="502" y="2216" class="t-bodys">requirements.md (when checking spec)</text>
+  <text x="502" y="2232" class="t-bodys">peer MODULE.md (when designing interface)</text>
+
+  <text x="502" y="2260" class="t-label">NEVER PRE-LOADED</text>
+  <text x="502" y="2278" class="t-bodys">all other MODULE.md files · code bodies</text>
+  <text x="502" y="2296" class="t-bodys">(load one module at a time)</text>
+
+  <!-- Development context -->
+  <rect x="934" y="2040" width="425" height="300" rx="10" fill="#f3faf5" stroke="#27ae60" stroke-width="1.3"/>
+  <rect x="934" y="2040" width="425" height="34" rx="10" fill="#27ae60"/>
+  <rect x="934" y="2060" width="425" height="14" fill="#27ae60"/>
+  <text x="949" y="2062" class="t-phaselab">DEVELOPMENT CONTEXT</text>
+
+  <text x="949" y="2098" class="t-label">TIER 1 · ALWAYS LOADED</text>
+  <text x="949" y="2116" class="t-mono">STATUS.md</text>
+  <text x="949" y="2134" class="t-mono">MODULE.md for current module</text>
+  <text x="949" y="2152" class="t-mono">MODULE.md of direct dependencies</text>
+  <text x="949" y="2170" class="t-mono">phases/development.md</text>
+
+  <text x="949" y="2198" class="t-label">TIER 2 · ON DEMAND</text>
+  <text x="949" y="2216" class="t-bodys">requirements.md (when task cites FR/NFR,</text>
+  <text x="949" y="2232" class="t-bodys">or during /drift-check)</text>
+
+  <text x="949" y="2260" class="t-label">NEVER PRE-LOADED</text>
+  <text x="949" y="2278" class="t-bodys">peer modules you're not touching</text>
+  <text x="949" y="2296" class="t-bodys">DECISIONS.md (reach in only on cited choice)</text>
+
+  <!-- Footer -->
+  <line x1="40" y1="2370" x2="1360" y2="2370" stroke="#e0e0e0" stroke-width="1.2"/>
+  <text x="40" y="2395" class="t-small"><tspan font-weight="700" fill="#2ea44f">CORE PRINCIPLE</tspan>  ·  Files are the truth. Chat is scratch space. Memory gets made at /close-session — never mid-session.</text>
+  <text x="1360" y="2395" class="t-small" text-anchor="end">github.com/kurnoolion/prompts-lib  ·  skills/compact/</text>
+</svg>
+</div>
+</body>
+</html>
