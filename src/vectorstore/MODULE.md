@@ -1,46 +1,51 @@
-<!-- retrofit: skeleton -->
 # vectorstore
 
 **Purpose**
-TODO — retrofit skeleton; please fill in. (Observed: unified vector store construction with configurable embedding model, backend, distance metric, and chunk contextualization. Offline-friendly HuggingFace loader.)
+Unified vector-store construction and configuration. Defines two structural-typing Protocols (`EmbeddingProvider`, `VectorStoreProvider`), wraps them with a chunk-builder + builder pipeline, and persists a single vector index spanning all MNOs × releases × doc_types. Metadata filters scope retrieval at query time — there is no per-MNO store.
 
 **Public surface**
-<!-- Candidates observed in code (to be curated, not copied verbatim): -->
-<!-- Protocols: -->
-<!-- - VectorStoreProvider (store_base.py, Protocol) -->
-<!-- - EmbeddingProvider (embedding_base.py, Protocol) -->
-<!-- Implementations: -->
-<!-- - ChromaDBStore (store_chroma.py) -->
-<!-- - SentenceTransformerEmbedder (embedding_st.py) -->
-<!-- Builder: -->
-<!-- - VectorStoreBuilder, BuildStats (builder.py) -->
-<!-- - ChunkBuilder, Chunk (chunk_builder.py) -->
-<!-- - QueryResult (store_base.py) -->
-<!-- Config: -->
-<!-- - VectorStoreConfig (config.py) — embedding model, backend, metric, chunking all configurable -->
-<!-- Utility: -->
-<!-- - hf_offline (offline HF cache loader for restricted networks) -->
-<!-- - vectorstore_cli.main (CLI entrypoint) -->
-TODO
+- Protocols:
+  - `EmbeddingProvider` (embedding_base.py) — `embed(texts)`, `embed_query(text)`, `dimension`, `model_name`
+  - `VectorStoreProvider` (store_base.py) — `add()`, `query()`, `count`, `reset()`
+  - `QueryResult` (store_base.py) — `ids`, `documents`, `metadatas`, `distances`
+- Implementations:
+  - `SentenceTransformerEmbedder` (embedding_st.py) — ST backend; respects offline HF cache
+  - `ChromaDBStore` (store_chroma.py) — persistent ChromaDB collection
+- Builder / chunking:
+  - `VectorStoreBuilder` (builder.py) — orchestrates load → chunk → embed → store
+  - `BuildStats` — per-build metrics: chunks_by_plan, embedding model/dim, backend, metric, collection
+  - `ChunkBuilder`, `Chunk` (chunk_builder.py) — builds contextualized chunks with configurable headers (MNO / Release / Plan / Path / Req ID) and optional inline tables/image context
+- Config: `VectorStoreConfig` (config.py) — every tuneable parameter (embedding provider/model/batch/device, store backend/metric/persist_dir, chunk contextualization toggles, defaults)
+- Offline support: `hf_offline.enable_offline_if_cached(model_name)` — switches HF to offline mode when the cache already has the model
+- CLI: `vectorstore_cli.main`
 
 **Invariants**
-<!-- Candidate: VectorStoreProvider and EmbeddingProvider Protocols are the only interfaces — no direct chromadb/sentence-transformers imports outside this module. -->
-<!-- Candidate: unified store with metadata filters (mno, release, doc_type) — not per-MNO stores. -->
-TODO
+- The two Protocols are the only seams. No direct `chromadb` or `sentence_transformers` imports live outside this module. Switching providers means adding a new file, not touching callers.
+- One unified collection per persist directory — metadata (`mno`, `release`, `plan_id`, `doc_type`) carries the scope; `where` filters enforce it at query time. Implements D-002.
+- `VectorStoreConfig` is the single source of truth for a build. `BuildStats` captures the actual values used — pair them to reproduce any retrieval result.
+- Embeddings are L2-normalized by default (`normalize_embeddings=True`) because the default `distance_metric="cosine"` requires it; turning off one without the other is a configuration bug.
+- `embed_query()` is a separate method from `embed()` because some models use asymmetric encoders (different prefixes for docs vs queries). Callers must never bypass it by calling `embed([text])[0]` directly.
+- Chunk context (hierarchy path, req ID, MNO header) is **prepended to the chunk text before embedding**, not just stored as metadata — this is what lets retrieval surface the right chunk when the user asks by path or req ID.
 
 **Key choices**
-<!-- Candidate: configurable via VectorStoreConfig — embedding model, vector DB backend, distance metric, chunk contextualization (SESSION_SUMMARY §16). -->
-TODO
+- Protocol + injection: `VectorStoreBuilder(embedder, store, config)` — builder never constructs providers, so tests can use in-memory stubs without monkey-patching.
+- ChromaDB + sentence-transformers as defaults because both run fully local with no API keys; switching to an API-backed embedder only requires a new class.
+- Offline HF cache loader (`hf_offline`) specifically supports locked-down work machines — `SentenceTransformerEmbedder` calls it on init so models ship via tarball if needed.
+- Config includes chunk-contextualization toggles so A/B tests can isolate retrieval gains from chunk decoration vs. model changes.
+- `BuildStats` saved alongside the store — a build is reproducible from `(VectorStoreConfig, BuildStats)` without re-reading any tree.
 
 **Non-goals**
-TODO
+- No retrieval logic beyond `query()` — ranking, reranking, hybrid merging, and MNO/release scoping live in [query](../query/MODULE.md).
+- No per-MNO or per-release stores — multi-MNO separation is a metadata filter, never a directory split.
+- No graph semantics — this module stores text+vector+metadata tuples; cross-document structure is [graph](../graph/MODULE.md)'s job.
+- No LLM calls — embedding models don't count; the `LLMProvider` Protocol is separate and lives in [llm](../llm/MODULE.md).
 
 <!-- BEGIN:STRUCTURE -->
 <!-- Regenerated by regen-map. Do not hand-edit. -->
 <!-- END:STRUCTURE -->
 
 **Depends on**
-TODO — link peer MODULE.md files. (Candidate: src/parser/, src/models/.)
+[models](../models/MODULE.md) (source_format / metadata shapes), [parser](../parser/MODULE.md) (consumes `RequirementTree` + `Requirement`).
 
 **Depended on by**
-TODO — link peer MODULE.md files. (Candidate: src/query/, src/pipeline/.)
+[query](../query/MODULE.md), [pipeline](../pipeline/MODULE.md).
