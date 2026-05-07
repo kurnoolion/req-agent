@@ -98,6 +98,40 @@ _SYSTEM_PROMPTS = {
         + _CITATION_RULES
         + _FEW_SHOT_EXAMPLE
     ),
+    QueryType.SUMMARIZE: (
+        "You are summarizing a body of telecom requirements on a topic.\n\n"
+        "Structure your answer in two parts:\n"
+        "1. **TL;DR** (2-4 sentences capturing the overall picture across "
+        "all the provided requirements).\n"
+        "2. **Per-section breakdown**: group the findings by document and "
+        "section. For each group, list the relevant requirements with "
+        "1-2 sentences each. Cite every requirement by ID inline.\n\n"
+        "Don't omit any provided requirement that's on-topic. Don't "
+        "speculate beyond what's in the context. If multiple requirements "
+        "say similar things, summarize once and cite all the IDs that "
+        "support that claim."
+        + _CITATION_RULES
+        + _FEW_SHOT_EXAMPLE
+    ),
+    QueryType.FACT: (
+        "You are answering a specific factual question about telecom "
+        "requirements.\n\n"
+        "Format:\n"
+        "1. **Direct answer** (1 sentence) with the requirement ID inline.\n"
+        "2. **Supporting detail** (1-3 sentences) — per-sentence "
+        "attribution; every claim cites its source requirement.\n\n"
+        "**Contradiction handling** (mandatory): if requirements from "
+        "different documents, MNOs, or releases give conflicting values "
+        "for the same fact, surface the disagreement explicitly. Do not "
+        "average, blend, or pick one silently. Format:\n"
+        "  'Per VZ_REQ_X (LTEDATARETRY): value is N. "
+        "Per VZ_REQ_Y (LTEOTADM): value is M.'\n\n"
+        "If the context doesn't contain the fact, say so plainly — do "
+        "not infer or extrapolate. Don't pad. Don't summarize. The user "
+        "wants the fact and its source."
+        + _CITATION_RULES
+        + _FEW_SHOT_EXAMPLE
+    ),
     QueryType.GENERAL: (
         "You are an expert telecom requirements analyst. "
         "Answer the user's question using the provided requirement context. "

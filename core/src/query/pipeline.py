@@ -54,12 +54,18 @@ _DISAMBIGUATION_ANSWER = (
     "more specific."
 )
 
-# Per-query-type distance threshold overrides. When a query type is listed
-# here, its threshold takes precedence over the pipeline-level default. Left
-# empty for now — Step 4 (intent classification) will populate this when
-# the Fact intent type is added (which needs a stricter threshold than
-# general queries).
-_TYPE_MAX_DISTANCE: dict[QueryType, float] = {}
+# Per-query-type distance threshold overrides. When a query type is
+# listed here, its threshold takes precedence over the pipeline-level
+# default. FACT enforces a stricter cap than the general default
+# because a fact-shaped answer that synthesizes from weak chunks is
+# the worst-case hallucination — it looks authoritative but is wrong.
+# SUMMARIZE intentionally uses a *looser* threshold (or unset) so
+# breadth queries can scoop up parent/overview chunks at higher
+# distances that would otherwise be filtered.
+_TYPE_MAX_DISTANCE: dict[QueryType, float] = {
+    QueryType.FACT: 0.4,
+    QueryType.SUMMARIZE: 0.7,
+}
 
 
 # Per-query-type retrieval breadth. Lookup-style queries ("What is
@@ -76,6 +82,14 @@ _TYPE_TOP_K = {
     QueryType.FEATURE_LEVEL: 25,
     QueryType.TRACEABILITY: 20,
     QueryType.RELEASE_DIFF: 20,
+    # SUMMARIZE retrieves widely — the user wants every relevant
+    # chunk so the LLM can produce a TL;DR + per-section breakdown.
+    # Per-requirement chunks are typically ~1KB; top_k=50 yields
+    # ~50KB of context, well under max_context_chars (30K → truncates
+    # if over but the LLM sees a meaningful prefix).
+    QueryType.SUMMARIZE: 50,
+    # FACT keeps the pipeline default (10) — fact answers come from
+    # 1-3 chunks; widening just adds noise.
 }
 
 # Per-query-type BM25 weight in the RRF fusion. 0.0 disables BM25 for
@@ -95,6 +109,13 @@ _TYPE_BM25_WEIGHT = {
     QueryType.STANDARDS_COMPARISON: 0.5,
     QueryType.TRACEABILITY: 0.5,
     QueryType.SINGLE_DOC: 0.5,
+    # FACT queries name specific timer/threshold/value tokens; BM25
+    # weight matches them exactly while dense embeddings spread
+    # similar phrasing too thin.
+    QueryType.FACT: 0.5,
+    # SUMMARIZE leans dense — the user paraphrases the topic, so
+    # semantic recall matters more than exact-token match.
+    QueryType.SUMMARIZE: 0.2,
     # CROSS_DOC, FEATURE_LEVEL, CROSS_MNO_COMPARISON, RELEASE_DIFF,
     # GENERAL: omitted → default 0.0 (pure dense)
 }
@@ -113,6 +134,13 @@ _TYPE_REWRITE_ENABLED = {
     QueryType.CROSS_MNO_COMPARISON: True,
     QueryType.TRACEABILITY: True,
     QueryType.RELEASE_DIFF: True,
+    # SUMMARIZE benefits from term expansion — paraphrases bring in
+    # related concepts the user didn't name.
+    QueryType.SUMMARIZE: True,
+    # FACT explicitly disabled — paraphrasing a "what is the value of
+    # T3402" query risks the rewriter substituting "what is T3402"
+    # which routes to the acronym/definitional path instead of fact-
+    # value retrieval.
     # SINGLE_DOC, GENERAL: omitted → default False
 }
 
@@ -133,7 +161,24 @@ _TYPE_RERANK_ENABLED = {
     QueryType.CROSS_MNO_COMPARISON: True,
     QueryType.TRACEABILITY: True,
     QueryType.RELEASE_DIFF: True,
+    # FACT precision matters most — rerank reorders the top-K so the
+    # most semantically-aligned chunk gets cited, even when BM25 +
+    # dense disagree on ordering.
+    QueryType.FACT: True,
+    # SUMMARIZE intentionally OFF — top_k=50 makes per-chunk rerank
+    # expensive, and rerank ordering matters less when the LLM is
+    # going to read every chunk anyway.
     # SINGLE_DOC, GENERAL: omitted → default False (no rerank)
+}
+
+# Query types that bypass Stage 4.7 grouping even when grouping is
+# globally enabled. SUMMARIZE intent inherently wants ALL groups
+# merged into one synthesis pass — picking any single group throws
+# away the breadth the user is asking for. Adding a type here is a
+# semantic statement: "this intent is incompatible with auto-commit-
+# to-one-group behavior."
+_TYPE_DISABLE_GROUPING: set[QueryType] = {
+    QueryType.SUMMARIZE,
 }
 
 from core.src.vectorstore.embedding_base import EmbeddingProvider
@@ -432,7 +477,16 @@ class QueryPipeline:
         # the next group exceeds the configured threshold; otherwise
         # short-circuits with a disambiguation response. See D-049
         # for rationale.
-        if self._enable_grouping and chunks:
+        # Per-type opt-out: SUMMARIZE (and any other intent in
+        # _TYPE_DISABLE_GROUPING) bypasses Stage 4.7 because the
+        # auto-commit-to-one-group behavior is semantically wrong for
+        # breadth queries — the user wants every group merged into
+        # one synthesis, not one group picked.
+        type_grouping_active = (
+            self._enable_grouping
+            and intent.query_type not in _TYPE_DISABLE_GROUPING
+        )
+        if type_grouping_active and chunks:
             from core.src.env.config import resolve_gap_threshold
             from core.src.query.grouping import (
                 gap_between_top_groups, group_chunks_by_hierarchy,

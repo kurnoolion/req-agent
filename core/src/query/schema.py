@@ -18,7 +18,13 @@ from typing import Any
 
 
 class QueryType(str, Enum):
-    """Types of queries the pipeline can handle."""
+    """Types of queries the pipeline can handle.
+
+    Step 4 added intent-shaped types FACT and SUMMARIZE alongside the
+    existing shape-/scope-based types. The analyzer classifies based on
+    query phrasing; the pipeline then routes per-type knobs (top_k,
+    BM25 weight, rerank, threshold, grouping disable, system prompt).
+    """
     SINGLE_DOC = "single_doc"
     CROSS_DOC = "cross_doc"
     CROSS_MNO_COMPARISON = "cross_mno_comparison"
@@ -26,6 +32,19 @@ class QueryType(str, Enum):
     STANDARDS_COMPARISON = "standards_comparison"
     TRACEABILITY = "traceability"
     FEATURE_LEVEL = "feature_level"
+    SUMMARIZE = "summarize"
+    """Survey/summarize intent — "Explain X requirements", "Summarize X",
+    "Describe X", "Overview of X". Wide top_k, grouping disabled
+    (don't pick one group — synthesize across all retrieved), prompt
+    asks for TL;DR + per-section breakdown. The default-off-by-corpus
+    threshold filter stays disabled here too (we want breadth)."""
+    FACT = "fact"
+    """Fact-lookup intent — "What is the value of X", "How many", "How
+    long", "Default value of". Tight top_k, strict max_distance_threshold
+    (only confident matches), rerank ON (precision matters). Synthesis
+    prompt asks for short fact-centric answer with per-sentence
+    attribution and explicit contradiction surfacing when sources
+    disagree."""
     GENERAL = "general"
 
 

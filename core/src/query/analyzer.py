@@ -232,6 +232,38 @@ class MockQueryAnalyzer:
         if len(mnos) >= 2 or "compare" in q_lower and len(mnos) >= 1:
             return QueryType.CROSS_MNO_COMPARISON
 
+        # Fact intent — specific-value queries. Checked early so phrases
+        # like "what is the maximum X" don't get caught by definitional
+        # patterns. Triggers focus on quantitative shape; broad "what is"
+        # alone isn't enough (handled by the acronym-pin path D-043 or
+        # falls through to SINGLE_DOC / GENERAL).
+        fact_phrases = (
+            "value of", "what value", "what's the value",
+            "default value", "default for",
+            "how many", "how long",
+            "maximum value", "minimum value",
+            "max value", "min value",
+            "exact value", "specific value",
+            "what is the limit", "what's the limit",
+            "what is the threshold", "what's the threshold",
+        )
+        if any(p in q_lower for p in fact_phrases):
+            return QueryType.FACT
+
+        # Summarize intent — explicit survey/summary phrasing. Checked
+        # before the entity-/breadth-based heuristics because "explain
+        # the X authentication requirements" should route to SUMMARIZE
+        # (wide retrieval + per-section breakdown), not SINGLE_DOC
+        # (narrow lookup) just because it names a plan. The user wants
+        # the entire topic summarized, not one specific req.
+        summarize_phrases = (
+            "explain ", "summarize", "summary of", "summary for",
+            "describe ", "give me an overview", "overview of",
+            "tell me about ", "what's the overview",
+        )
+        if any(p in q_lower for p in summarize_phrases):
+            return QueryType.SUMMARIZE
+
         # Standards comparison (check BEFORE release_diff — "differ" overlaps "diff")
         if standards_refs and any(
             w in q_lower for w in ["differ", "compare", "vs", "versus", "3gpp"]
