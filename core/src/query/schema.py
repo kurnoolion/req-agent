@@ -253,6 +253,14 @@ class QueryResponse:
     # subset cited by the LLM. Off the LLM hot-path.
     retrieved_chunks: list[RetrievedChunk] = field(default_factory=list)
 
+    # Stage 4.7 disambiguation. Set when grouping is enabled and the
+    # gap between the top two groups is below `gap_threshold` — the
+    # pipeline returns groups for the user to pick from instead of
+    # synthesizing one collapsed answer. UI surfaces them as cards;
+    # CLI consumers see `answer = _DISAMBIGUATION_ANSWER`.
+    disambiguation_required: bool = False
+    groups: list[ChunkGroup] = field(default_factory=list)
+
     def to_dict(self) -> dict[str, Any]:
         d = {
             "answer": self.answer,

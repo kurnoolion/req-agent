@@ -40,6 +40,20 @@ _NOT_FOUND_ANSWER = (
     "have been indexed."
 )
 
+# Returned when Stage 4.7 finds multiple plausible groups whose scores
+# are within `gap_threshold` of each other — the pipeline cannot pick a
+# winner, and synthesizing across all groups would conflate distinct
+# topics. The QueryResponse carries `disambiguation_required=True` and
+# the populated `groups` list; the UI renders them as user choices.
+_DISAMBIGUATION_ANSWER = (
+    "The query matched multiple distinct sections of the corpus that scored "
+    "similarly. Synthesizing across them would conflate topics, so the "
+    "system is asking you to pick which group to answer from. "
+    "Each group's hierarchy path and a few representative section titles "
+    "are listed below. Pick one to synthesize, or refine your query to be "
+    "more specific."
+)
+
 # Per-query-type distance threshold overrides. When a query type is listed
 # here, its threshold takes precedence over the pipeline-level default. Left
 # empty for now — Step 4 (intent classification) will populate this when
@@ -150,6 +164,7 @@ class QueryPipeline:
         max_context_chars: int = 30000,
         enable_bm25: bool = True,
         max_distance_threshold: float | None = None,
+        enable_grouping: bool = False,
     ) -> None:
         """Initialize the pipeline.
 
@@ -180,6 +195,19 @@ class QueryPipeline:
                 Typical values: 0.5 (lenient), 0.35 (moderate),
                 0.25 (strict). Tune against your embedding model and
                 corpus; cosine distances are in [0, 2] with 0 = identical.
+            enable_grouping: When True, Stage 4.7 clusters retrieved
+                chunks by hierarchy_path (D-046) after the threshold
+                filter. If groups are clearly separated (gap > the
+                resolved gap threshold), the pipeline auto-commits to
+                the top group and synthesizes from those chunks only.
+                If groups are close (gap < threshold), the pipeline
+                short-circuits and returns a disambiguation
+                QueryResponse for the UI to surface. False (default)
+                preserves pre-Step-3 behavior. Gap threshold is
+                resolved per query via the unified config chain
+                (CLI > NORA_RETRIEVAL_GAP_THRESHOLD > config/retrieval.json
+                gap_threshold_by_type[<query_type>] > config scalar
+                > built-in default 0.05).
         """
         from core.src.query.bm25_index import BM25Index
 
@@ -199,6 +227,7 @@ class QueryPipeline:
         self._max_context_chars = max_context_chars
         self._bypass_graph = False
         self._max_distance_threshold = max_distance_threshold
+        self._enable_grouping = enable_grouping
 
     def query(self, query_text: str, verbose: bool = False) -> QueryResponse:
         """Run the full query pipeline.
@@ -301,6 +330,57 @@ class QueryPipeline:
                     query_intent=intent,
                     candidate_count=candidates.total,
                     retrieved_count=0,
+                )
+
+        # Stage 4.7: Hierarchy-based grouping (optional, opt-in via
+        # `enable_grouping`). Clusters chunks by hierarchy_path
+        # prefix; auto-commits to the top group when its score gap to
+        # the next group exceeds the configured threshold; otherwise
+        # short-circuits with a disambiguation response. See D-049
+        # for rationale.
+        if self._enable_grouping and chunks:
+            from core.src.env.config import resolve_gap_threshold
+            from core.src.query.grouping import (
+                gap_between_top_groups, group_chunks_by_hierarchy,
+            )
+
+            groups = group_chunks_by_hierarchy(chunks)
+            if len(groups) > 1:
+                gap_threshold = resolve_gap_threshold(
+                    query_type=intent.query_type.value,
+                )
+                gap = gap_between_top_groups(groups)
+                if gap >= gap_threshold:
+                    # Clear winner — auto-commit to top group's chunks.
+                    top_group = groups[0]
+                    logger.info(
+                        f"[Stage 4.7] Auto-commit to top group "
+                        f"(prefix={top_group.common_prefix}, "
+                        f"chunks={len(top_group.chunks)}/{len(chunks)}, "
+                        f"gap={gap:.4f} >= threshold={gap_threshold})"
+                    )
+                    chunks = top_group.chunks
+                else:
+                    # Gap too narrow — return disambiguation, skip Stages 5/6.
+                    logger.info(
+                        f"[Stage 4.7] Disambiguation: {len(groups)} groups, "
+                        f"gap={gap:.4f} < threshold={gap_threshold}"
+                    )
+                    return QueryResponse(
+                        answer=_DISAMBIGUATION_ANSWER,
+                        citations=[],
+                        query_intent=intent,
+                        candidate_count=candidates.total,
+                        retrieved_count=sum(len(g.chunks) for g in groups),
+                        retrieved_chunks=chunks,
+                        disambiguation_required=True,
+                        groups=groups,
+                    )
+            elif verbose:
+                logger.info(
+                    f"[Stage 4.7] Single group "
+                    f"(prefix={groups[0].common_prefix if groups else []}); "
+                    "no disambiguation needed"
                 )
 
         # Stage 5: Context Assembly

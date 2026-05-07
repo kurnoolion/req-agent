@@ -298,6 +298,13 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
     else:
         logger.info("Relevance threshold filter: max_distance=%.3f", threshold)
 
+    from core.src.env.config import resolve_grouping_enabled
+    enable_grouping = resolve_grouping_enabled()
+    logger.info(
+        "Stage 4.7 grouping: %s",
+        "ENABLED" if enable_grouping else "disabled",
+    )
+
     pipeline = QueryPipeline(
         graph=graph,
         embedder=embedder,
@@ -306,6 +313,7 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
         top_k=10,
         max_context_chars=30000,
         max_distance_threshold=threshold,
+        enable_grouping=enable_grouping,
     )
     if rag_only:
         pipeline._bypass_graph = True
