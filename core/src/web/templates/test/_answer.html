@@ -79,7 +79,7 @@
     <div class="text-muted small mb-2">
       <strong>Q:</strong> {{ question }}
     </div>
-    <div class="answer-body" style="white-space: pre-wrap; line-height: 1.5;">{{ answer }}</div>
+    <div class="answer-body" style="line-height: 1.5;">{{ answer | md }}</div>
 
     {# LLM-cited subset — what the answer actually leans on. #}
     {% if llm_citations %}

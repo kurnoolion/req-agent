@@ -29,7 +29,7 @@
     </div>
     <div class="card-body">
         {% if answer %}
-        <div class="answer-text" style="white-space: pre-wrap; font-size: 0.95rem; line-height: 1.6;">{{ answer }}</div>
+        <div class="answer-text" style="font-size: 0.95rem; line-height: 1.6;">{{ answer | md }}</div>
         {% else %}
         <p class="text-muted">No answer was generated.</p>
         {% endif %}

@@ -144,6 +144,12 @@ app.include_router(playground_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["duration"] = _duration_filter
+# Markdown-rendering filter for LLM answer text — converts the
+# model's markdown (headers, bullets, tables, fenced code, **bold**,
+# *italic*) to HTML. Returns Jinja-safe Markup so the template can
+# interpolate as `{{ answer | md }}` without an explicit |safe.
+from core.src.web.markdown_render import render_markdown as _render_md
+templates.env.filters["md"] = _render_md
 
 
 def _template_response(
