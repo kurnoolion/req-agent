@@ -2,6 +2,78 @@
   <div class="alert alert-danger">
     <strong>Error:</strong> {{ error }}
   </div>
+{% elif disambiguation_required %}
+  {# Stage 4.7 — system found multiple plausible groups whose scores
+     are within gap_threshold of each other. Render each group as a
+     card with a "synthesize from this group" button. Click submits
+     /api/test/synthesize-group with the picked group's chunk_ids,
+     which re-runs the query pinned to those chunks. #}
+  <div class="border rounded p-3 mb-3 bg-light">
+    <div class="text-muted small mb-2">
+      <strong>Q:</strong> {{ question }}
+    </div>
+    <div class="alert alert-info mb-3">
+      <strong>Multiple distinct sections matched.</strong>
+      The query mapped to {{ groups|length }} groups whose retrieval scores were close
+      enough that the system can't pick a winner. Pick which group to synthesize
+      from below, or refine your query.
+    </div>
+
+    <div class="mb-3">
+      {% for g in groups %}
+        <div class="card mb-2">
+          <div class="card-body py-2">
+            <div class="d-flex justify-content-between align-items-start">
+              <div class="flex-grow-1 me-3">
+                <div class="small text-muted mb-1">
+                  Group {{ loop.index }}
+                  · score {{ g.score }}
+                  · {{ g.chunk_count }} chunk{% if g.chunk_count != 1 %}s{% endif %}
+                </div>
+                <div class="mb-1">
+                  <strong>Path:</strong>
+                  {% if g.common_prefix %}
+                    {% for seg in g.common_prefix %}
+                      <code>{{ seg }}</code>{% if not loop.last %} <span class="text-muted">›</span> {% endif %}
+                    {% endfor %}
+                  {% else %}
+                    <span class="text-muted">(unknown — pre-D-046 chunks)</span>
+                  {% endif %}
+                </div>
+                {% if g.representative_titles %}
+                  <div class="small">
+                    <span class="text-muted">Sections:</span>
+                    {% for t in g.representative_titles %}
+                      <span class="badge bg-secondary me-1">{{ t }}</span>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+              </div>
+              <form
+                hx-post="{{ root_path }}/api/test/synthesize-group"
+                hx-target="#test-answer"
+                hx-swap="innerHTML"
+                hx-disabled-elt="find button"
+                class="ms-2"
+              >
+                <input type="hidden" name="question" value="{{ question }}">
+                <input type="hidden" name="section" value="{{ section or 'requirement_bot' }}">
+                <input type="hidden" name="chunk_ids" value="{{ g.chunk_ids|join(',') }}">
+                <button type="submit" class="btn btn-primary btn-sm">
+                  Synthesize from this group
+                </button>
+              </form>
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+
+    <div class="text-muted small">
+      retrieved in {{ elapsed_ms }} ms
+      {% if candidate_count %} · {{ candidate_count }} candidates from graph{% endif %}
+    </div>
+  </div>
 {% else %}
   <div class="border rounded p-3 mb-3 bg-light">
     <div class="text-muted small mb-2">

@@ -228,13 +228,75 @@ class QueryPipeline:
         self._bypass_graph = False
         self._max_distance_threshold = max_distance_threshold
         self._enable_grouping = enable_grouping
+        self._store = store
 
-    def query(self, query_text: str, verbose: bool = False) -> QueryResponse:
+    def _fetch_chunks_by_ids(self, ids: list[str]) -> list:
+        """Fetch chunks from the store by their chunk IDs.
+
+        Used by the pinned-chunks path. The protocol doesn't expose a
+        get-by-ids method, so we walk store.get_all() and filter — O(n)
+        on store size, fine for ~1k-chunk corpora. Promote to a typed
+        store method if performance ever matters.
+
+        Returns: list of RetrievedChunk in the same order as requested
+        IDs (skipping unknowns). similarity_score is set to 0.0 since
+        the user explicitly picked these — no ranking required.
+        """
+        from core.src.query.schema import RetrievedChunk
+
+        try:
+            all_docs = self._store.get_all()
+        except Exception as e:
+            logger.warning(f"Pinned-chunks fetch: store.get_all() failed ({e!r})")
+            return []
+        by_id = {
+            cid: (doc, meta)
+            for cid, doc, meta in zip(
+                all_docs.ids, all_docs.documents, all_docs.metadatas,
+            )
+        }
+        out: list = []
+        missing: list[str] = []
+        for cid in ids:
+            if cid not in by_id:
+                missing.append(cid)
+                continue
+            doc, meta = by_id[cid]
+            out.append(RetrievedChunk(
+                chunk_id=cid,
+                text=doc,
+                metadata=dict(meta or {}),
+                similarity_score=0.0,
+                graph_node_id=cid,
+            ))
+        if missing:
+            logger.warning(
+                f"Pinned chunk IDs not found in store (vectorstore rebuilt?): "
+                f"{missing[:5]}{'…' if len(missing) > 5 else ''}"
+            )
+        return out
+
+    def query(
+        self,
+        query_text: str,
+        verbose: bool = False,
+        pinned_chunk_ids: list[str] | None = None,
+    ) -> QueryResponse:
         """Run the full query pipeline.
 
         Args:
             query_text: Natural language query.
             verbose: If True, log intermediate results.
+            pinned_chunk_ids: When provided, the pipeline skips Stages 2–4.7
+                (resolver / graph scope / rewrite / RAG / threshold /
+                grouping) and synthesizes from the chunks identified by
+                these IDs. Used by the disambiguation UX (Step 3c): the
+                user picked a group from a prior disambiguation response,
+                and the system now answers using only that group's
+                chunks. Stage 1 (analyzer) still runs so Stage 5 has a
+                proper query_type. Unknown chunk IDs are dropped with a
+                warning; if no IDs resolve, returns the not-found
+                response.
 
         Returns:
             QueryResponse with answer and citations.
@@ -243,6 +305,37 @@ class QueryPipeline:
         intent = self._analyzer.analyze(query_text)
         if verbose:
             logger.info(f"[Stage 1] Intent: {intent.to_dict()}")
+
+        # Pinned-chunks short-circuit: skip Stages 2–4.7, fetch the
+        # pinned chunks from the store, go straight to Stage 5/6.
+        # Used by the disambiguation UX after the user picks a group.
+        if pinned_chunk_ids:
+            chunks = self._fetch_chunks_by_ids(list(pinned_chunk_ids))
+            if not chunks:
+                logger.info(
+                    "Pinned chunk IDs did not resolve to any chunks "
+                    "(vectorstore may have been rebuilt) — returning "
+                    "not-found response"
+                )
+                return QueryResponse(
+                    answer=_NOT_FOUND_ANSWER,
+                    citations=[],
+                    query_intent=intent,
+                    candidate_count=0,
+                    retrieved_count=0,
+                )
+            logger.info(
+                f"Pinned-chunks path: synthesizing from "
+                f"{len(chunks)}/{len(pinned_chunk_ids)} requested chunks"
+            )
+            context = self._context_builder.build(
+                query_text, chunks, intent.query_type,
+                max_context_chars=self._max_context_chars,
+            )
+            response = self._synthesizer.synthesize(context, intent)
+            response.candidate_count = 0
+            response.retrieved_chunks = chunks
+            return response
 
         # Stage 2: MNO/Release Resolution
         scoped = self._resolver.resolve(intent)

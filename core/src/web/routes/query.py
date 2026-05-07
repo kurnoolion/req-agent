@@ -356,12 +356,22 @@ def _get_or_build_pipeline(app, graph_path: Path, vectorstore_dir: Path):
         return pipeline, llm
 
 
-def _run_query_sync(query_text: str, app=None) -> dict:
+def _run_query_sync(
+    query_text: str,
+    app=None,
+    pinned_chunk_ids: list[str] | None = None,
+) -> dict:
     """Run the query pipeline synchronously (called via asyncio.to_thread).
 
     Pass `app` (the FastAPI instance) to reuse the cached pipeline
     across requests. Without it, every call rebuilds — only used in
-    legacy tests."""
+    legacy tests.
+
+    `pinned_chunk_ids` (Step 3c) drives the disambiguation-resolution
+    flow: when the user picks a group from a prior disambiguation
+    response, the IDs of that group's chunks come back here and the
+    pipeline skips retrieval, synthesizing only from those chunks.
+    """
     start = time.time()
 
     from core.src.web.app import config as web_config
@@ -390,7 +400,7 @@ def _run_query_sync(query_text: str, app=None) -> dict:
 
     llm_calls_before = llm.call_count if llm else 0
     llm_start = time.time()
-    response = pipeline.query(query_text)
+    response = pipeline.query(query_text, pinned_chunk_ids=pinned_chunk_ids)
     llm_elapsed = time.time() - llm_start
     elapsed = time.time() - start
     llm_calls_after = llm.call_count if llm else 0
@@ -437,6 +447,20 @@ def _run_query_sync(query_text: str, app=None) -> dict:
             "text": ch.text,
         })
 
+    # Stage 4.7 disambiguation. When the pipeline short-circuits
+    # because top groups scored too closely, surface the groups so
+    # the UI can render user-pickable cards. Groups are empty list /
+    # disambiguation_required is False on the normal path.
+    groups_payload = []
+    for g in response.groups:
+        groups_payload.append({
+            "common_prefix": list(g.common_prefix),
+            "representative_titles": list(g.representative_titles),
+            "score": round(float(g.score), 4),
+            "chunk_count": len(g.chunks),
+            "chunk_ids": [c.chunk_id for c in g.chunks],
+        })
+
     result = {
         "answer": response.answer,
         "citations": citations,
@@ -444,6 +468,8 @@ def _run_query_sync(query_text: str, app=None) -> dict:
         "rag_chunks": rag_chunks,
         "rag_chunk_count": len(rag_chunks),
         "timing": f"{elapsed:.1f}",
+        "disambiguation_required": bool(response.disambiguation_required),
+        "groups": groups_payload,
     }
 
     # Attach LLM metrics for the background task to record

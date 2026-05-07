@@ -261,6 +261,69 @@ class TestGapThresholdResolution:
             env_cfg._reset_retrieval_config_cache()
 
 
+class TestPinnedChunksPath:
+    """Step 3c — pinned_chunk_ids skips Stages 2-4.7 and synthesizes
+    only from the named chunks. Used to resolve disambiguation
+    after the user picks a group."""
+
+    def test_pinned_chunks_skip_retrieval(self):
+        """When pinned_chunk_ids is set, retrieval is bypassed —
+        the chunks come from the store directly."""
+        chunks = [
+            ("R1", ["DOC_A"], 0.20),
+            ("R2", ["DOC_B"], 0.50),
+        ]
+        p = _pipeline(chunks, enable_grouping=False)
+        # Pin only R2 (which would NOT have been the top dense match).
+        resp = p.query("test", pinned_chunk_ids=["req:R2"])
+        kept = {c.metadata["req_id"] for c in resp.retrieved_chunks}
+        assert kept == {"R2"}
+        assert resp.disambiguation_required is False
+
+    def test_pinned_chunks_skip_grouping_short_circuit(self):
+        """Even when grouping is enabled, pinned-chunks goes straight
+        to synthesis — no disambiguation can fire."""
+        chunks = [
+            ("R1", ["DOC_A"], 0.20),
+            ("R2", ["DOC_B"], 0.21),  # would normally disambiguate
+        ]
+        p = _pipeline(chunks, enable_grouping=True)
+        resp = p.query("test", pinned_chunk_ids=["req:R1"])
+        assert resp.disambiguation_required is False
+        kept = {c.metadata["req_id"] for c in resp.retrieved_chunks}
+        assert kept == {"R1"}
+
+    def test_pinned_unknown_ids_returns_not_found(self):
+        """If none of the pinned IDs resolve in the store, we get the
+        not-found response (vectorstore was rebuilt or IDs are bogus)."""
+        chunks = [("R1", ["DOC"], 0.2)]
+        p = _pipeline(chunks, enable_grouping=False)
+        resp = p.query("test", pinned_chunk_ids=["req:DOES_NOT_EXIST"])
+        assert resp.answer == _NOT_FOUND_ANSWER
+        assert resp.retrieved_count == 0
+
+    def test_pinned_partial_match_drops_unknowns(self):
+        """Mix of known and unknown IDs: known are kept, unknowns
+        dropped with a warning. Synthesis runs on what resolved."""
+        chunks = [
+            ("R1", ["DOC"], 0.2),
+            ("R2", ["DOC"], 0.3),
+        ]
+        p = _pipeline(chunks, enable_grouping=False)
+        resp = p.query("test", pinned_chunk_ids=["req:R1", "req:GHOST"])
+        assert resp.disambiguation_required is False
+        kept = {c.metadata["req_id"] for c in resp.retrieved_chunks}
+        assert kept == {"R1"}
+
+    def test_pinned_chunks_score_set_to_zero(self):
+        """Pinned chunks get similarity_score=0.0 — user explicitly
+        picked them, no ranking required."""
+        chunks = [("R1", ["DOC"], 0.45)]
+        p = _pipeline(chunks, enable_grouping=False)
+        resp = p.query("test", pinned_chunk_ids=["req:R1"])
+        assert resp.retrieved_chunks[0].similarity_score == 0.0
+
+
 class TestInteractionWithThreshold:
     def test_threshold_filter_runs_before_grouping(self, monkeypatch):
         """Chunks above max_distance_threshold are dropped first — grouping

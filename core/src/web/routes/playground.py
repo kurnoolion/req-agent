@@ -153,6 +153,93 @@ async def playground_ask(request: Request):
         "elapsed_ms": elapsed_ms,
         "candidate_count": result.get("candidate_count"),
         "section": section,
+        "disambiguation_required": result.get("disambiguation_required", False),
+        "groups": result.get("groups", []),
+    })
+
+
+@router.post("/api/test/synthesize-group", response_class=HTMLResponse)
+async def playground_synthesize_group(request: Request):
+    """Step 3c — user picked a group from a disambiguation response.
+
+    Form fields:
+      - `question`: original query (so the answer addresses it)
+      - `chunk_ids`: comma-separated chunk_ids of the picked group
+      - `section`: same as /api/test/ask, passed through
+
+    Re-runs the query with `pinned_chunk_ids` set, which skips Stages
+    2-4.7 and synthesizes only from those chunks.
+    """
+    from core.src.web.app import _template_response
+
+    form = await request.form()
+    question = (form.get("question") or "").strip()
+    chunk_ids_raw = (form.get("chunk_ids") or "").strip()
+    section = (form.get("section") or "requirement_bot").strip()
+
+    if not question:
+        return _template_response(request, "test/_answer.html", {
+            "error": "Question is required.",
+        })
+    if not chunk_ids_raw:
+        return _template_response(request, "test/_answer.html", {
+            "error": "No chunk_ids provided. Pick a group first.",
+        })
+
+    chunk_ids = [c.strip() for c in chunk_ids_raw.split(",") if c.strip()]
+    if not chunk_ids:
+        return _template_response(request, "test/_answer.html", {
+            "error": "chunk_ids empty after parse.",
+        })
+
+    start = time.time()
+    try:
+        result = await asyncio.to_thread(
+            _run_query_for_test, question, request.app, chunk_ids,
+        )
+    except Exception as e:
+        logger.exception("Synthesize-group query failed")
+        return _template_response(request, "test/_answer.html", {
+            "error": f"Query failed: {e}",
+        })
+    elapsed_ms = int((time.time() - start) * 1000)
+
+    if "error" in result:
+        return _template_response(request, "test/_answer.html", {
+            "error": result["error"],
+        })
+
+    feedback_store = request.app.state.feedback_store
+    row_id = await feedback_store.record_qa(
+        section=section,
+        question=question,
+        answer=result.get("answer", ""),
+        citations=result.get("citations", []),
+        query_elapsed_ms=elapsed_ms,
+        llm_model=result.get("llm_model"),
+        metadata={
+            "candidate_count": result.get("candidate_count"),
+            "synthesize_group": True,
+            "pinned_chunk_count": len(chunk_ids),
+        },
+    )
+
+    return _template_response(request, "test/_answer.html", {
+        "row_id": row_id,
+        "question": question,
+        "answer": result.get("answer", ""),
+        "citations": result.get("citations", []),
+        "llm_citations": result.get("llm_citations", []),
+        "rag_chunks": result.get("rag_chunks", []),
+        "rag_chunk_count": result.get("rag_chunk_count", 0),
+        "elapsed_ms": elapsed_ms,
+        "candidate_count": result.get("candidate_count"),
+        "section": section,
+        # On the synthesis re-run, disambiguation cannot fire (we're
+        # past it), so these are always defaults — pass them through
+        # for template consistency.
+        "disambiguation_required": False,
+        "groups": [],
     })
 
 
@@ -200,7 +287,11 @@ async def playground_feedback(
 # -- Helpers ----------------------------------------------------------------
 
 
-def _run_query_for_test(question: str, app=None) -> dict:
+def _run_query_for_test(
+    question: str,
+    app=None,
+    pinned_chunk_ids: list[str] | None = None,
+) -> dict:
     """Adapt the existing /query pipeline runner into a dict shape
     the test page templates can consume directly. Re-imports the
     helper from the query module so we don't fork pipeline
@@ -212,10 +303,17 @@ def _run_query_for_test(question: str, app=None) -> dict:
       - `llm_citations`: subset cited explicitly in the answer text
       - `rag_chunks`: every chunk RAG returned (with text for the
         click-to-expand fragment view)
+
+    Step 3c additions:
+      - `disambiguation_required`, `groups` — surfaced when the pipeline
+        short-circuits at Stage 4.7 with multiple plausible groups.
+      - `pinned_chunk_ids` parameter — when set, the pipeline skips
+        retrieval and synthesizes only from those chunks (used after
+        the user picks a group from a disambiguation response).
     """
     from core.src.web.routes.query import _run_query_sync
 
-    raw = _run_query_sync(question, app=app)
+    raw = _run_query_sync(question, app=app, pinned_chunk_ids=pinned_chunk_ids)
     if "error" in raw:
         return {"error": raw["error"]}
 
@@ -231,4 +329,6 @@ def _run_query_for_test(question: str, app=None) -> dict:
         "rag_chunk_count": raw.get("rag_chunk_count", 0),
         "candidate_count": raw.get("candidate_count"),
         "llm_model": raw.get("llm_model"),
+        "disambiguation_required": raw.get("disambiguation_required", False),
+        "groups": raw.get("groups", []),
     }
