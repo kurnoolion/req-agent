@@ -155,6 +155,8 @@ async def playground_ask(request: Request):
         "section": section,
         "disambiguation_required": result.get("disambiguation_required", False),
         "groups": result.get("groups", []),
+        "llm_system_prompt": result.get("llm_system_prompt", ""),
+        "llm_context_text": result.get("llm_context_text", ""),
     })
 
 
@@ -240,6 +242,8 @@ async def playground_synthesize_group(request: Request):
         # for template consistency.
         "disambiguation_required": False,
         "groups": [],
+        "llm_system_prompt": result.get("llm_system_prompt", ""),
+        "llm_context_text": result.get("llm_context_text", ""),
     })
 
 
@@ -331,4 +335,6 @@ def _run_query_for_test(
         "llm_model": raw.get("llm_model"),
         "disambiguation_required": raw.get("disambiguation_required", False),
         "groups": raw.get("groups", []),
+        "llm_system_prompt": raw.get("llm_system_prompt", ""),
+        "llm_context_text": raw.get("llm_context_text", ""),
     }

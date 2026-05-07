@@ -335,6 +335,7 @@ class QueryPipeline:
             response = self._synthesizer.synthesize(context, intent)
             response.candidate_count = 0
             response.retrieved_chunks = chunks
+            response.assembled_context = context
             return response
 
         # Stage 2: MNO/Release Resolution
@@ -494,6 +495,9 @@ class QueryPipeline:
         # the post-rerank top-K returned by Stage 4 (RAG) — it's what
         # "All returned by RAG" means on the Test page.
         response.retrieved_chunks = chunks
+        # Surface the exact prompt sent to the LLM so the Test page
+        # can render a "Show LLM prompt" debug view.
+        response.assembled_context = context
 
         if verbose:
             logger.info(

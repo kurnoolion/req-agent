@@ -261,6 +261,13 @@ class QueryResponse:
     disambiguation_required: bool = False
     groups: list[ChunkGroup] = field(default_factory=list)
 
+    # Stage 5 output captured for debugging — the exact system prompt
+    # and context text passed to the LLM for synthesis. Populated by
+    # QueryPipeline.query() so the Test page can render a "Show LLM
+    # prompt" view; debugging-only, not needed by callers that just
+    # want the answer.
+    assembled_context: AssembledContext | None = None
+
     def to_dict(self) -> dict[str, Any]:
         d = {
             "answer": self.answer,

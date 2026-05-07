@@ -105,7 +105,7 @@
                 {% if c.spec %} — {{ c.spec }}{% if c.spec_section %} §{{ c.spec_section }}{% endif %}{% endif %}
                 {# fragment text from the matching RAG chunk, if any #}
                 <div id="{{ chunk_target }}" class="collapse mt-1">
-                  <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap; max-height: 320px; overflow: auto;">{% set frag = namespace(text=None) %}{% for ch in rag_chunks %}{% if ch.req_id == c.req_id and frag.text is none %}{% set frag.text = ch.text %}{% endif %}{% endfor %}{{ frag.text or "(no fragment text — chunk not in current RAG window)" }}</pre>
+                  <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap;">{% set frag = namespace(text=None) %}{% for ch in rag_chunks %}{% if ch.req_id == c.req_id and frag.text is none %}{% set frag.text = ch.text %}{% endif %}{% endfor %}{{ frag.text or "(no fragment text — chunk not in current RAG window)" }}</pre>
                 </div>
               </li>
             {% endif %}
@@ -136,11 +136,41 @@
               {% if ch.section_number %} — sec <code>{{ ch.section_number }}</code>{% endif %}
               <span class="text-muted ms-1">score {{ ch.similarity_score }}</span>
               <div id="{{ frag_id }}" class="collapse mt-1">
-                <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap; max-height: 320px; overflow: auto;">{{ ch.text }}</pre>
+                <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap;">{{ ch.text }}</pre>
               </div>
             </li>
           {% endfor %}
         </ul>
+      </div>
+    {% endif %}
+
+    {# Debug: full prompt sent to the LLM (system + context). Hidden
+       behind a click since it's typically large — many KB. Empty when
+       synthesis was skipped (not-found / disambiguation paths). #}
+    {% if llm_system_prompt or llm_context_text %}
+      <hr>
+      <div class="small">
+        <button type="button"
+                class="btn btn-sm btn-outline-secondary"
+                data-bs-toggle="collapse"
+                data-bs-target="#llm-prompt-{{ row_id }}"
+                aria-expanded="false"
+                aria-controls="llm-prompt-{{ row_id }}">
+          Show LLM prompt
+        </button>
+        <span class="text-muted ms-2">
+          (system: {{ llm_system_prompt|length }} chars · context: {{ llm_context_text|length }} chars)
+        </span>
+        <div id="llm-prompt-{{ row_id }}" class="collapse mt-2">
+          {% if llm_system_prompt %}
+            <div class="text-muted small mb-1"><strong>System prompt:</strong></div>
+            <pre class="border rounded p-2 small mb-2" style="white-space: pre-wrap;">{{ llm_system_prompt }}</pre>
+          {% endif %}
+          {% if llm_context_text %}
+            <div class="text-muted small mb-1"><strong>Context (user message):</strong></div>
+            <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap;">{{ llm_context_text }}</pre>
+          {% endif %}
+        </div>
       </div>
     {% endif %}
 

@@ -461,6 +461,14 @@ def _run_query_sync(
             "chunk_ids": [c.chunk_id for c in g.chunks],
         })
 
+    # LLM prompt debug view — exact strings sent to the synthesizer.
+    # None when synthesis was skipped (not-found / disambiguation).
+    llm_system_prompt = ""
+    llm_context_text = ""
+    if response.assembled_context is not None:
+        llm_system_prompt = response.assembled_context.system_prompt or ""
+        llm_context_text = response.assembled_context.context_text or ""
+
     result = {
         "answer": response.answer,
         "citations": citations,
@@ -470,6 +478,8 @@ def _run_query_sync(
         "timing": f"{elapsed:.1f}",
         "disambiguation_required": bool(response.disambiguation_required),
         "groups": groups_payload,
+        "llm_system_prompt": llm_system_prompt,
+        "llm_context_text": llm_context_text,
     }
 
     # Attach LLM metrics for the background task to record
