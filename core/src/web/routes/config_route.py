@@ -144,7 +144,10 @@ async def config_page(request: Request):
             "title": section.title,
             "description": section.description,
             "features": by_category["feature"],
-            "values": by_category["value"],
+            # NB: keyed as `value_items`, not `values`, because Jinja
+            # resolves `section.values` to the dict's `.values()` method
+            # before the "values" key — TypeError on iteration.
+            "value_items": by_category["value"],
             "tunables": by_category["tunable"],
         })
 

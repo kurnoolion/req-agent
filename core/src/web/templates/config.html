@@ -78,9 +78,9 @@
             </div>
           {% endif %}
 
-          {% if section.values %}
+          {% if section.value_items %}
             <h3 class="h6 text-uppercase text-muted mt-3 mb-2">Values</h3>
-            {% for item in section.values %}
+            {% for item in section.value_items %}
               <div class="mb-3">
                 <label
                   for="cf-{{ item.field.module }}-{{ item.field.key }}"

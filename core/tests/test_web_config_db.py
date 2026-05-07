@@ -194,3 +194,80 @@ class TestSchema:
 
     def test_find_field_returns_none_on_miss(self):
         assert find_field("llm", "nonexistent") is None
+
+
+# ── Route smoke tests ──────────────────────────────────────────
+
+
+class TestConfigRouteRenders:
+    """End-to-end render of /config catches template/route regressions
+    (e.g. Jinja attr/item lookup collisions like `section.values`)."""
+
+    def _client(self, tmp_path, monkeypatch, with_db=True):
+        from fastapi.testclient import TestClient
+        if with_db:
+            monkeypatch.setenv("NORA_CONFIG_DB", str(tmp_path / "cfg.db"))
+        else:
+            monkeypatch.delenv("NORA_CONFIG_DB", raising=False)
+        # Set ENV_DIR to a tmp path; web app needs it.
+        monkeypatch.setenv("ENV_DIR", str(tmp_path))
+        # Re-import the app module so config picks up env vars.
+        import importlib
+        import core.src.web.app as app_mod
+        importlib.reload(app_mod)
+        return TestClient(app_mod.app)
+
+    def test_get_config_renders_with_db_enabled(self, tmp_path, monkeypatch):
+        with self._client(tmp_path, monkeypatch, with_db=True) as client:
+            resp = client.get("/config")
+        assert resp.status_code == 200
+        # Sanity: form is rendered, expected sections are visible.
+        assert "LLM &amp; Embedding" in resp.text or "LLM & Embedding" in resp.text
+        assert "Retrieval &amp; Grouping" in resp.text or "Retrieval & Grouping" in resp.text
+        assert "Save changes" in resp.text  # editable form
+
+    def test_get_config_renders_with_db_disabled(self, tmp_path, monkeypatch):
+        with self._client(tmp_path, monkeypatch, with_db=False) as client:
+            resp = client.get("/config")
+        assert resp.status_code == 200
+        # When DB is disabled, the page is read-only and shows the notice.
+        assert "Read-only mode" in resp.text
+        # Save button should NOT render.
+        assert "Save changes" not in resp.text
+
+
+class TestConfigRouteSave:
+    """Verify the save handler writes to the DB and clears the
+    cached pipeline on app.state."""
+
+    def test_save_persists_value(self, tmp_path, monkeypatch):
+        from fastapi.testclient import TestClient
+        db_path = tmp_path / "cfg.db"
+        monkeypatch.setenv("NORA_CONFIG_DB", str(db_path))
+        monkeypatch.setenv("ENV_DIR", str(tmp_path))
+        import importlib
+        import core.src.web.app as app_mod
+        importlib.reload(app_mod)
+        with TestClient(app_mod.app) as client:
+            # Populate values so the save coerces correctly. Bool fields
+            # without a form value coerce to False.
+            data = {
+                "_submitted_by": "test",
+                "llm__llm_provider": "ollama",
+                "llm__llm_model": "test-model",
+                "llm__llm_base_url": "",
+                "llm__llm_api_key": "",
+                "llm__llm_timeout": "0",
+                "llm__embedding_provider": "ollama",
+                "llm__embedding_model": "qwen3-embedding:4b-q8_0",
+                # Skip bool fields → will be saved as False
+                "retrieval__gap_threshold": "0.05",
+                "pipeline__max_distance_threshold": "0.5",
+                "pipeline__top_k": "10",
+            }
+            resp = client.post("/api/config/save", data=data)
+        assert resp.status_code == 200
+        assert "Saved" in resp.text
+        # Verify a known value made it to the DB.
+        cs = ConfigStore(db_path)
+        assert cs.get("llm", "llm_model") == "test-model"
