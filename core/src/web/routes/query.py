@@ -36,10 +36,21 @@ _MAX_DISTANCE_THRESHOLD_ENV_VAR = "NORA_MAX_DISTANCE_THRESHOLD"
 
 
 def _resolve_max_distance_threshold() -> float | None:
-    """Return the threshold to pass to QueryPipeline. None disables it."""
+    """Return the threshold to pass to QueryPipeline. None disables it.
+
+    Resolution: env var > ConfigStore (pipeline.max_distance_threshold)
+    > built-in default. Empty / "off" / "none" disables the filter.
+    """
     import os
     raw = os.environ.get(_MAX_DISTANCE_THRESHOLD_ENV_VAR)
     if raw is None:
+        # Try ConfigStore next.
+        cs_value = _config_store_get("pipeline", "max_distance_threshold")
+        if cs_value is not None:
+            try:
+                return float(cs_value)
+            except (TypeError, ValueError):
+                pass
         return _DEFAULT_MAX_DISTANCE_THRESHOLD
     raw = raw.strip().lower()
     if raw in ("", "off", "none", "disable", "disabled"):
@@ -52,6 +63,31 @@ def _resolve_max_distance_threshold() -> float | None:
             _MAX_DISTANCE_THRESHOLD_ENV_VAR, raw, _DEFAULT_MAX_DISTANCE_THRESHOLD,
         )
         return _DEFAULT_MAX_DISTANCE_THRESHOLD
+
+
+def _config_store_get(module: str, key: str):
+    """Best-effort read from app.state.config_store. Returns None if
+    the store isn't attached (DB layer disabled) or the key is absent."""
+    try:
+        from core.src.web import app as web_app
+        cs = getattr(web_app.app.state, "config_store", None)
+        if cs is None:
+            return None
+        return cs.get(module, key)
+    except Exception:
+        return None
+
+
+def _resolve_top_k() -> int:
+    """Resolve the QueryPipeline's default top_k from the ConfigStore
+    or fall back to 10 (the QueryPipeline.__init__ default)."""
+    val = _config_store_get("pipeline", "top_k")
+    if val is None:
+        return 10
+    try:
+        return max(1, int(val))
+    except (TypeError, ValueError):
+        return 10
 
 
 def _graph_path() -> Path:
@@ -305,12 +341,13 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
         "ENABLED" if enable_grouping else "disabled",
     )
 
+    top_k = _resolve_top_k()
     pipeline = QueryPipeline(
         graph=graph,
         embedder=embedder,
         store=store,
         synthesizer=synthesizer,
-        top_k=10,
+        top_k=top_k,
         max_context_chars=30000,
         max_distance_threshold=threshold,
         enable_grouping=enable_grouping,

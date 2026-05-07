@@ -1,0 +1,162 @@
+{% extends "base.html" %}
+
+{% block title %}Config — NORA{% endblock %}
+
+{% block content %}
+<div class="container py-3">
+  <h1 class="mb-2">Config</h1>
+  <p class="text-muted">
+    User-editable configuration knobs. Changes persist to the user-config DB
+    and slot into the resolver chain
+    (<code>CLI &gt; env var &gt; <strong>this DB</strong> &gt; config/*.json &gt; defaults</code>).
+    Saving invalidates the cached query pipeline, so the next query rebuilds
+    with the new values.
+  </p>
+
+  {% if not db_enabled %}
+    <div class="alert alert-warning">
+      <strong>Read-only mode.</strong>
+      The user-config DB is not configured. Restart the web app with
+      <code>--config-db /path/to/config.db</code>
+      (or <code>$NORA_CONFIG_DB</code>) to enable saving.
+      Values shown below are the live effective values from CLI flags / env
+      vars / config files / defaults.
+    </div>
+  {% else %}
+    <div class="alert alert-info small">
+      DB: <code>{{ db_path }}</code>
+    </div>
+  {% endif %}
+
+  <div id="config-save-ack"></div>
+
+  <form
+    {% if db_enabled %}
+    hx-post="{{ root_path }}/api/config/save"
+    hx-target="#config-save-ack"
+    hx-swap="innerHTML"
+    hx-disabled-elt="find button"
+    {% endif %}
+  >
+    <input type="hidden" name="_submitted_by" value="ui">
+
+    {% for section in sections %}
+      <div class="card mb-4">
+        <div class="card-header">
+          <h2 class="h5 mb-1">{{ section.title }}</h2>
+          <div class="text-muted small">{{ section.description }}</div>
+        </div>
+        <div class="card-body">
+
+          {% if section.features %}
+            <h3 class="h6 text-uppercase text-muted mt-1 mb-2">Features</h3>
+            <div class="row g-2 mb-3">
+              {% for item in section.features %}
+                <div class="col-md-6">
+                  <div class="form-check">
+                    <input
+                      class="form-check-input"
+                      type="checkbox"
+                      id="cf-{{ item.field.module }}-{{ item.field.key }}"
+                      name="{{ item.field.module }}__{{ item.field.key }}"
+                      value="1"
+                      {% if item.is_truthy %}checked{% endif %}
+                      {% if not db_enabled %}disabled{% endif %}
+                    >
+                    <label
+                      class="form-check-label"
+                      for="cf-{{ item.field.module }}-{{ item.field.key }}"
+                    >
+                      <strong>{{ item.field.label }}</strong>
+                    </label>
+                    {% if item.field.help %}
+                      <div class="form-text small">{{ item.field.help }}</div>
+                    {% endif %}
+                  </div>
+                </div>
+              {% endfor %}
+            </div>
+          {% endif %}
+
+          {% if section.values %}
+            <h3 class="h6 text-uppercase text-muted mt-3 mb-2">Values</h3>
+            {% for item in section.values %}
+              <div class="mb-3">
+                <label
+                  for="cf-{{ item.field.module }}-{{ item.field.key }}"
+                  class="form-label small mb-1"
+                >
+                  <strong>{{ item.field.label }}</strong>
+                </label>
+                {% if item.field.kind == "enum" %}
+                  <select
+                    class="form-select form-select-sm"
+                    id="cf-{{ item.field.module }}-{{ item.field.key }}"
+                    name="{{ item.field.module }}__{{ item.field.key }}"
+                    {% if not db_enabled %}disabled{% endif %}
+                  >
+                    {% for choice in item.field.choices %}
+                      <option
+                        value="{{ choice }}"
+                        {% if item.current_str == choice %}selected{% endif %}
+                      >{{ choice or "(unset)" }}</option>
+                    {% endfor %}
+                  </select>
+                {% else %}
+                  <input
+                    type="{% if item.field.kind == 'password' %}password{% else %}text{% endif %}"
+                    class="form-control form-control-sm"
+                    id="cf-{{ item.field.module }}-{{ item.field.key }}"
+                    name="{{ item.field.module }}__{{ item.field.key }}"
+                    value="{{ item.current_str }}"
+                    {% if not db_enabled %}disabled{% endif %}
+                  >
+                {% endif %}
+                {% if item.field.help %}
+                  <div class="form-text small">{{ item.field.help }}</div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          {% endif %}
+
+          {% if section.tunables %}
+            <h3 class="h6 text-uppercase text-muted mt-3 mb-2">Tunable parameters</h3>
+            {% for item in section.tunables %}
+              <div class="mb-3">
+                <label
+                  for="cf-{{ item.field.module }}-{{ item.field.key }}"
+                  class="form-label small mb-1"
+                >
+                  <strong>{{ item.field.label }}</strong>
+                </label>
+                <input
+                  type="number"
+                  step="{% if item.field.kind == 'float' %}any{% else %}1{% endif %}"
+                  class="form-control form-control-sm"
+                  id="cf-{{ item.field.module }}-{{ item.field.key }}"
+                  name="{{ item.field.module }}__{{ item.field.key }}"
+                  value="{{ item.current_str }}"
+                  {% if not db_enabled %}disabled{% endif %}
+                >
+                {% if item.field.help %}
+                  <div class="form-text small">{{ item.field.help }}</div>
+                {% endif %}
+              </div>
+            {% endfor %}
+          {% endif %}
+
+        </div>
+      </div>
+    {% endfor %}
+
+    {% if db_enabled %}
+      <div class="d-flex align-items-center mb-5">
+        <button type="submit" class="btn btn-primary">Save changes</button>
+        <span class="ms-3 text-muted small">
+          Saving invalidates the cached query pipeline; next query rebuilds with new values.
+        </span>
+      </div>
+    {% endif %}
+  </form>
+</div>
+{% endblock %}

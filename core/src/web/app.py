@@ -36,6 +36,7 @@ from core.src.web.routes.resolve_review import router as resolve_review_router
 from core.src.web.routes.pipeline import router as pipeline_router
 from core.src.web.routes.query import router as query_router
 from core.src.web.routes.playground import router as playground_router
+from core.src.web.routes.config_route import router as config_router
 
 logger = logging.getLogger(__name__)
 
@@ -104,6 +105,28 @@ async def lifespan(app: FastAPI):
     path_mapper = PathMapper(config.path_mappings)
     app.state.path_mapper = path_mapper
 
+    # Optional ConfigStore — opt-in via --config-db / $NORA_CONFIG_DB.
+    # When unset, the Config page renders read-only with a notice.
+    # When set, hydrate the LLMConfigFile / RetrievalConfig caches with
+    # any saved values so the resolver chain picks them up.
+    import os as _os
+    config_db_path = _os.environ.get("NORA_CONFIG_DB")
+    if config_db_path:
+        from core.src.web.config_db import ConfigStore
+        try:
+            cs = ConfigStore(config_db_path)
+            cs.apply_to_caches()
+            app.state.config_store = cs
+            logger.info("ConfigStore active at %s", config_db_path)
+        except Exception as e:
+            logger.warning("ConfigStore init failed at %s: %s", config_db_path, e)
+            app.state.config_store = None
+    else:
+        app.state.config_store = None
+        logger.info(
+            "ConfigStore: DISABLED (set --config-db / $NORA_CONFIG_DB to enable)"
+        )
+
     # Start resource sampler background task — sample disk usage from env_dir
     from core.src.web.resource_sampler import start_resource_sampler
     sampler_task = await start_resource_sampler(metrics_store, interval=30, data_dir=str(config.env_dir_path()))
@@ -141,6 +164,7 @@ app.include_router(resolve_review_router)
 app.include_router(pipeline_router)
 app.include_router(query_router)
 app.include_router(playground_router)
+app.include_router(config_router)
 
 templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 templates.env.globals["duration"] = _duration_filter
@@ -239,6 +263,16 @@ if __name__ == "__main__":
             "<env_dir>/state/nora_test_feedback.db default)."
         ),
     )
+    parser.add_argument(
+        "--config-db", default=None,
+        help=(
+            "Full path to the user-config SQLite DB (overrides "
+            "$NORA_CONFIG_DB). Enables the /config page; when unset, "
+            "the page renders read-only and edits are not persisted. "
+            "DB layer slots between env vars and config/*.json in the "
+            "resolution chain (CLI > env > DB > JSON > defaults)."
+        ),
+    )
     args = parser.parse_args()
 
     # CLI flags feed env vars before uvicorn spawns the worker. The
@@ -254,8 +288,11 @@ if __name__ == "__main__":
         os.environ["NORA_METRICS_DB"] = args.metrics_db
     if args.feedback_db:
         os.environ["NORA_FEEDBACK_DB"] = args.feedback_db
+    if args.config_db:
+        os.environ["NORA_CONFIG_DB"] = args.config_db
 
-    if any([args.env_dir, args.jobs_db, args.metrics_db, args.feedback_db]):
+    if any([args.env_dir, args.jobs_db, args.metrics_db, args.feedback_db,
+            args.config_db]):
         # Re-resolve so the startup log lines show effective values
         # in this process (the worker re-imports anyway).
         from core.src.web.config import load_config as _load

@@ -1,0 +1,8 @@
+{% if error %}
+  <div class="alert alert-danger">{{ error }}</div>
+{% else %}
+  <div class="alert alert-success">
+    Saved {{ saved_count }} field{% if saved_count != 1 %}s{% endif %}.
+    The cached query pipeline has been cleared — the next query will pick up the new values.
+  </div>
+{% endif %}
