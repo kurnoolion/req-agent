@@ -114,6 +114,158 @@ def _reset_llm_config_cache() -> None:
     global _LLM_CONFIG_CACHE
     _LLM_CONFIG_CACHE = None
 
+
+# ---------------------------------------------------------------------------
+# config/retrieval.json — single canonical home for retrieval-pipeline
+# tunables (toggles + thresholds). Per-knob 3-tier resolution:
+#   CLI flag > NORA_RETRIEVAL_<KNOB> env var > config/retrieval.json
+#   > built-in default. Per-type overrides under *_by_type maps in the
+#   file; absent type falls through to the scalar default.
+# ---------------------------------------------------------------------------
+
+DEFAULT_RETRIEVAL_CONFIG_PATH = _PROJECT_ROOT / "config" / "retrieval.json"
+
+
+@dataclass
+class RetrievalConfig:
+    """Schema for `config/retrieval.json`.
+
+    Phase 3-config seed: only Step 3's grouping knobs are wired here.
+    Other retrieval tunables (top_k, BM25 weight, max_distance_threshold,
+    rerank/rewrite toggles) migrate in Phase 4 and will share this file.
+    See `core/src/query/grouping.py` for grouping semantics.
+
+    Empty/None values mean "fall through" — the resolver chain consults
+    env vars and built-in defaults below this file.
+    """
+
+    enable_grouping: bool | None = None
+    """Toggle for Stage 4.7 hierarchy-based grouping. When True, retrieved
+    chunks are clustered by longest-common hierarchy_path prefix; when
+    the gap between top groups is below `gap_threshold`, the pipeline
+    short-circuits with a disambiguation response instead of synthesizing
+    one collapsed answer. None / unset means "use default" (currently False
+    for backward compat)."""
+
+    gap_threshold: float | None = None
+    """Distance gap below which the pipeline returns disambiguation
+    instead of auto-committing to the top group. None / unset → default
+    (0.05). Specific to the embedding model + corpus distance distribution;
+    re-tune when those change."""
+
+    gap_threshold_by_type: dict[str, float] = field(default_factory=dict)
+    """Per-QueryType override for `gap_threshold`. Keys are
+    `QueryType.value` strings (e.g. "single_doc", "cross_doc"). Lookup
+    falls through to the scalar `gap_threshold` when a type is absent.
+    Reserved for Step 4 intent classification (Fact intent will likely
+    want a stricter gap than general queries)."""
+
+    @classmethod
+    def load(cls, path: Path | None = None) -> RetrievalConfig:
+        config_path = path or DEFAULT_RETRIEVAL_CONFIG_PATH
+        if not config_path.exists():
+            return cls()
+        try:
+            with open(config_path) as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            logger.warning("Could not parse %s: %s — using empty defaults",
+                           config_path, e)
+            return cls()
+
+        eg = data.get("enable_grouping")
+        gt = data.get("gap_threshold")
+        gtbt = data.get("gap_threshold_by_type") or {}
+        return cls(
+            enable_grouping=bool(eg) if eg is not None else None,
+            gap_threshold=float(gt) if gt is not None else None,
+            gap_threshold_by_type={
+                str(k): float(v) for k, v in gtbt.items()
+                if isinstance(v, (int, float))
+            },
+        )
+
+
+# Module-level cache so repeat calls don't re-read the file.
+_RETRIEVAL_CONFIG_CACHE: RetrievalConfig | None = None
+
+
+def _retrieval_config() -> RetrievalConfig:
+    global _RETRIEVAL_CONFIG_CACHE
+    if _RETRIEVAL_CONFIG_CACHE is None:
+        _RETRIEVAL_CONFIG_CACHE = RetrievalConfig.load()
+    return _RETRIEVAL_CONFIG_CACHE
+
+
+def _reset_retrieval_config_cache() -> None:
+    """Test hook — drop the cached config so the next read picks up
+    a freshly-written file."""
+    global _RETRIEVAL_CONFIG_CACHE
+    _RETRIEVAL_CONFIG_CACHE = None
+
+
+# ---------------------------------------------------------------------------
+# Retrieval knobs — Phase 3-config (Step 3 only)
+# ---------------------------------------------------------------------------
+
+GROUPING_ENABLED_ENV_VAR: str = "NORA_RETRIEVAL_GROUPING_ENABLED"
+GAP_THRESHOLD_ENV_VAR: str = "NORA_RETRIEVAL_GAP_THRESHOLD"
+DEFAULT_ENABLE_GROUPING: bool = False
+DEFAULT_GAP_THRESHOLD: float = 0.05
+
+
+def resolve_grouping_enabled(cli_value: bool | None = None) -> bool:
+    """Resolve whether Stage 4.7 grouping is enabled.
+
+    Precedence: --enable-grouping / --no-grouping CLI flag >
+    NORA_RETRIEVAL_GROUPING_ENABLED env var > config/retrieval.json
+    `enable_grouping` > default (False — Step 3 ships off by default).
+    """
+    if cli_value is not None:
+        return cli_value
+    env_raw = os.environ.get(GROUPING_ENABLED_ENV_VAR)
+    if env_raw is not None:
+        return _truthy(env_raw)
+    cfg_value = _retrieval_config().enable_grouping
+    if cfg_value is not None:
+        return cfg_value
+    return DEFAULT_ENABLE_GROUPING
+
+
+def resolve_gap_threshold(
+    cli_value: float | None = None,
+    query_type: str | None = None,
+) -> float:
+    """Resolve the gap threshold for grouping auto-commit vs disambiguation.
+
+    Precedence: CLI flag > NORA_RETRIEVAL_GAP_THRESHOLD env var >
+    config/retrieval.json `gap_threshold_by_type[query_type]` (if present)
+    > config/retrieval.json `gap_threshold` (scalar default in file) >
+    built-in default (0.05).
+
+    `query_type` accepts a `QueryType.value` string (e.g. "single_doc").
+    None or unknown type falls through to the scalar default — same
+    behavior as having no per-type entry.
+    """
+    if cli_value is not None:
+        return float(cli_value)
+    env_raw = os.environ.get(GAP_THRESHOLD_ENV_VAR)
+    if env_raw:
+        try:
+            return float(env_raw)
+        except ValueError:
+            logger.warning(
+                "%s=%r is not a valid float; ignoring",
+                GAP_THRESHOLD_ENV_VAR, env_raw,
+            )
+    cfg = _retrieval_config()
+    if query_type and query_type in cfg.gap_threshold_by_type:
+        return cfg.gap_threshold_by_type[query_type]
+    if cfg.gap_threshold is not None:
+        return cfg.gap_threshold
+    return DEFAULT_GAP_THRESHOLD
+
+
 # ---------------------------------------------------------------------------
 # Standards source selection — see core/src/standards/spec_downloader.py
 # ---------------------------------------------------------------------------

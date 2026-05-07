@@ -1,0 +1,6 @@
+{
+  "_comment": "Retrieval pipeline knobs. Per-knob resolution: CLI flag > NORA_RETRIEVAL_<KNOB> env var > this file > built-in default. Per-type overrides under *_by_type maps; absent type falls through to the scalar default. Phase 3-config seed: only Step 3's grouping knobs are wired here. Other retrieval tunables (top_k, BM25 weight, max_distance_threshold, rerank/rewrite toggles) migrate in a follow-up phase and will share this file.",
+  "enable_grouping": false,
+  "gap_threshold": 0.05,
+  "gap_threshold_by_type": {}
+}

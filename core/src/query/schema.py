@@ -185,6 +185,38 @@ class AssembledContext:
     query_type: QueryType = QueryType.GENERAL
 
 
+# ── Stage 4.7 (grouping) output ─────────────────────────────────
+
+
+@dataclass
+class ChunkGroup:
+    """A cluster of retrieved chunks sharing a hierarchy-path prefix.
+
+    Output of Stage 4.7 (hierarchy-based grouping). The pipeline either
+    auto-commits to the top-scoring group (passing its chunks to Stage 5
+    synthesis) or, when the gap between top groups is below the
+    configured threshold, returns a disambiguation `QueryResponse` with
+    multiple groups for the UI to surface as user-facing choices.
+    """
+    common_prefix: list[str]
+    """Longest hierarchy-path prefix shared by every chunk in the group.
+    First element is the document root (per D-046)."""
+
+    chunks: list[RetrievedChunk]
+    """Chunks belonging to this group, in retrieval-rank order."""
+
+    score: float = 0.0
+    """Group score — minimum cosine distance across `chunks`. Lower is
+    better (closer to query). Min rather than avg so a single strong
+    chunk is recognized as a strong group; weak siblings don't drag it
+    down."""
+
+    representative_titles: list[str] = field(default_factory=list)
+    """Up to N short title strings (req titles or section names) for
+    UX display. Order mirrors `chunks`. Computed at group construction
+    so the UI doesn't have to reach back into chunk text."""
+
+
 # ── Stage 6 output ──────────────────────────────────────────────
 
 

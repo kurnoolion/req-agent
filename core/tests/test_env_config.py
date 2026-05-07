@@ -357,3 +357,109 @@ def test_resolve_skip_rag_only_envvar_implies_both(tmp_path, monkeypatch):
         assert env_cfg.resolve_skip_graph() is True
     finally:
         env_cfg._reset_llm_config_cache()
+
+
+# ---------------------------------------------------------------------------
+# RetrievalConfig + Phase-3-config resolvers (Step 3 grouping knobs)
+# ---------------------------------------------------------------------------
+
+
+def _isolate_retrieval_config(monkeypatch, tmp_path, **fields):
+    """Helper — point DEFAULT_RETRIEVAL_CONFIG_PATH at a tmp file with
+    given fields, reset the cache, return the path."""
+    import json
+    from core.src.env import config as env_cfg
+    p = tmp_path / "retrieval.json"
+    p.write_text(json.dumps(fields))
+    monkeypatch.setattr(env_cfg, "DEFAULT_RETRIEVAL_CONFIG_PATH", p)
+    env_cfg._reset_retrieval_config_cache()
+    return p
+
+
+def test_retrieval_config_load_missing_returns_defaults(tmp_path):
+    from core.src.env.config import RetrievalConfig
+    cfg = RetrievalConfig.load(tmp_path / "no-such.json")
+    assert cfg.enable_grouping is None
+    assert cfg.gap_threshold is None
+    assert cfg.gap_threshold_by_type == {}
+
+
+def test_retrieval_config_parses_fields(tmp_path):
+    import json
+    from core.src.env.config import RetrievalConfig
+    p = tmp_path / "retrieval.json"
+    p.write_text(json.dumps({
+        "enable_grouping": True,
+        "gap_threshold": 0.07,
+        "gap_threshold_by_type": {"single_doc": 0.1, "cross_doc": 0.03},
+    }))
+    cfg = RetrievalConfig.load(p)
+    assert cfg.enable_grouping is True
+    assert cfg.gap_threshold == 0.07
+    assert cfg.gap_threshold_by_type == {"single_doc": 0.1, "cross_doc": 0.03}
+
+
+def test_resolve_grouping_enabled_3tier(monkeypatch, tmp_path):
+    """CLI True > env var > config/retrieval.json > default (False)."""
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.GROUPING_ENABLED_ENV_VAR, raising=False)
+    _isolate_retrieval_config(monkeypatch, tmp_path)
+    try:
+        # Default
+        assert env_cfg.resolve_grouping_enabled() is False
+        # File: True wins over default
+        _isolate_retrieval_config(monkeypatch, tmp_path, enable_grouping=True)
+        assert env_cfg.resolve_grouping_enabled() is True
+        # Env var "0" beats file True
+        monkeypatch.setenv(env_cfg.GROUPING_ENABLED_ENV_VAR, "0")
+        assert env_cfg.resolve_grouping_enabled() is False
+        # Env var "1" beats file False
+        _isolate_retrieval_config(monkeypatch, tmp_path, enable_grouping=False)
+        monkeypatch.setenv(env_cfg.GROUPING_ENABLED_ENV_VAR, "true")
+        assert env_cfg.resolve_grouping_enabled() is True
+        # CLI False overrides everything
+        assert env_cfg.resolve_grouping_enabled(cli_value=False) is False
+        # CLI True is the strongest
+        assert env_cfg.resolve_grouping_enabled(cli_value=True) is True
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_gap_threshold_3tier(monkeypatch, tmp_path):
+    """CLI > env > by_type > scalar in file > default (0.05)."""
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.GAP_THRESHOLD_ENV_VAR, raising=False)
+    _isolate_retrieval_config(monkeypatch, tmp_path)
+    try:
+        # Default
+        assert env_cfg.resolve_gap_threshold() == env_cfg.DEFAULT_GAP_THRESHOLD
+        # Scalar in file
+        _isolate_retrieval_config(monkeypatch, tmp_path, gap_threshold=0.08)
+        assert env_cfg.resolve_gap_threshold() == 0.08
+        # Per-type override beats scalar (when type matches)
+        _isolate_retrieval_config(
+            monkeypatch, tmp_path,
+            gap_threshold=0.08,
+            gap_threshold_by_type={"single_doc": 0.02},
+        )
+        assert env_cfg.resolve_gap_threshold(query_type="single_doc") == 0.02
+        # Unknown type falls through to scalar
+        assert env_cfg.resolve_gap_threshold(query_type="cross_doc") == 0.08
+        # Env var beats file (any type)
+        monkeypatch.setenv(env_cfg.GAP_THRESHOLD_ENV_VAR, "0.123")
+        assert env_cfg.resolve_gap_threshold(query_type="single_doc") == 0.123
+        # CLI beats env var
+        assert env_cfg.resolve_gap_threshold(cli_value=0.3, query_type="single_doc") == 0.3
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_gap_threshold_invalid_env_var_falls_through(monkeypatch, tmp_path):
+    """Bad env var value is logged and ignored; falls through to file default."""
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(monkeypatch, tmp_path, gap_threshold=0.06)
+    monkeypatch.setenv(env_cfg.GAP_THRESHOLD_ENV_VAR, "not-a-number")
+    try:
+        assert env_cfg.resolve_gap_threshold() == 0.06
+    finally:
+        env_cfg._reset_retrieval_config_cache()
