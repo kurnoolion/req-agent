@@ -78,16 +78,25 @@ def _config_store_get(module: str, key: str):
         return None
 
 
-def _resolve_top_k() -> int:
-    """Resolve the QueryPipeline's default top_k from the ConfigStore
-    or fall back to 10 (the QueryPipeline.__init__ default)."""
-    val = _config_store_get("pipeline", "top_k")
+def _resolve_top_k_cap() -> int | None:
+    """Resolve the user-configured Top-K cap from the ConfigStore.
+
+    The cap is a HARD CEILING applied after per-type widening:
+    setting top_k_cap=25 means every query retrieves at most 25 chunks
+    regardless of intent (SUMMARIZE / CROSS_DOC etc that would
+    otherwise widen to 50). None / 0 / unset = no cap, per-type
+    widening behaves as before.
+
+    Resolves from ConfigStore only; no env-var equivalent yet.
+    """
+    val = _config_store_get("pipeline", "top_k_cap")
     if val is None:
-        return 10
+        return None
     try:
-        return max(1, int(val))
+        n = int(val)
+        return n if n > 0 else None
     except (TypeError, ValueError):
-        return 10
+        return None
 
 
 def _graph_path() -> Path:
@@ -341,13 +350,18 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
         "ENABLED" if enable_grouping else "disabled",
     )
 
-    top_k = _resolve_top_k()
+    top_k_cap = _resolve_top_k_cap()
+    if top_k_cap:
+        logger.info("Top-K cap: %d (user-configured)", top_k_cap)
+    else:
+        logger.info("Top-K cap: NONE (per-type widening unconstrained)")
     pipeline = QueryPipeline(
         graph=graph,
         embedder=embedder,
         store=store,
         synthesizer=synthesizer,
-        top_k=top_k,
+        top_k=10,            # floor; per-type widening lifts breadth queries
+        top_k_cap=top_k_cap,  # ceiling; user-set, applied AFTER widening
         max_context_chars=30000,
         max_distance_threshold=threshold,
         enable_grouping=enable_grouping,

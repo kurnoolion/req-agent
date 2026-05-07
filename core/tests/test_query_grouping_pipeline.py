@@ -261,6 +261,73 @@ class TestGapThresholdResolution:
             env_cfg._reset_retrieval_config_cache()
 
 
+class TestTopKCap:
+    """Step: top_k_cap — hard upper limit applied AFTER per-type
+    widening, so user-set caps win over breadth-query widening."""
+
+    def test_no_cap_preserves_per_type_widening(self):
+        """Without a cap, per-type widening lifts top_k for breadth
+        queries (SUMMARIZE → 50 internally; here we just verify the
+        retriever was asked for >= 25)."""
+        # Make 60 chunks all in same path so retrieval can return many.
+        triples = [(f"R{i}", ["DOC"], 0.2 + i * 0.001) for i in range(60)]
+        g = nx.DiGraph()
+        store = _ScriptedStore(_make_result(triples))
+        p = QueryPipeline(
+            graph=g, embedder=_FixedEmbedder(), store=store,
+            enable_bm25=False, enable_grouping=False,
+            top_k=10,  # floor
+            top_k_cap=None,  # no cap
+        )
+        # SUMMARIZE-shaped query → _TYPE_TOP_K[SUMMARIZE]=50 widens
+        resp = p.query("Explain the X requirements")
+        # Synthesized at full breadth (mock store returns all 50)
+        assert resp.retrieved_count == 50
+
+    def test_cap_overrides_per_type_widening(self):
+        """With cap=25, SUMMARIZE queries that would widen to 50
+        retrieve only 25."""
+        triples = [(f"R{i}", ["DOC"], 0.2 + i * 0.001) for i in range(60)]
+        g = nx.DiGraph()
+        store = _ScriptedStore(_make_result(triples))
+        p = QueryPipeline(
+            graph=g, embedder=_FixedEmbedder(), store=store,
+            enable_bm25=False, enable_grouping=False,
+            top_k=10, top_k_cap=25,
+        )
+        resp = p.query("Explain the X requirements")
+        assert resp.retrieved_count == 25
+
+    def test_cap_below_floor_still_caps(self):
+        """If cap is below the floor (top_k=10, top_k_cap=5), the cap
+        wins — explicit user constraint beats default floor."""
+        triples = [(f"R{i}", ["DOC"], 0.2 + i * 0.001) for i in range(60)]
+        g = nx.DiGraph()
+        store = _ScriptedStore(_make_result(triples))
+        p = QueryPipeline(
+            graph=g, embedder=_FixedEmbedder(), store=store,
+            enable_bm25=False, enable_grouping=False,
+            top_k=10, top_k_cap=5,
+        )
+        resp = p.query("Lookup query")
+        assert resp.retrieved_count == 5
+
+    def test_cap_zero_treated_as_no_cap(self):
+        """Cap of 0 is treated as 'unset' — sentinel for the Config
+        UI's empty-input → 0 coercion."""
+        triples = [(f"R{i}", ["DOC"], 0.2 + i * 0.001) for i in range(60)]
+        g = nx.DiGraph()
+        store = _ScriptedStore(_make_result(triples))
+        p = QueryPipeline(
+            graph=g, embedder=_FixedEmbedder(), store=store,
+            enable_bm25=False, enable_grouping=False,
+            top_k=10, top_k_cap=0,
+        )
+        resp = p.query("Explain the X requirements")
+        # No cap → SUMMARIZE widening to 50 applies
+        assert resp.retrieved_count == 50
+
+
 class TestPinnedChunksPath:
     """Step 3c — pinned_chunk_ids skips Stages 2-4.7 and synthesizes
     only from the named chunks. Used to resolve disambiguation

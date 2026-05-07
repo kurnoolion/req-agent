@@ -162,12 +162,14 @@ _RETRIEVAL_FIELDS: list[ConfigField] = [
         ),
     ),
     ConfigField(
-        module="pipeline", key="top_k",
-        label="Top-K (default)", kind="int", category="tunable",
+        module="pipeline", key="top_k_cap",
+        label="Top-K Cap (max chunks per query)", kind="int", category="tunable",
         help=(
-            "Default number of chunks to retrieve. Per-query-type "
-            "widening (CROSS_DOC, SUMMARIZE, etc.) takes max of this "
-            "and its type-specific value, so this is a floor."
+            "Hard upper limit on chunks retrieved per query. Applied "
+            "AFTER per-query-type widening — e.g. SUMMARIZE queries "
+            "normally retrieve 50 chunks; setting this to 25 caps them "
+            "at 25 regardless of intent. Empty / 0 = no cap (per-type "
+            "widening unconstrained, current default behavior)."
         ),
     ),
 ]

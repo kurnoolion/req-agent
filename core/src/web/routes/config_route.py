@@ -57,30 +57,12 @@ def _current_value(field: ConfigField) -> Any:
             if field.key == "max_distance_threshold":
                 from core.src.web.routes.query import _resolve_max_distance_threshold
                 return _resolve_max_distance_threshold()
-            if field.key == "top_k":
-                # No resolver yet — read DB directly, fall back to 10
-                # (the QueryPipeline.__init__ default).
-                return _read_pipeline_int_or_default("top_k", 10)
+            if field.key == "top_k_cap":
+                from core.src.web.routes.query import _resolve_top_k_cap
+                return _resolve_top_k_cap()
     except Exception as e:
         logger.debug("current_value(%s, %s) failed: %s", field.module, field.key, e)
     return None
-
-
-def _read_pipeline_int_or_default(key: str, default: int) -> int:
-    """Read a pipeline-module int from the ConfigStore, fall back to
-    default if no DB or no row. Used for knobs that don't have a
-    cached dataclass slot."""
-    from core.src.web import app as web_app
-    cs = getattr(web_app.app.state, "config_store", None) if hasattr(web_app, "app") else None
-    if cs is None:
-        return default
-    val = cs.get("pipeline", key)
-    if val is None:
-        return default
-    try:
-        return int(val)
-    except (TypeError, ValueError):
-        return default
 
 
 # ── Form value coercion ──────────────────────────────────────

@@ -210,6 +210,7 @@ class QueryPipeline:
         enable_bm25: bool = True,
         max_distance_threshold: float | None = None,
         enable_grouping: bool = False,
+        top_k_cap: int | None = None,
     ) -> None:
         """Initialize the pipeline.
 
@@ -253,6 +254,13 @@ class QueryPipeline:
                 (CLI > NORA_RETRIEVAL_GAP_THRESHOLD > config/retrieval.json
                 gap_threshold_by_type[<query_type>] > config scalar
                 > built-in default 0.05).
+            top_k_cap: Hard upper limit on chunks retrieved per query.
+                Applied AFTER per-type widening (e.g. SUMMARIZE
+                normally retrieves _TYPE_TOP_K[SUMMARIZE]=50; with
+                top_k_cap=25 it retrieves min(50, 25)=25). None (default)
+                = no cap, current widening behavior preserved.
+                `top_k` (the floor) and `top_k_cap` (the ceiling) bound
+                the effective top-K from below and above respectively.
         """
         from core.src.query.bm25_index import BM25Index
 
@@ -273,6 +281,7 @@ class QueryPipeline:
         self._bypass_graph = False
         self._max_distance_threshold = max_distance_threshold
         self._enable_grouping = enable_grouping
+        self._top_k_cap = top_k_cap
         self._store = store
 
     def _fetch_chunks_by_ids(self, ids: list[str]) -> list:
@@ -439,8 +448,27 @@ class QueryPipeline:
         # doc queries but hurts cross-doc / feature-level (parent
         # chunks too thin to compete with BM25-favored richer chunks).
         type_top_k = max(self._top_k, _TYPE_TOP_K.get(intent.query_type, 0))
+        # Apply user-configured cap (Config page) AFTER per-type widening
+        # so an explicit "I want at most N" cap wins over breadth-query
+        # widening. None / 0 = no cap.
+        if self._top_k_cap and self._top_k_cap > 0:
+            type_top_k = min(type_top_k, self._top_k_cap)
         bm25_weight = _TYPE_BM25_WEIGHT.get(intent.query_type, 0.0)
         rerank = _TYPE_RERANK_ENABLED.get(intent.query_type, False)
+        # Per-query effective-knob log so admins can verify the
+        # ConfigStore + resolver chain landed the values they expected.
+        logger.info(
+            "[Query knobs] type=%s top_k=%d (cap=%s) bm25_weight=%.2f rerank=%s "
+            "rewrite=%s threshold=%s grouping=%s",
+            intent.query_type.value,
+            type_top_k,
+            self._top_k_cap if self._top_k_cap else "none",
+            bm25_weight,
+            rerank,
+            _TYPE_REWRITE_ENABLED.get(intent.query_type, False),
+            _TYPE_MAX_DISTANCE.get(intent.query_type, self._max_distance_threshold),
+            self._enable_grouping and intent.query_type not in _TYPE_DISABLE_GROUPING,
+        )
         chunks = self._retriever.retrieve(
             retrieval_query, candidates, scoped.scoped_mnos,
             top_k=type_top_k, bm25_weight=bm25_weight, rerank=rerank,
