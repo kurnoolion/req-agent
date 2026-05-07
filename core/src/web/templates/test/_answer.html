@@ -144,6 +144,61 @@
       </div>
     {% endif %}
 
+    {# Citation audit (Stage 6.5). Per-sentence breakdown of which
+       sentences cite a requirement and which don't, plus detection
+       of fabricated citations. Empty on disambiguation/not-found
+       paths (no synthesis happened). #}
+    {% if citation_audit %}
+      <hr>
+      <div class="small">
+        <strong>Citation audit:</strong>
+        {{ citation_audit.cited_sentence_count }}/{{ citation_audit.factual_sentence_count }}
+        sentences cited
+        ({{ citation_audit.cited_percent }}%)
+        {% if citation_audit.fabricated_count %}
+          · <span class="text-danger">{{ citation_audit.fabricated_count }} fabricated</span>
+        {% endif %}
+
+        {% if citation_audit.uncited_sentences %}
+          <button type="button"
+                  class="btn btn-sm btn-link p-0 ms-2 align-baseline"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#uncited-{{ row_id }}"
+                  aria-expanded="false"
+                  aria-controls="uncited-{{ row_id }}">
+            ({{ citation_audit.uncited_sentences|length }} uncited — show)
+          </button>
+          <div id="uncited-{{ row_id }}" class="collapse mt-2">
+            <div class="text-muted small mb-1">
+              Sentences with no inline citation (may be paraphrasing or unsupported):
+            </div>
+            <ul class="list-unstyled mb-0">
+              {% for s in citation_audit.uncited_sentences %}
+                <li class="border-start border-warning border-3 ps-2 mb-1 small">
+                  {{ s.text }}
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+
+        {% if citation_audit.fabricated %}
+          <div class="alert alert-danger mt-2 mb-0 small">
+            <strong>Fabricated citations:</strong>
+            <ul class="mb-0">
+              {% for f in citation_audit.fabricated %}
+                <li>
+                  Cites <code>{{ f.fabricated|join(', ') }}</code>
+                  — not in retrieved context.
+                  <div class="text-muted">{{ f.text }}</div>
+                </li>
+              {% endfor %}
+            </ul>
+          </div>
+        {% endif %}
+      </div>
+    {% endif %}
+
     {# Debug: full prompt sent to the LLM (system + context). Hidden
        behind a click since it's typically large — many KB. Empty when
        synthesis was skipped (not-found / disambiguation paths). #}

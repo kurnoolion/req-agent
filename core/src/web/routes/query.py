@@ -469,6 +469,25 @@ def _run_query_sync(
         llm_system_prompt = response.assembled_context.system_prompt or ""
         llm_context_text = response.assembled_context.context_text or ""
 
+    # Stage 6.5 citation audit — surface per-sentence breakdown +
+    # summary stats. None on disambiguation / not-found paths.
+    citation_audit_payload = None
+    if response.citation_audit is not None:
+        ca = response.citation_audit
+        citation_audit_payload = {
+            "cited_sentence_count": ca.cited_sentence_count,
+            "factual_sentence_count": ca.factual_sentence_count,
+            "cited_percent": round(ca.cited_percent, 1),
+            "fabricated_count": ca.fabricated_count,
+            "uncited_sentences": [
+                {"text": s.text} for s in ca.uncited_sentences
+            ],
+            "fabricated": [
+                {"text": s.text, "fabricated": list(s.fabricated_citations)}
+                for s in ca.sentences if s.fabricated_citations
+            ],
+        }
+
     result = {
         "answer": response.answer,
         "citations": citations,
@@ -480,6 +499,7 @@ def _run_query_sync(
         "groups": groups_payload,
         "llm_system_prompt": llm_system_prompt,
         "llm_context_text": llm_context_text,
+        "citation_audit": citation_audit_payload,
     }
 
     # Attach LLM metrics for the background task to record

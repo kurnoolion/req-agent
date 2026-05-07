@@ -157,6 +157,7 @@ async def playground_ask(request: Request):
         "groups": result.get("groups", []),
         "llm_system_prompt": result.get("llm_system_prompt", ""),
         "llm_context_text": result.get("llm_context_text", ""),
+        "citation_audit": result.get("citation_audit"),
     })
 
 
@@ -244,6 +245,7 @@ async def playground_synthesize_group(request: Request):
         "groups": [],
         "llm_system_prompt": result.get("llm_system_prompt", ""),
         "llm_context_text": result.get("llm_context_text", ""),
+        "citation_audit": result.get("citation_audit"),
     })
 
 
@@ -337,4 +339,5 @@ def _run_query_for_test(
         "groups": raw.get("groups", []),
         "llm_system_prompt": raw.get("llm_system_prompt", ""),
         "llm_context_text": raw.get("llm_context_text", ""),
+        "citation_audit": raw.get("citation_audit"),
     }

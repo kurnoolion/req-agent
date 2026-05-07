@@ -381,6 +381,15 @@ class QueryPipeline:
             response.candidate_count = 0
             response.retrieved_chunks = chunks
             response.assembled_context = context
+            from core.src.query.citation_audit import audit_answer_citations
+            available_req_ids = [
+                c.metadata.get("req_id", "")
+                for c in chunks
+                if c.metadata.get("req_id")
+            ]
+            response.citation_audit = audit_answer_citations(
+                response.answer, available_req_ids,
+            )
             return response
 
         # Stage 2: MNO/Release Resolution
@@ -552,6 +561,21 @@ class QueryPipeline:
         # Surface the exact prompt sent to the LLM so the Test page
         # can render a "Show LLM prompt" debug view.
         response.assembled_context = context
+
+        # Stage 6.5: Citation audit. Per-sentence breakdown of which
+        # sentences cite a requirement and which don't, plus
+        # detection of fabricated citations (req IDs in the answer
+        # that weren't in the context). Cheap (regex over the answer);
+        # always runs on the synthesis path. See citation_audit.py.
+        from core.src.query.citation_audit import audit_answer_citations
+        available_req_ids = [
+            c.metadata.get("req_id", "")
+            for c in chunks
+            if c.metadata.get("req_id")
+        ]
+        response.citation_audit = audit_answer_citations(
+            response.answer, available_req_ids,
+        )
 
         if verbose:
             logger.info(

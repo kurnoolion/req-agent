@@ -236,6 +236,61 @@ class ChunkGroup:
     so the UI doesn't have to reach back into chunk text."""
 
 
+# ── Stage 6.5 (citation audit) output ───────────────────────────
+
+
+@dataclass
+class SentenceAudit:
+    """One sentence's audit result. Output of post-synthesis Stage 6.5.
+
+    A "factual" sentence is anything that's not markdown header / TL;DR
+    label / blank — i.e. a sentence the user reads as a substantive
+    claim. Only factual sentences contribute to the cited-percentage
+    metric. Meta sentences are listed for completeness but don't
+    affect the score.
+    """
+    text: str
+    has_citation: bool
+    citations_found: list[str] = field(default_factory=list)
+    """Citation tokens recognized in the sentence — req_id strings
+    (e.g. "VZ_REQ_LTEDATARETRY_7748") and 3GPP refs (e.g.
+    "3GPP TS 24.301 Section 5.5.1.2.6")."""
+
+    fabricated_citations: list[str] = field(default_factory=list)
+    """Citations that look well-formed but DO NOT appear in the
+    retrieved context. The worst-case error class — looks
+    authoritative, isn't real."""
+
+    is_meta: bool = False
+    """True for markdown headers, TL;DR labels, blank lines — sentences
+    that don't make factual claims and shouldn't count against the
+    cited-percentage metric."""
+
+
+@dataclass
+class CitationAudit:
+    """Full audit of a synthesized answer. Output of Stage 6.5."""
+    sentences: list[SentenceAudit] = field(default_factory=list)
+    cited_sentence_count: int = 0
+    factual_sentence_count: int = 0
+    """Total minus meta sentences. Denominator for cited-percentage."""
+
+    fabricated_count: int = 0
+    available_req_ids: list[str] = field(default_factory=list)
+    """The req_ids that were actually in the LLM's context. Used by
+    the audit to distinguish real citations from fabricated ones."""
+
+    @property
+    def cited_percent(self) -> float:
+        if self.factual_sentence_count == 0:
+            return 100.0
+        return 100.0 * self.cited_sentence_count / self.factual_sentence_count
+
+    @property
+    def uncited_sentences(self) -> list[SentenceAudit]:
+        return [s for s in self.sentences if not s.is_meta and not s.has_citation]
+
+
 # ── Stage 6 output ──────────────────────────────────────────────
 
 
@@ -286,6 +341,14 @@ class QueryResponse:
     # prompt" view; debugging-only, not needed by callers that just
     # want the answer.
     assembled_context: AssembledContext | None = None
+
+    # Stage 6.5 citation audit — per-sentence breakdown of which
+    # sentences cite a requirement and which don't. Also detects
+    # "fabricated" citations (req IDs in the answer that weren't in
+    # the LLM's context). Populated by QueryPipeline.query() on the
+    # normal synthesis path; None on disambiguation / not-found
+    # paths (no real answer to audit).
+    citation_audit: CitationAudit | None = None
 
     def to_dict(self) -> dict[str, Any]:
         d = {
