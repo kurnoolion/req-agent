@@ -1785,3 +1785,563 @@ DEFAULT`). If not set, call the existing `resolve_*` helpers
 extends D-044's resolution chain to a CLI that previously
 didn't participate). The "back-compat to deprecated env-config
 fields" tier from D-044 stays at the bottom and is unaffected.
+
+---
+
+## D-049: Stage 4.7 — hierarchy-based grouping with user-facing disambiguation
+
+**Date**: 2026-05-06
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+After D-046 (chunk metadata `hierarchy_path`) and D-047 (relevance
+threshold filter), retrieval still produced a failure mode: when a
+query genuinely had multiple plausible answers in the corpus
+(e.g. "What are the security requirements?" hits chunks under
+multiple specs and multiple subsections), the LLM would synthesize
+a single answer that conflated topics — picking somewhat arbitrarily
+which chunks to lean on, and producing prose that read as
+authoritative but was a low-confidence collapse of distinct
+realities.
+
+The user's stated principle, surfaced at the start of the
+retrieval-improvements plan: *"the system shall not pretend it is an
+Oracle."* When retrieval can't distinguish between plausible answer
+groups, it should surface the choice rather than fabricate a synthesis.
+
+**Decision**
+New optional **Stage 4.7** in `QueryPipeline.query()`, between the
+threshold filter (D-047, Stage 4.5) and context assembly (Stage 5):
+
+1. Cluster post-threshold chunks by **greedy longest-common-prefix**
+   on `hierarchy_path` metadata. Two chunks share a group iff they
+   share at least the document root. Adjacent chunks in the
+   alphabetically-sorted path order extend the running group's LCP.
+2. **Group score** = `min(c.similarity_score for c in chunks)`. The
+   best chunk anchors the group's relevance; weak siblings don't
+   drag.
+3. **Decision rule**: when `gap_between_top_groups(groups) >=
+   gap_threshold`, **auto-commit** to the top group — its chunks
+   alone go to Stage 5. When gap < threshold, return a
+   `QueryResponse(disambiguation_required=True, groups=[…])` and
+   skip Stages 5 and 6 (mirrors D-047's `_NOT_FOUND_ANSWER`
+   short-circuit).
+4. **Disambiguation UX**: the test page renders one Bootstrap card
+   per group, each with the path breadcrumb, representative section
+   titles, and a "Synthesize from this group" button. Click submits
+   the picked group's chunk IDs to a new `pinned_chunk_ids` path
+   that re-runs synthesis from those chunks only.
+5. **Per-intent opt-out**: SUMMARIZE intent (D-051) is added to
+   `_TYPE_DISABLE_GROUPING` because it inherently wants ALL groups
+   merged into one synthesis — picking one defeats the purpose.
+
+Three knobs in the unified resolver chain (D-050 / `config/retrieval.json`):
+
+- `enable_grouping: bool` — global toggle. Default False (preserves
+  pre-Step-3 behavior); flip to True to opt in.
+- `gap_threshold: float` — distance gap below which disambiguation
+  triggers. Default 0.05.
+- `gap_threshold_by_type: dict[str, float]` — per-intent overrides.
+
+**Why this over alternatives**
+- *Pick the highest-scoring chunk and synthesize* — the pre-Step-3
+  behavior. Loses the user's information-need signal whenever the
+  top-K spans semantically-distinct groups; produces the
+  "authoritative-looking but conflated" hallucination class.
+- *Always return all groups; let the LLM merge* — rejected. The
+  whole point of grouping is to let the user pick when the system
+  can't. Always-merge would still pretend the system has one answer.
+- *Cluster by k-means on the embeddings rather than by hierarchy* —
+  rejected. Hierarchy is a structural signal the corpus authors
+  provided; using it directly is more interpretable to users
+  (path breadcrumbs are human-meaningful) and cheaper than running
+  clustering at every query.
+- *Group score = mean / max distance* — rejected for v1. min picks
+  up "this group has at least one strong match"; mean dilutes when
+  the group has weak siblings; max is dominated by the worst chunk.
+  Empirically, min is the cleanest signal for "is this group
+  relevant at all?"
+- *Hard-fail / raise on ambiguity* — rejected. Disambiguation is a
+  normal answer in the user workflow, not an error.
+
+**Consequences**
+- **Off by default.** `enable_grouping=False` preserves pre-Step-3
+  behavior bit-for-bit; existing callers see no change.
+- **Threshold is calibrated to the embedding model.** 0.05 default
+  came from in-session tuning on env_vzw + qwen3-embedding:4b-q8_0.
+  Different models will need different defaults — the per-type
+  override map is the migration path.
+- **New `QueryResponse` fields**: `disambiguation_required: bool`
+  and `groups: list[ChunkGroup]`. Old API consumers that ignore
+  unknown fields are unaffected; new consumers need to check the
+  flag before assuming `answer` is a real synthesis.
+- **New `pinned_chunk_ids` parameter on `QueryPipeline.query()`** —
+  bypasses Stages 2-4.7 (resolver / graph scope / rewrite / RAG /
+  threshold / grouping) and goes straight to synthesis. Powers the
+  card-click flow; also a useful primitive for "synthesize from a
+  hand-picked set" use cases.
+- **New module `core/src/query/grouping.py`** with
+  `group_chunks_by_hierarchy()` and `gap_between_top_groups()`.
+  Singletons, multi-doc clusters, and back-compat (chunks with
+  empty `hierarchy_path`) all handled.
+- **Web layer adds a new endpoint** (`POST /api/test/synthesize-group`)
+  + Bootstrap card rendering in `_answer.html`.
+- **38 new tests** across grouping logic + pipeline integration +
+  pinned-chunks path + cap interaction.
+
+**Related**: D-046 (chunk metadata hierarchy_path; the input
+grouping reads), D-047 (threshold filter; runs before grouping),
+D-050 (Phase 3-config infrastructure; the knobs ride on it),
+D-051 (FACT/SUMMARIZE intents; SUMMARIZE opts out of grouping),
+D-052 (citation audit; runs after this stage).
+
+---
+
+## D-050: Phase 3-config — `config/retrieval.json` extends the unified resolver chain
+
+**Date**: 2026-05-06
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+Stage 4.7 (D-049) introduced two new tunable knobs (`enable_grouping`,
+`gap_threshold`) plus a per-type override map. The user's request
+when Step 3 was scoped: *"all tunable parameters [shall] be
+configurable through the standard 3-tier config architecture (CLI
+> env > config-file > default)."*
+
+Existing retrieval tunables (`_TYPE_TOP_K`, `_TYPE_BM25_WEIGHT`,
+`_TYPE_RERANK_ENABLED`, `_TYPE_REWRITE_ENABLED`) lived as
+hand-edited dicts in `core/src/query/pipeline.py` — not configurable
+without code changes. The decision: do we (a) migrate everything in
+one big refactor, or (b) seed new infrastructure for the Step 3
+knobs and migrate existing knobs incrementally?
+
+**Decision**
+Phased approach. **Phase 3-config (this commit)** adds the
+infrastructure — a new file, dataclass, and resolver helpers — but
+wires only the Step 3 knobs through it. **Phase 4-migrate (next
+session, separate scope)** migrates the existing per-type dicts
+into the same file with backward-compatible defaults. Each migrated
+knob is its own atomic commit.
+
+Concretely:
+
+- New `config/retrieval.json` parallel to `config/llm.json`
+  (D-044). Schema seeded with `enable_grouping`, `gap_threshold`,
+  `gap_threshold_by_type`. Comment in the file documents Phase
+  4-migrate's planned additions.
+- New `RetrievalConfig` dataclass in `core/src/env/config.py`
+  mirrors `LLMConfigFile`'s shape (cached via
+  `_retrieval_config()`, test hook `_reset_retrieval_config_cache()`).
+- Two new resolver helpers `resolve_grouping_enabled` /
+  `resolve_gap_threshold` follow the D-044 chain: CLI > env var >
+  config file > default. The threshold helper additionally honors a
+  per-type override (`gap_threshold_by_type[query_type]`) above the
+  scalar default in the file.
+- New env vars `NORA_RETRIEVAL_GROUPING_ENABLED` /
+  `NORA_RETRIEVAL_GAP_THRESHOLD`. Naming convention is
+  `NORA_RETRIEVAL_<KNOB>` for everything in `config/retrieval.json`,
+  parallel to D-044's `NORA_LLM_*` / `NORA_EMBEDDING_*`.
+- **Per-type maps are file-only.** No env var or CLI flag for them
+  — JSON-typed and rarely need shell-level override.
+
+**Why this over alternatives**
+- *Migrate all retrieval knobs at once* — rejected. Each knob needs
+  its own resolver, env var, CLI flag, doc update, and test;
+  bundling would produce a 6-hour commit chain blocking Step 3
+  shipping. Phased migration keeps each piece reviewable.
+- *Drop the per-type dicts and only have file-driven config* —
+  rejected. The dicts encode empirical tuning rationale (comments
+  explain why each value); preserving them as built-in defaults
+  the file overrides keeps that institutional knowledge visible.
+- *One mega config file (`config/all.json`)* — rejected. The D-044
+  separation (`config/llm.json` for LLM/embedding,
+  `config/retrieval.json` for retrieval, `config/web.json` for web
+  serving, `config/env.json` for DB paths) keeps unrelated lifecycles
+  separate.
+- *Env vars for everything (no JSON file)* — rejected for the same
+  reason D-044 rejected it: too many knobs make for messy shell
+  prompts.
+
+**Consequences**
+- **One new tracked file** `config/retrieval.json` ships with empty
+  defaults so fresh clones are unaffected.
+- **Pattern set for Phase 4-migrate**: each knob gets a `resolve_*`
+  helper, optional env var, dataclass field, test isolation pattern
+  (monkey-patch `DEFAULT_RETRIEVAL_CONFIG_PATH` to a tmp file).
+- **Two pre-existing test bugs surfaced** when extending the
+  resolver test patterns to `RetrievalConfig`:
+  `test_resolve_embedding_provider_precedence` and
+  `test_resolve_embedding_model_precedence` weren't isolating from
+  `config/llm.json` on disk. Fixed alongside this commit.
+- **9 new resolver tests + 22 grouping tests** pin the precedence
+  chain end-to-end.
+- **D-053 (Config-page DB layer) builds on this**: when the DB
+  hydrates the cached `RetrievalConfig` instance at startup, the
+  existing resolvers automatically pick up the DB layer with no
+  code changes — no ad-hoc plumbing needed for new knobs.
+
+**Related**: D-044 (unified LLM config; this is the same pattern
+extended), D-049 (Stage 4.7; the first set of knobs to ride on this
+infrastructure), D-053 (Config-page DB layer; slots into the same
+chain).
+
+---
+
+## D-051: FACT and SUMMARIZE intent classification — query-shape vs query-intent
+
+**Date**: 2026-05-06
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+The existing `QueryType` values (SINGLE_DOC, CROSS_DOC,
+CROSS_MNO_COMPARISON, RELEASE_DIFF, STANDARDS_COMPARISON,
+TRACEABILITY, FEATURE_LEVEL, GENERAL) classified queries by their
+**scope shape** — how many documents / specs / MNOs the answer
+spans. The pipeline used the type to drive `top_k` widening, BM25
+weighting, rerank toggling, etc.
+
+But shape isn't intent. "Explain authentication requirements"
+classified as SINGLE_DOC or GENERAL (no breadth triggers in the
+phrasing) — and got `top_k=10` plus Stage 4.7 grouping that picked
+the deepest LTEOTADM AUTHENTICATION subsection, returning 3 chunks
+when the user wanted a survey across all the auth-related content
+in the corpus. Conversely, "What is the value of T3402?" needed
+*precision* (tight top_k, strict threshold, contradiction surfacing)
+that none of the shape-types encoded.
+
+The user's contribution: *"add 'Fact' intent — high similarity in
+all fragments, per-sentence attribution, contradiction detection
+mandatory"* and *"add 'Summarize' intent — structural navigation,
+TL;DR first, per-group summaries"*.
+
+**Decision**
+Two new `QueryType` values, classified by phrasing:
+
+- **`QueryType.SUMMARIZE`** — survey/summarize intent. Triggers:
+  `explain `, `summarize`, `summary of`, `describe `, `give me an
+  overview`, `overview of`, `tell me about `. Per-intent knobs:
+  `top_k=50` (wide), `bm25_weight=0.2` (mostly dense — user
+  paraphrases the topic), `rerank_enabled=False` (cost vs benefit
+  at top-50; LLM reads everything anyway), `rewrite_enabled=True`
+  (term expansion gathers more), `max_distance_threshold=0.7`
+  (lenient — wants breadth including parent/overview chunks),
+  `_TYPE_DISABLE_GROUPING={SUMMARIZE}` (skip Stage 4.7 entirely —
+  auto-commit to one group throws away the breadth the user wants).
+  System prompt: *"Structure your answer in two parts: TL;DR + per-
+  section breakdown."*
+
+- **`QueryType.FACT`** — fact-lookup intent. Triggers: `value of`,
+  `what value`, `default value`, `default for`, `how many`,
+  `how long`, `maximum value`, `minimum value`, `exact value`,
+  `specific value`, `what is the limit`, `what is the threshold`.
+  Per-intent knobs: `top_k=10` (tight; 1-3 chunks usually carry the
+  fact), `bm25_weight=0.5` (term-match for specific tokens),
+  `rerank_enabled=True` (precision matters), `rewrite_enabled`
+  intentionally absent — default False, because paraphrasing a
+  fact-shaped query risks substituting it into a definitional query
+  (D-043 acronym path is wrong for "what's the *value*"),
+  `max_distance_threshold=0.4` (strict — fact-shaped answers from
+  weak chunks are the worst-case hallucination), grouping enabled
+  (one fact = one group typically). System prompt: *"Direct answer
+  + per-sentence attribution; contradiction handling: surface
+  disagreement explicitly when sources differ."*
+
+**Classification priority**: FACT is checked *before* SUMMARIZE in
+`_classify_query_type` so "Explain the value of T3402" routes to
+FACT (precision) not SUMMARIZE (breadth) when both phrasings
+appear. Bare "what is X" stays out of FACT — it's definitional
+(D-043 acronym pin) or falls through.
+
+**Why this over alternatives**
+- *Add a separate `Intent` enum orthogonal to `QueryType`* —
+  considered. Cleaner conceptually (shape and intent are different
+  axes) but doubles the routing matrix and requires every per-type
+  dict to become a 2-D map. Deferred — single-axis enum works
+  while we have only two intent values; revisit if more intents
+  land.
+- *LLM-driven classification (use `LLMQueryAnalyzer` for FACT/SUMMARIZE
+  detection)* — rejected for v1. Phrase triggers are deterministic,
+  fast, and explainable; an LLM call adds latency and a failure mode.
+  The trigger list can grow as miss cases surface.
+- *Add Comparison intent now* — explicitly **deferred**. User asked
+  to skip until multi-MNO / multi-release ingestion lands; no test
+  data to validate against today.
+- *Make breadth-trigger phrases SUMMARIZE instead of CROSS_DOC* —
+  rejected. CROSS_DOC ("what are all the X requirements") is a
+  *scope* signal — "show every relevant requirement, structured by
+  doc". SUMMARIZE is an *output-shape* signal — "produce a TL;DR +
+  breakdown." A query can be both (cross-doc summarize); the
+  routing currently picks the more-specific intent (SUMMARIZE wins
+  when phrased explicitly).
+
+**Consequences**
+- **Per-type dicts grew** (`_TYPE_TOP_K`, `_TYPE_BM25_WEIGHT`,
+  `_TYPE_RERANK_ENABLED`, `_TYPE_REWRITE_ENABLED`,
+  `_TYPE_MAX_DISTANCE`); new `_TYPE_DISABLE_GROUPING` set. Phase
+  4-migrate (D-050) will move these into `config/retrieval.json`.
+- **Stage 4.7 honors per-intent grouping opt-out** — pipeline checks
+  `intent.query_type not in _TYPE_DISABLE_GROUPING` before clustering.
+- **Two new `_SYSTEM_PROMPTS` entries** in `context_builder.py`
+  with TL;DR-vs-fact framing.
+- **29 new tests** pin classification (5 SUMMARIZE phrasings, 6 FACT
+  phrasings, classification priority FACT-beats-SUMMARIZE), per-
+  intent knob assertions, system-prompt content assertions, and
+  Stage 4.7 bypass for SUMMARIZE.
+- **`/v1` of contradiction detection is prompt-only.** The FACT
+  prompt asks the LLM to surface disagreements; deterministic
+  semantic-comparison detection across chunks is left for a future
+  step.
+- **Comparison intent still deferred** — flagged in STATUS.md
+  Next; revisit when second MNO corpus ingests.
+
+**Related**: D-039 (entity-priority graph scoping; FACT queries that
+name a specific req still hit this path), D-040 (per-type top_k +
+list-style detection; this extends the same shape into intent
+routing), D-043 (acronym pin; bare "what is X" stays in this path,
+not FACT), D-049 (Stage 4.7; SUMMARIZE opts out via
+`_TYPE_DISABLE_GROUPING`).
+
+---
+
+## D-052: Stage 6.5 — per-sentence citation audit
+
+**Date**: 2026-05-06
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+Synthesis prompts demand inline citations (D-001 invariant: every
+factual claim must reference a `(VZ_REQ_X)` or 3GPP TS section).
+The synthesizer already extracts citations the LLM mentioned and
+back-fills missing ones from context. But two error classes still
+slipped through unnoticed:
+
+1. **Uncited factual claims** — sentences in the answer that don't
+   cite anything. May be paraphrasing correctly across multiple
+   reqs, may be hallucinating; the user has no way to tell.
+2. **Fabricated citations** — req IDs in the answer that don't
+   appear in the chunks the LLM actually received. Worst-case error
+   class — looks authoritative, isn't real. Surfaced in the
+   user's session via "What is SDM?" hallucinating "SIMOTA Device
+   Management" before D-043 fixed the retrieval-side path; same
+   phenomenon for any topic where retrieval misses and the LLM
+   invents.
+
+The user's stated principle from Step 5 scoping: *"per-sentence
+citation polish layer."*
+
+**Decision**
+New **Stage 6.5** runs after synthesis on the normal path:
+`audit_answer_citations(response.answer, available_req_ids)` walks
+the answer sentence-by-sentence and produces a `CitationAudit`:
+
+- **Sentence splitter** is regex-based with abbreviation handling
+  (e.g., i.e., etc., ...), markdown-header detection, and bullet/
+  numbered-list awareness. Each list item is its own sentence;
+  headers are marked `is_meta=True` and excluded from the cited-
+  percentage metric.
+- **Citation detector** matches the same regex patterns the
+  synthesizer's `_extract_citations` uses (`VZ_REQ_X` and
+  `3GPP TS Y, Section Z`). A sentence is considered cited if it
+  contains either form.
+- **Fabrication detector** flags req IDs in the answer that are
+  NOT in `available_req_ids` (the chunks passed to the LLM). 3GPP
+  spec citations are external and always pass.
+- **`CitationAudit` schema dataclass** carries per-sentence audits
+  + summary counts (`cited_sentence_count`, `factual_sentence_count`,
+  `fabricated_count`, `cited_percent` property,
+  `uncited_sentences` property).
+
+`QueryResponse.citation_audit: CitationAudit | None` — populated on
+the normal synthesis path AND the pinned-chunks path; None on
+disambiguation/not-found paths (no real answer to audit).
+
+Web layer surfaces the audit in `_answer.html`:
+- Inline summary `4/6 sentences cited (66.7%) · 1 fabricated`.
+- Collapsible "show uncited" list with yellow border per sentence.
+- Red alert banner when fabricated citations exist, listing the
+  bad req IDs and the sentence containing them.
+
+**Why this over alternatives**
+- *LLM-judged audit (second LLM call to grade the answer)* —
+  rejected. Adds latency and another failure mode; deterministic
+  regex sufficient for "is there a citation token?" — that's the
+  bar.
+- *Re-prompt the LLM to fix uncited sentences (Phase 5c)* —
+  **deferred**. Costly (a second LLM call per query) and unclear if
+  the retry would do better. Real-world miss rates need measuring
+  first; revisit after a few weeks of usage data.
+- *Strict-mode synthesis (refuse to render any uncited sentence)* —
+  rejected. Prose flow needs transition sentences ("The X timer
+  governs the procedure.") that don't cleanly attach to one req.
+  Too aggressive; would force unnatural phrasing or many false
+  positives.
+- *Inline highlight of uncited spans in the rendered answer* —
+  considered, but rendering deletes the sentence boundaries our
+  audit operates on. Showing the audit as a collapsible side-list
+  is simpler and doesn't fight the markdown renderer.
+
+**Consequences**
+- **Always-on, no LLM call.** Adds < 1ms to every synthesized
+  query; a regex pass over a few thousand chars.
+- **Two new schema dataclasses** on `QueryResponse.citation_audit`:
+  `SentenceAudit` (per-sentence) and `CitationAudit` (summary).
+  Old API consumers see new field they can ignore.
+- **New module `core/src/query/citation_audit.py`** with the
+  splitter + detector. Tested against realistic SUMMARIZE-style
+  (TL;DR + bullets) and FACT-style (with contradictions) outputs.
+- **Surfaces a metric per query**: `cited_percent`. Lets us see
+  "is the LLM following the citation prompt?" objectively. Below
+  ~80% suggests prompt-strength issue or weak model.
+- **27 new tests** cover sentence splitting (single/multi/abbreviation/
+  paragraph/bullet/numbered/header), markdown header detection,
+  audit basics, fabrication detection, meta-sentence handling,
+  uncited accessor, two realistic answer styles.
+- **Phase 5c citation repair (re-prompt) deferred** to STATUS.md
+  Next.
+
+**Related**: D-001 (citation invariant; this is the audit layer
+that makes it observable), D-043 (acronym pin; preventing the
+retrieval-side root cause that this audit catches at the synthesis
+side), D-049 (Stage 4.7 disambiguation; runs before this audit on
+synthesis path), D-051 (FACT prompt asks for per-sentence attribution
+explicitly; audit measures whether the LLM complied).
+
+---
+
+## D-053: Config-page DB layer slots between env vars and JSON files
+
+**Date**: 2026-05-06
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+Through this session, the user repeatedly asked "did my config
+change actually take effect?" — first when wiring a custom Ollama
+proxy, then after switching embedding models, then when setting
+top_k=25 and getting 50 chunks. Each time required either grepping
+the server log for resolved values or running ad-hoc CLI tools.
+The signal was clear: **admins want a UI for the config knobs, with
+visible verification.**
+
+The user's request that triggered the Config page implementation:
+*"all configurable params (that are under config/) can be updated by
+the user. All the updated values go into a config db ... user
+provides full path from command line or env variable. ... If user
+changes some config values, they shall be written to db, and then
+rest of web app shall reflect the new values."*
+
+The architectural question: **where does the DB sit in the resolver
+chain?** Three plausible options.
+
+**Decision**
+The DB layer slots **between env vars and `config/*.json`**:
+
+```
+CLI flag > env var > ConfigStore (this DB) > config/*.json > defaults
+```
+
+The DB is a **persistent layer for user-edited overrides via the
+web UI**. Higher than the JSON files because the user explicitly
+set it through the page (more recent, more specific intent).
+Lower than env vars because env vars remain the admin's hard-override
+escape hatch ("set this for the next 5 minutes without touching the
+DB").
+
+Implementation:
+
+- New `core/src/web/config_db.py` — synchronous SQLite-backed
+  `ConfigStore` keyed by `(module, key)`. Values JSON-encoded so
+  int / bool / float / list round-trip cleanly. Threadsafe via
+  internal lock.
+- New `core/src/web/config_schema.py` — hand-curated
+  `CONFIG_SECTIONS` describing the 13 user-editable knobs (LLM and
+  Retrieval sections; categories `feature` / `value` / `tunable`;
+  kinds `bool` / `string` / `int` / `float` / `enum` / `password`).
+  Drives the form rendering.
+- **`apply_to_caches()` at app startup**: overlays every stored
+  value onto the cached `LLMConfigFile` / `RetrievalConfig`
+  instances. The existing `resolve_*` functions in
+  `core/src/env/config.py` automatically pick up the DB layer
+  with no plumbing changes — they were already reading from the
+  cached instances, so mutating those instances after JSON load
+  effectively inserts the DB tier into the chain.
+- **`reapply_one()` after each save**: cheaper than a full re-apply
+  when the UI edits one field. Pipeline cache (`app.state.query_pipeline`)
+  is also invalidated on each save so the next query rebuilds.
+- **Opt-in**: new CLI `--config-db` + env var `NORA_CONFIG_DB`. If
+  unset, the page renders read-only with a notice; the resolver
+  chain falls through as before. No default path, deliberate —
+  the user must opt in.
+
+**Why this over alternatives**
+- *DB **above** env vars (DB always wins)* — rejected. Env vars
+  are the admin's debug / emergency-override channel; making them
+  losable to a stale DB row would be a footgun. Order preserves
+  the principle that the most-specific, most-recent override
+  wins (CLI flag = "I just typed this" beats env var = "this shell
+  has it set" beats DB = "I saved this earlier" beats file =
+  "this is the project default").
+- *DB **below** the JSON files (file always wins)* — rejected.
+  Defeats the purpose of the editor — saving a value through the
+  UI would no-op if the JSON file had a different value. The DB
+  must override the file for "user edited this through the UI" to
+  mean anything.
+- *Replace JSON files entirely with the DB* — rejected. JSON files
+  are project-checked-in defaults; team members pulling main
+  inherit them. Deleting that layer would force everyone to also
+  set up a DB, breaking the "fresh clone works" property.
+- *Modify `resolve_*` functions to read from the DB directly* —
+  rejected. Would require a registry of "which DB connection are
+  we in?" plumbed everywhere. The chosen approach (overlay onto
+  the existing dataclass cache) is dramatically simpler and
+  reuses the resolver chain unchanged.
+- *Always-default DB at `<env_dir>/state/config.db`* — considered
+  but rejected. Some users won't want persistence at all (CI runs,
+  ephemeral test environments); explicit opt-in is cleaner than
+  always-creating a DB no one asked for.
+
+**Consequences**
+- **One new SQLite file per env that opts in**, ~8 KB schema-only.
+  Grows by ~100 B per saved value.
+- **New `app.state.config_store`** — None when DB disabled (read-
+  only Config page); ConfigStore instance when enabled. Other
+  routes can also read from it (e.g. `routes/query.py` reads
+  `pipeline.top_k_cap` and `pipeline.max_distance_threshold` for
+  knobs that don't have a cached dataclass slot).
+- **`apply_to_caches()` runs once at app startup**, before any
+  request lands. The first query naturally builds its pipeline
+  with the DB-overlaid cache state.
+- **Save invalidates the cached pipeline.** Next query rebuilds
+  with the new resolved values. The startup-log lines (`Web LLM
+  resolved: …`, `Top-K cap: …`, `Stage 4.7 grouping: …`) print
+  again on first query, so admins can see what landed.
+- **Two pre-existing build-time-only knobs are now settable but
+  misleading**: `embedding_provider` / `embedding_model` (pinned
+  at vectorstore-build time per `<env_dir>/out/vectorstore/config.json`
+  and consumed by the web app from there, not the LLMConfigFile);
+  `skip_taxonomy` / `skip_graph` (pipeline-runner stage toggles,
+  not query-time). Saving them populates the DB and overlays the
+  caches but query behavior won't change without a vectorstore
+  rebuild. Flagged in STATUS.md to either move to a "Pipeline
+  (rebuild required)" section with caveat help text or drop.
+- **DB-key change `top_k` → `top_k_cap`** in c2dff4f (one commit
+  after the Config page shipped) — old DB rows are silently ignored
+  by the new resolver. No migration shipped because the field had
+  only existed for one commit.
+- **25 new tests** cover ConfigStore CRUD (string/bool/int/float
+  round-trips, missing-key, upsert, get_module, get_all, delete,
+  cross-instance persistence), `apply_to_caches` overlay, schema
+  integrity, and end-to-end route smoke (GET /config renders both
+  modes; POST persists).
+
+**Related**: D-022 (per-env runtime directory; the DB lives at
+`<env_dir>/state/config.db` by convention even though no default
+is enforced), D-044 (unified LLM config; the chain this layer
+extends), D-050 (Phase 3-config infrastructure;
+`config/retrieval.json` is one of the JSON files this layer sits
+above).
