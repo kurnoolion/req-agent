@@ -13,32 +13,74 @@ for each layer and pointers to the ADRs that pinned the design.
 
 ## 1. Pipeline shape
 
-The query pipeline (`pipeline.QueryPipeline.query`) is six stages,
-each replaceable by injection. This doc focuses on Stages 3–4
-(graph scoping + retrieval) since that's where every retrieval
-enhancement lives. Stages 1 / 2 / 5 / 6 are stable.
+The query pipeline (`pipeline.QueryPipeline.query`) is six numbered
+stages plus three intermediate sub-stages added by feature work
+(decimals — slot between integers without renumbering). Every stage
+is replaceable by injection.
 
 ```
-                +---------------------------------------+
-  raw query --> | 1. analyzer    -> QueryIntent         |
-                | 2. resolver    -> ScopedQuery         |
-                | 3. graph_scope -> CandidateSet  ──┐   |
-                | 3.5. rewriter  -> retrieval_query │   |  <-- query rewriting
-                | 4. retriever   -> [RetrievedChunk]│   |  <-- BM25 + dense + rerank + glossary pin
-                | 5. context     -> AssembledContext│   |
-                | 6. synthesizer -> QueryResponse   ◄───┘
-                +---------------------------------------+
+                +-----------------------------------------------------+
+  raw query --> | 1.   analyzer     -> QueryIntent                    |
+                | 2.   resolver     -> ScopedQuery                    |
+                | 3.   graph_scope  -> CandidateSet            ──┐    |
+                | 3.5. rewriter     -> retrieval_query           │    |  query rewriting
+                | 4.   retriever    -> [RetrievedChunk]          │    |  BM25 + dense + RRF
+                | 4.5. threshold    -> filter / not-found        │    |  D-047 — drop weak chunks
+                | 4.7. grouping     -> auto-commit / disambig    │    |  D-049 — cluster by path
+                | 5.   context      -> AssembledContext          │    |
+                | 6.   synthesizer  -> QueryResponse             ◄────┘
+                | 6.5. citation_audit -> per-sentence audit           |  D-052 — flag uncited / fabricated
+                +-----------------------------------------------------+
 ```
+
+Decimal numbering convention: the 0.5/0.7 markers indicate "between
+the integer-numbered stages." 4.5 runs after RAG (4) and before
+synthesis-related work; 4.7 runs after the threshold filter. The
+0.7 (vs 0.6) leaves room for a future Stage 4.6 if something needs
+to slot in between.
 
 ### What's tunable, what's contract
 
-- **Contract**: stage signatures (typed dataclasses), `graph routes
-  / RAG ranks` (D-001), every stage injectable, mock-friendly.
-- **Tunable** (per-query-type policy maps in `pipeline.py`):
-  `_TYPE_TOP_K`, `_TYPE_BM25_WEIGHT`, `_TYPE_REWRITE_ENABLED`,
-  `_TYPE_RERANK_ENABLED`. These are empirical hyperparameters,
-  not architectural commitments — values shift as the eval set
-  grows or as new corpora arrive.
+**Contract** (architectural commitments, in ADR-anchored order):
+
+- D-001 — `graph routes / RAG ranks`. Vector retrieval is always
+  filtered by the graph's `CandidateSet`, never unscoped. Exception:
+  RAG-only mode (`_bypass_graph=True`) when the graph stage was
+  deliberately skipped.
+- Stage signatures are typed dataclasses; each stage's output is
+  the next stage's only input. No stage reaches back for state.
+- Every stage injectable; mocks (`MockQueryAnalyzer`, `MockSynthesizer`,
+  `MockReranker`, `MockQueryRewriter`) exist so the pipeline runs
+  without any LLM for offline debugging.
+- D-046 — every chunk's metadata carries `hierarchy_path: list[str]`
+  with the document name (`plan_name` or `plan_id`) as the root.
+  This is the input grouping (§11) reads. Older vectorstores
+  without it degrade gracefully; rebuild required for full benefit.
+- D-049 — when retrieval can't distinguish between plausible
+  groups (gap below threshold), the pipeline returns disambiguation,
+  not a synthesized "best guess." Codifies "the system shall not
+  pretend it is an Oracle."
+
+**Tunable** (per-query-type policy maps in `pipeline.py`, plus
+config-resolved scalars). Each one is empirical — values shift as
+the eval set grows or new corpora arrive:
+
+| Knob | Where | Driven by |
+|---|---|---|
+| `_TYPE_TOP_K` | `pipeline.py` | per-query-type breadth widening (D-040) |
+| `_TYPE_BM25_WEIGHT` | `pipeline.py` + `bm25_weight_by_type` in `config/retrieval.json` | per-type table editor on /config (D-053) |
+| `_TYPE_REWRITE_ENABLED` | `pipeline.py` | per-type Stage-3.5 gate |
+| `_TYPE_RERANK_ENABLED` | `pipeline.py` | per-type cross-encoder gate |
+| `_TYPE_MAX_DISTANCE` | `pipeline.py` | per-type Stage-4.5 floor (D-047 + D-051) |
+| `_TYPE_DISABLE_GROUPING` | `pipeline.py` | per-type Stage-4.7 opt-out (D-049 + D-051) |
+| `enable_grouping` | `config/retrieval.json` | Stage 4.7 master toggle |
+| `gap_threshold` | `config/retrieval.json` | Stage 4.7 auto-commit cutoff |
+| `top_k_cap` | `config/retrieval.json` (via DB) | hard ceiling AFTER per-type widening |
+| `max_distance_threshold` | `NORA_MAX_DISTANCE_THRESHOLD` env / DB | Stage 4.5 default cap |
+
+§§10–14 below describe the new stages and the configuration model
+that surfaces these knobs through the resolver chain
+(CLI > env > DB > config/*.json > defaults; D-050 + D-053).
 
 ## 2. Graph scoping (Stage 3)
 
@@ -312,14 +354,412 @@ After D-043:
    "profiling".`
 7. Answer is grounded.
 
-## 10. Debugging retrieval quality
+## 10. Stage 4.5 — Relevance threshold filter (D-047)
+
+After Stage 4 returns the top-K fused list, Stage 4.5 drops chunks
+whose `similarity_score` (cosine distance) is above a threshold.
+Lower distance = more similar.
+
+```
+chunks_in  ──> [c.similarity_score <= threshold] ──> chunks_out
+                                                     │
+                                                     │  if empty:
+                                                     ▼
+                                          QueryResponse(
+                                              answer=_NOT_FOUND_ANSWER,
+                                              ...
+                                          )
+                                                     │
+                                                     ▼  Skip Stages 5/6
+```
+
+**Why a hard filter over "let the LLM judge"**: when retrieval
+genuinely doesn't have the answer, passing weak chunks to the LLM
+is the primary hallucination class. The model will dutifully
+synthesize "based on the provided context..." prose from chunks
+that scored 0.85 (cosine distance) — far from the query's
+embedding — and the answer reads authoritative. Surfacing
+`_NOT_FOUND_ANSWER` instead is more honest.
+
+### Per-type threshold
+
+`_TYPE_MAX_DISTANCE` overrides the pipeline-level default per
+QueryType:
+
+```python
+_TYPE_MAX_DISTANCE = {
+    QueryType.FACT:      0.4,   # strict — fact answer from weak chunks is worst-case
+    QueryType.SUMMARIZE: 0.7,   # lenient — wants breadth, parent chunks score higher
+}
+```
+
+Other types fall back to the pipeline-build-time
+`max_distance_threshold` (constructor param, resolved from
+`NORA_MAX_DISTANCE_THRESHOLD` env > ConfigStore >
+`_DEFAULT_MAX_DISTANCE_THRESHOLD = 0.5`).
+
+### Calibration
+
+Threshold values are **embedding-model-specific.** From the in-
+session sweep on env\_vzw + `qwen3-embedding:4b-q8_0`:
+
+| Query category | Distance range |
+|---|---|
+| In-domain top-5 | 0.20 – 0.41 |
+| Off-topic top-5 | 0.74 – 0.77 |
+
+A 0.33-wide gap between worst-relevant and best-off-topic. The
+default 0.5 sits comfortably in the middle. Different embedding
+models will need re-tuning — see §15.3 (threshold sweep script).
+
+### `_NOT_FOUND_ANSWER`
+
+Deterministic message — same string every time, no LLM call:
+
+> *No matching requirements were found in the indexed corpus for
+> this query. The query may reference a topic, feature, or MNO
+> release that is not yet ingested, or the phrasing may need to
+> be adjusted. Try rephrasing, specifying an MNO/release, or
+> checking which documents have been indexed.*
+
+`QueryResponse.retrieved_count` is 0; citations list is empty.
+The LLM never sees the context (saves the API call too).
+
+## 11. Stage 4.7 — Hierarchy grouping + disambiguation (D-049)
+
+Off by default; opt in via `enable_grouping=True` on the pipeline
+constructor or `enable_grouping: true` in `config/retrieval.json`
+(or `NORA_RETRIEVAL_GROUPING_ENABLED=1`).
+
+When on and there are post-threshold chunks remaining, Stage 4.7:
+
+1. **Clusters** chunks by **greedy longest-common-prefix (LCP)** on
+   `metadata.hierarchy_path` (D-046). Sort chunks by path tuple
+   (alphabetical, with `chunk_id` tiebreak); walk pairwise. Each
+   chunk either extends the running group's LCP (when LCP ≥ 1
+   element, i.e. shares the document root) or flushes the group
+   and starts a new one.
+2. **Scores each group** as `min(c.similarity_score for c in group)`.
+   Best chunk anchors the group's relevance — weak siblings
+   shouldn't drag.
+3. **Sorts groups by score ascending** (best first).
+4. **Decides**:
+   - `len(groups) == 1` → pass through unchanged.
+   - `len(groups) >= 2` AND `gap_between_top_groups(groups) >= gap_threshold`
+     → **auto-commit** to top group. Other groups' chunks discarded
+     before Stage 5.
+   - `len(groups) >= 2` AND gap < threshold → **disambiguation**:
+     return `QueryResponse(disambiguation_required=True, groups=[…])`,
+     skipping Stages 5 and 6 (mirrors D-047's not-found short-circuit).
+
+### Group score visualization
+
+```
+   group A: ["LTEOTADM"]                           score 0.21  ◄── auto-commit
+   group B: ["LTEOTADM", "OTA-DM SPECIFICATIONS"]  score 0.45      gap 0.24
+   group C: ["LTEDATARETRY"]                       score 0.48      ≥ 0.05
+                                                                    ✓ pass
+```
+
+vs.
+
+```
+   group A: ["LTEOTADM"]      score 0.20  ◄── disambiguation
+   group B: ["LTEDATARETRY"]  score 0.21      gap 0.01
+   group C: ["LTEAT"]         score 0.22      < 0.05
+                                              ✗ ambiguous
+```
+
+### Per-intent opt-out
+
+Some intents inherently want **all** groups merged into one
+synthesis pass — picking any single group throws away the breadth
+the user is asking for. `_TYPE_DISABLE_GROUPING` lists those:
+
+```python
+_TYPE_DISABLE_GROUPING: set[QueryType] = {QueryType.SUMMARIZE}
+```
+
+When `intent.query_type ∈ _TYPE_DISABLE_GROUPING`, Stage 4.7 is
+bypassed even when `enable_grouping=True` globally.
+
+### Pinned-chunks path (Step 3c of D-049)
+
+When the user picks a group from a disambiguation response (clicking
+"Synthesize from this group" on the Test page), the web layer
+re-issues the query with `QueryPipeline.query(query, pinned_chunk_ids=[…])`.
+The pinned-chunks path:
+
+1. Skips Stages 2 (resolver) → 4.7 (grouping) entirely.
+2. Re-fetches the chunks from the store by ID via
+   `_fetch_chunks_by_ids` (uses `store.get_all()` and filters in
+   Python — O(n) on store size, acceptable at current scale).
+3. Sets `similarity_score=0.0` on each fetched chunk (user
+   explicitly picked them; no ranking).
+4. Goes straight to Stage 5 (context assembly) and Stage 6 (synthesis).
+
+Unknown IDs are dropped with a warning; if no IDs resolve, returns
+`_NOT_FOUND_ANSWER`. Stage 1 (analyzer) still runs so Stage 5 has
+the right system prompt for the original query's intent.
+
+### `gap_threshold` calibration
+
+Default `0.05`. Like the threshold filter, this is calibrated
+per embedding model. Tighter (smaller) → more disambiguation
+prompts; looser (larger) → more auto-commits. Per-type override
+via `gap_threshold_by_type` in `config/retrieval.json`.
+
+## 12. Intent-aware routing — FACT and SUMMARIZE (D-051)
+
+Existing `QueryType` values classify queries by **scope shape**
+(SINGLE_DOC, CROSS_DOC, FEATURE_LEVEL, etc. — how many docs the
+answer spans). Two intent-shaped values were added in Step 4:
+
+### FACT
+
+Trigger phrases (analyzer.py): `value of`, `what value`,
+`default value`, `default for`, `how many`, `how long`,
+`maximum value`, `minimum value`, `exact value`, `specific value`,
+`what is the limit`, `what is the threshold`.
+
+Per-intent knobs:
+
+| Knob | Value | Why |
+|---|---|---|
+| `top_k` | 10 | facts come from 1–3 chunks; widening adds noise |
+| `bm25_weight` | 0.5 | timer names / cause codes are exact-token; BM25 wins |
+| `rerank_enabled` | True | precision matters; reorder for the best match |
+| `rewrite_enabled` | False | paraphrasing risks routing to the definitional path |
+| `max_distance_threshold` | 0.4 | strict — fact-shaped answer from weak chunks is the worst hallucination class |
+| Stage 4.7 grouping | enabled | one fact = one group, typically |
+
+System prompt: *"Direct answer + per-sentence attribution +
+explicit contradiction handling when sources disagree."*
+
+### SUMMARIZE
+
+Trigger phrases: `explain`, `summarize`, `summary of`,
+`describe`, `give me an overview`, `overview of`, `tell me about`.
+
+Per-intent knobs:
+
+| Knob | Value | Why |
+|---|---|---|
+| `top_k` | 50 | wide — per-req chunks are small; breadth needs many |
+| `bm25_weight` | 0.2 | mostly dense — user paraphrases the topic |
+| `rerank_enabled` | False | cost vs benefit at top-50; LLM reads all anyway |
+| `rewrite_enabled` | True | term expansion gathers more relevant chunks |
+| `max_distance_threshold` | 0.7 | lenient — wants breadth incl. parent/overview chunks |
+| Stage 4.7 grouping | **disabled** (`_TYPE_DISABLE_GROUPING`) | auto-commit-to-one-group throws away breadth |
+
+System prompt: *"TL;DR (2–4 sentences) + per-section breakdown
+grouped by document/section. Cite every requirement inline."*
+
+### Classification priority
+
+FACT is checked **before** SUMMARIZE so "Explain the value of
+T3402" routes to FACT (precision) — the value-question shape
+wins over the explain-shape when both phrasings appear.
+
+Bare "What is X?" stays out of FACT — handled by the acronym
+pin (§6) for definitional queries, or falls through to SINGLE\_DOC
+/ GENERAL.
+
+### Comparison intent — explicitly deferred
+
+A `Comparison` intent for "Compare VZW and TMO authentication" /
+"Compare Feb2025 vs June2025 for WiFi Calling" was scoped during
+Step 4 but **not shipped** — needs multi-MNO / multi-release
+ingestion to test against. Tracked in STATUS.md Next.
+
+## 13. Stage 6.5 — Citation audit (D-052)
+
+Always runs on the synthesis path (cheap regex, no LLM call).
+Skipped on disambiguation / not-found paths (no real answer to audit).
+
+```python
+QueryResponse.citation_audit: CitationAudit | None
+```
+
+### What it detects
+
+For each sentence in the answer:
+
+1. **Cited?** — sentence contains a `(VZ_REQ_X_N)` token or a
+   `3GPP TS X.Y, Section Z` reference.
+2. **Fabricated?** — sentence cites a `VZ_REQ_X_N` that does NOT
+   appear in `available_req_ids` (the chunks the LLM actually
+   received). Worst-case error class: looks authoritative, isn't
+   real. 3GPP citations are external and pass automatically.
+3. **Meta?** — markdown headers (`# X`, `**X**`-only line),
+   bare-label sentences (`Direct answer:`), blank lines. Marked
+   `is_meta=True` and excluded from the cited-percentage metric.
+
+### Sentence splitter
+
+Regex-based, abbreviation-aware:
+
+- Splits on `[.?!]` followed by whitespace + capital letter or
+  end-of-line.
+- Preserves `e.g.` / `i.e.` / `etc.` / `Sec.` / `Fig.` / etc. as
+  in-sentence (substituted with a placeholder during the split,
+  restored after).
+- Bullet items (`- foo`, `* foo`, `1. foo`, `1) foo`) → each item
+  is one sentence regardless of internal punctuation.
+- Markdown headers passed through as their own sentence so they
+  can be marked meta.
+
+### Schema
+
+```python
+@dataclass
+class SentenceAudit:
+    text: str
+    has_citation: bool
+    citations_found: list[str]      # req IDs + 3GPP refs
+    fabricated_citations: list[str] # req IDs not in available_req_ids
+    is_meta: bool
+
+@dataclass
+class CitationAudit:
+    sentences: list[SentenceAudit]
+    cited_sentence_count: int
+    factual_sentence_count: int    # total minus meta
+    fabricated_count: int
+    available_req_ids: list[str]
+    cited_percent: float           # property
+    uncited_sentences: list[SentenceAudit]  # property
+```
+
+### UI surfacing
+
+The Test page (`templates/test/_answer.html`) renders an inline
+summary: `4/6 sentences cited (66.7%) · 1 fabricated`. Below it,
+collapsible "show uncited" list (yellow border) and a red alert
+listing fabricated citations (lists the bad req IDs and the
+sentence containing them).
+
+### Phase 5c — repair pass deferred
+
+A future "repair" pass would re-prompt the LLM with the
+flagged uncited sentences asking it to add citations. Not shipped
+yet — extra LLM call per query, cost-benefit unknown until real-
+world miss rates are measured.
+
+## 14. Configuration & tuning model (D-050, D-053)
+
+Every retrieval knob flows through the same **5-tier resolution
+chain**:
+
+```
+CLI flag > env var > ConfigStore (web DB) > config/*.json > defaults
+```
+
+### Layers, in order of precedence
+
+1. **CLI flag** — explicit per-invocation override. Highest
+   priority because the user just typed it.
+2. **Env var** — admin's debug / emergency-override channel.
+   Survives restarts of the same shell.
+3. **ConfigStore** (the user-config DB; opt-in via `--config-db`
+   / `NORA_CONFIG_DB`) — what the user saved through the
+   `/config` page. SQLite-backed, JSON-encoded values, keyed by
+   `(module, key)`. Hydrates the cached `LLMConfigFile` /
+   `RetrievalConfig` instances at startup via `apply_to_caches()`,
+   so existing resolvers automatically pick up the layer.
+4. **`config/*.json`** — project defaults checked into git.
+   Structured by domain: `config/llm.json` (D-044) for LLM +
+   embedding settings; `config/retrieval.json` (D-050) for
+   retrieval knobs; `config/web.json` for the web server.
+5. **Built-in defaults** — fallback constants in code
+   (`_TYPE_*` dicts, `DEFAULT_*` constants). Project-checked-in
+   values can be tested against these by leaving the JSON empty.
+
+### Why this order
+
+The most-specific, most-recent override wins. CLI flag = "I just
+typed this." Env var = "this shell has it set." DB = "I saved
+this earlier through the UI." JSON = "this is the project
+default." Built-in = "this is what shipped."
+
+Env vars sit **above** the DB so the admin keeps an emergency-
+override path that can't be silently lost to a stale DB row.
+
+### `/config` page
+
+Renders the user-editable knobs grouped by module section
+(LLM & Embedding, Retrieval & Grouping). Each section has three
+sub-sections by category:
+
+- **Features** — boolean toggles (`enable_grouping`,
+  `skip_taxonomy`, etc.). Rendered as checkboxes.
+- **Values** — model names, URLs, API keys (text or enum
+  dropdowns; password input for `llm_api_key`).
+- **Tunable parameters** — numeric scalars (`gap_threshold`,
+  `max_distance_threshold`, `top_k_cap`) and per-QueryType maps
+  (`bm25_weight_by_type` — table editor).
+
+Saving:
+
+1. Form-submitted values get coerced to typed Python values.
+2. Each saved value is persisted as one DB row; per-QueryType
+   maps are stored as a single JSON-encoded dict row.
+3. The cache-overlay (`reapply_one`) is updated immediately.
+4. `app.state.query_pipeline` is invalidated so the next query
+   rebuilds with the new resolved values.
+
+The Config page is opt-in: when `--config-db` is unset the page
+renders **read-only** with a notice, and the resolver chain
+falls through to the JSON files / built-in defaults as before.
+
+### Per-QueryType table editor — `kind="dict_by_query_type"`
+
+The schema field type added in commit 8efe110 generalizes to
+any per-QueryType map:
+
+```python
+ConfigField(
+    module="retrieval",
+    key="bm25_weight_by_type",
+    label="BM25 Weight by QueryType",
+    kind="dict_by_query_type",
+    value_kind="float",   # cell type — float / int / bool / string
+    category="tunable",
+    help="...",
+)
+```
+
+The route iterates `QueryType` enum values to render one table
+row per type; saving collects all `<module>__<key>__<query_type>`
+form fields into one dict. Empty cells are skipped on save (the
+resolver falls back to the built-in default for that type).
+
+The remaining per-type maps (`top_k_by_type`,
+`rerank_enabled_by_type`, `rewrite_enabled_by_type`,
+`gap_threshold_by_type` per-type) follow the same pattern; their
+migration from `pipeline.py` module-level dicts to `config/retrieval.json`
++ Config page is **Phase 4-migrate**, scheduled next.
+
+### Verification — `[Query knobs]` log
+
+Every query emits one structured log line at the resolver-chain
+boundary:
+
+```
+[Query knobs] type=summarize top_k=50 (cap=none) bm25_weight=0.20 rerank=False rewrite=True threshold=0.7 grouping=False
+```
+
+Use this to confirm a Config-page edit took effect on the next
+query.
+
+## 15. Debugging retrieval quality
 
 When retrieval feels "off" — answers look fabricated, relevant
 reqs don't surface, or the not-found path fires on queries that
 should have hit — work down this checklist before assuming the
 algorithm is broken.
 
-### 10.1 Most common cause: embedding-model mismatch
+### 15.1 Most common cause: embedding-model mismatch
 
 The vectorstore stores chunks embedded by the model named in
 `<env_dir>/out/vectorstore/config.json`. The query path
@@ -339,7 +779,7 @@ overrides. The two must match. If they don't, either rebuild
 the vectorstore against the new model, or update the query
 config to match the existing vectorstore.
 
-### 10.2 Confirm chunks carry the new metadata (D-046)
+### 15.2 Confirm chunks carry the new metadata (D-046)
 
 After D-046, every chunk carries `hierarchy_path` (a `list[str]`
 with `plan_name` as the document root). Old vectorstores built
@@ -366,7 +806,7 @@ path should be the document root (e.g. `LTEDATARETRY`,
 `LTE_OTA_Device_Management`). Empty paths or `None` mean the
 vectorstore predates D-046 — rebuild required.
 
-### 10.3 Threshold sweep — diagnose the relevance distribution
+### 15.3 Threshold sweep — diagnose the relevance distribution
 
 After D-047, the pipeline filters chunks by cosine distance. If
 the threshold is wrong for the active model + corpus, either
@@ -471,7 +911,7 @@ NORA_MAX_DISTANCE_THRESHOLD=0.6 python -m core.src.web.app ...   # stricter / lo
 NORA_MAX_DISTANCE_THRESHOLD=off python -m core.src.web.app ...   # disable
 ```
 
-### 10.4 Run the full pipeline with explicit provider / model flags
+### 15.4 Run the full pipeline with explicit provider / model flags
 
 When the underlying state (vectorstore, graph, taxonomy) is
 suspect, rebuild end-to-end. The pipeline runner accepts CLI
@@ -538,7 +978,7 @@ cd <repo_root> && python -m core.src.pipeline.run_cli \
 --llm-provider ollama --model gemma4:e4b --model-timeout 300
 ```
 
-### 10.5 Targeted vectorstore rebuild only
+### 15.5 Targeted vectorstore rebuild only
 
 If only the vectorstore is suspect (taxonomy / graph already
 look fine), rebuild just that stage:
@@ -563,7 +1003,7 @@ Notes:
   paths read that file to construct the embedder, so rebuilding
   propagates the model choice automatically.
 
-### 10.6 Truncation warnings during rebuild
+### 15.6 Truncation warnings during rebuild
 
 ```
 WARNING Text N length 9415 > max_input_chars 8000; truncating
@@ -580,36 +1020,57 @@ text get truncated, a small bounded loss.
 To raise the cap if you know your model handles more, set
 `extra={"ollama_max_input_chars": 12000}` on `VectorStoreConfig`.
 
-### 10.7 Common failure modes
+### 15.7 Common failure modes
 
 | Symptom | Likely cause | Diagnostic |
 |---|---|---|
-| Every query returns "not found" | Embedding model mismatch (built with X, queried with Y) | §10.1 — compare `<env_dir>/out/vectorstore/config.json` against the active config |
-| Relevant queries return "not found"; off-topic returns answers | Threshold too strict for current model | §10.3 — sweep; raise threshold or disable |
-| Off-topic queries return synthesized answers | Threshold too loose, or filter disabled | §10.3 — confirm threshold value in pipeline-build log |
-| Vectorstore rebuild shows `Loaded 0 parsed trees` | Wrong `--trees-dir` (pointed at `out/resolve` instead of `out/parse`) | §10.5 |
+| Every query returns "not found" | Embedding model mismatch (built with X, queried with Y) | §15.1 — compare `<env_dir>/out/vectorstore/config.json` against the active config |
+| Relevant queries return "not found"; off-topic returns answers | Threshold too strict for current model | §15.3 — sweep; raise threshold or disable |
+| Off-topic queries return synthesized answers | Threshold too loose, or filter disabled | §15.3 — confirm threshold value in pipeline-build log |
+| Vectorstore rebuild shows `Loaded 0 parsed trees` | Wrong `--trees-dir` (pointed at `out/resolve` instead of `out/parse`) | §15.5 |
 | `Loaded 0 parsed trees` and trees-dir is correct | Parse stage hasn't run; rerun the pipeline up to parse | `--start extract --end parse` |
-| Acronym queries get hallucinated answers | Glossary chunks missing from vectorstore (rebuilt without `definitions_map` populated) | Spot-check with §10.2; ensure `<doc_type>=glossary_entry` chunks exist |
+| Acronym queries get hallucinated answers | Glossary chunks missing from vectorstore (rebuilt without `definitions_map` populated) | Spot-check with §15.2; ensure `<doc_type>=glossary_entry` chunks exist |
 | Hierarchy paths show single-element `[doc_root]` only | Requirements have no hierarchy populated by parser | Open a parsed tree JSON, inspect `requirements[*].hierarchy_path` |
 
-## 11. ADR cross-reference
+## 16. ADR cross-reference
 
-- D-001 — Graph routes, RAG ranks (foundational).
-- D-032 — Per-document `definitions_map` + chunk-build inline
-  expansion.
-- D-038 — Table-anchored definitions extraction (extends D-032
+- **D-001** — Graph routes, RAG ranks (foundational).
+- **D-032** — Per-document `definitions_map` + chunk-build inline
+  expansion. (See §8.)
+- **D-038** — Table-anchored definitions extraction (extends D-032
   for table-format glossaries).
-- D-039 — Entity-priority graph scoping.
-- D-040 — Type-aware top\_k + cross-doc list-style detection.
-- D-041 — BM25 hybrid retrieval (sparse + dense, RRF, per-type
-  weights).
-- D-042 — Parent-chunk subsection augmentation (opt-in, default
-  off — kept available for corpora with rich-bodied parents).
-- D-043 — Acronym lookup chain (parser fix + glossary chunks +
-  query-side pin). Adds glossary-aware retrieval as a
+- **D-039** — Entity-priority graph scoping. (See §2.)
+- **D-040** — Type-aware top\_k + cross-doc list-style detection.
+  (See §4.4.)
+- **D-041** — BM25 hybrid retrieval (sparse + dense, RRF,
+  per-type weights). (See §4.)
+- **D-042** — Parent-chunk subsection augmentation (opt-in,
+  default off — kept available for corpora with rich-bodied
+  parents).
+- **D-043** — Acronym lookup chain (parser fix + glossary chunks
+  + query-side pin). Adds glossary-aware retrieval as a
   deterministic answer surface for short definitional queries.
-- D-046 — Document-rooted hierarchy paths in chunk text +
+  (See §6.)
+- **D-046** — Document-rooted hierarchy paths in chunk text +
   metadata. Embedding captures Document > Section > Subsection.
-- D-047 — Relevance threshold + "not found" response (Stage 4.5).
-  Off-topic queries return a deterministic message instead of
-  LLM hallucination from weak fragments.
+  Input that Stage 4.7 grouping (§11) reads. (See §1's
+  "Contract" list.)
+- **D-047** — Relevance threshold + "not found" response (Stage
+  4.5). Off-topic queries return a deterministic message
+  instead of LLM hallucination from weak fragments. (See §10.)
+- **D-049** — Stage 4.7 hierarchy grouping with user-facing
+  disambiguation. "The system shall not pretend it is an
+  Oracle." Auto-commit when groups separate cleanly; surface a
+  disambiguation response when they don't. (See §11.)
+- **D-050** — Phase 3-config infrastructure: `config/retrieval.json`
+  + 3-tier resolver chain extension. Pattern for Phase 4-migrate
+  (rest of the per-type maps). (See §14.)
+- **D-051** — FACT and SUMMARIZE intent classification.
+  Phrasing-driven routing on top of the existing scope-shape
+  types; per-intent knob bundles. (See §12.)
+- **D-052** — Stage 6.5 citation audit. Per-sentence regex check
+  for inline citations; flags fabricated req IDs. (See §13.)
+- **D-053** — Config-page DB layer in resolver chain (CLI > env
+  > **DB** > JSON > defaults). User-edited overrides via the
+  `/config` page; SQLite-backed; opt-in via `--config-db`.
+  (See §14.)
