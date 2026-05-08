@@ -20,10 +20,20 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
   - `MetricsStore(db_path)` — aiosqlite store with indexes on category / name / timestamp; `init_db()`, `record()`, query helpers
 - Feedback (feedback_db.py):
   - `FeedbackStore(db_path)` — aiosqlite store for the Test page's free-form Q&A + thumbs-up/down + comment log; `initialize()`, `record_qa()` (returns row id), `record_feedback(row_id, vote, free_form_feedback)`, `get_row()`, `list_recent()`. Surface for offline review of LLM hallucinations (D-043 driver).
+- Config store (config_db.py) [D-053]:
+  - `ConfigStore(db_path)` — synchronous SQLite-backed user-config store; values JSON-encoded; threadsafe via internal lock. Public methods: `get(module, key)`, `get_module(module)`, `get_all()`, `set(module, key, value, updated_by)`, `delete(module, key)`, `apply_to_caches()` (overlay every stored value onto the cached `LLMConfigFile` / `RetrievalConfig` instances at lifespan startup), `reapply_one(module, key)` (cheaper single-field overlay used after each save).
+- Config schema (config_schema.py) [D-053]:
+  - `ConfigField` — per-knob metadata: `module`, `key`, `label`, `kind` (`bool` / `string` / `int` / `float` / `enum` / `password` / `dict_by_query_type`), `category` (`feature` / `value` / `tunable`), `choices` for enums, `value_kind` for per-type maps, `help` text.
+  - `ConfigSection` — section grouping (LLM & Embedding, Retrieval & Grouping); `CONFIG_SECTIONS: list[ConfigSection]` is the page's authoritative schema.
+  - `find_field(module, key) -> ConfigField | None`, `all_fields() -> list[ConfigField]` — accessors.
+- Markdown rendering (markdown_render.py):
+  - `render_markdown(text) -> Markup` — converts LLM answer markdown to Jinja-safe HTML (headers, bullets, **bold**, *italic*, fenced code, tables, `nl2br`). Registered as the `md` Jinja filter on `templates.env`. Strips dangerous tags defensively before parsing (script / style / iframe / object / embed / svg-with-onclick / math).
 - `MetricsMiddleware` (middleware.py) — captures every request's timing and error count; fire-and-forget
 - `PathMapper(mappings)` (path_mapper.py) — `to_linux()`, `to_windows()`; translates Windows UNC paths to Linux mount points
 - `ResourceSampler` (resource_sampler.py) — background task sampling CPU / memory / disk / GPU via `/proc` and `nvidia-smi` (no `psutil` dependency)
-- Routers (routes/): dashboard, environments, pipeline, jobs, query, corrections, files, metrics_route, parse_review (Parse Review UI), req_browser (Requirement Browser), resolve_review (Resolve Review UI), playground (Test page) — each mounted via `app.include_router`
+- Routers (routes/): dashboard, environments, pipeline, jobs, query, corrections, files, metrics_route, parse_review (Parse Review UI), req_browser (Requirement Browser), resolve_review (Resolve Review UI), playground (Test page — `POST /api/test/ask`, `POST /api/test/synthesize-group` for D-049 disambiguation user-pick path, `POST /api/test/feedback`), config_route (Config page — `GET /config`, `POST /api/config/save`; D-053) — each mounted via `app.include_router`
+- App state (set up in `lifespan`): `app.state.job_queue`, `app.state.metrics`, `app.state.feedback_store`, `app.state.path_mapper`, `app.state.config_store` (ConfigStore | None — None when `--config-db` is unset), `app.state.query_pipeline` (cached after first build; saving via `/api/config/save` sets it back to None so the next query rebuilds with the new resolved values).
+- CLI launcher (`if __name__ == "__main__"` in app.py): `--env-dir`, `--host`, `--port`, `--jobs-db`, `--metrics-db`, `--feedback-db`, `--config-db` (each maps to a corresponding `NORA_*_DB` / `ENV_DIR` env var so the uvicorn-reload worker re-import sees the same resolution).
 - Static + Templates: vendored under `static/` and `templates/` — no CDN at runtime
 
 **Invariants**
@@ -35,6 +45,9 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - `PathMapper` is case-insensitive for Windows paths (UNC paths are not case-sensitive); it returns `None` when no mapping matches — callers surface that as a user error, not a 500.
 - Resource sampler runs on a 30s interval, reads CPU from `/proc/stat`, memory from `/proc/meminfo`, GPU via `nvidia-smi` subprocess — deliberately dependency-free because the host may be locked down.
 - No proprietary document content in metric tags, job log lines sent to SSE, or error-message templates. Verbose logs persist to disk; chat-facing surfaces stay clean (D-012).
+- **Config-page DB layer in resolver chain** [D-053]: when `--config-db` / `$NORA_CONFIG_DB` is set, lifespan startup instantiates `ConfigStore` and calls `apply_to_caches()`, which overlays every stored value onto the cached `LLMConfigFile` / `RetrievalConfig` instances. The existing `resolve_*` functions in `core/src/env/config.py` then automatically pick up the new tier — no plumbing changes elsewhere. Effective resolver chain becomes `CLI > env var > ConfigStore (DB) > config/*.json > defaults`. `POST /api/config/save` writes to the DB, calls `reapply_one` to refresh the cache, and sets `app.state.query_pipeline = None` so the next query rebuilds with the new resolved values.
+- **Markdown renderer strips dangerous HTML before parsing**: `render_markdown` removes `<script>` / `<style>` / `<iframe>` / `<object>` / `<embed>` / `<svg>` / `<math>` tags (paired and self-closing) before invoking the markdown library. LLM answer text on the Test page goes through this filter; raw chunk text in the click-to-expand fragment view deliberately doesn't (the indexed body may contain literal markdown syntax that's part of the requirement, e.g. `**MUST**` in 3GPP-style specs).
+- **Logging configured at module-import time**, not just inside the `if __name__ == "__main__":` launcher block. Required because `uvicorn.run(reload=True)` spawns a worker that re-imports the module but never executes the launcher block; without basicConfig at import, the worker's loggers default to WARNING and silently drop every `logger.info(...)` in the request path (verification lines like `Web LLM resolved`, `[Query knobs]`, `ConfigStore active` would never reach stderr).
 
 **Key choices**
 - FastAPI over Streamlit / Gradio because the UI needs fine-grained routing (corrections, files, jobs) and reverse-proxy deployment — SESSION_SUMMARY §19.
@@ -43,6 +56,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - `ResourceSampler` reads `/proc` directly rather than importing `psutil` — one less pip install on restricted hosts and works inside containers without privileges.
 - Separate metrics DB so the metrics retention / truncation policy can be aggressive without touching the job history.
 - Ollama URL and default model live in `WebConfig` rather than env vars — the UI exposes them in settings; `PipelineContext` reads the same config when it creates a provider.
+- **`/config` page + ConfigStore as the user-editing surface for the resolver chain** [D-053]: the page renders LLM and Retrieval knobs grouped by category (Features / Values / Tunable parameters) per `CONFIG_SECTIONS`. New `kind="dict_by_query_type"` schema field renders a per-`QueryType` table editor (used by `bm25_weight_by_type` today; pattern generalizes to the rest of Phase 4-migrate's per-type maps). Opt-in: when `--config-db` is unset, the page renders read-only with a notice and the resolver chain falls through to JSON files / defaults. See [`../query/RETRIEVAL.md`](../query/RETRIEVAL.md) §14 for the full configuration model.
 
 **Non-goals**
 - No multi-user auth / RBAC in v1. Production deployment runs behind an authenticating reverse proxy (D-016); when in-app authn is added, it's a distinct cross-cutting change, not a router plugin.
@@ -56,11 +70,15 @@ _Alphabetical, regenerated by regen-map._
 
 `app.py`
 - `_duration_filter` — function — internal — Human-readable duration for a Job.
+- `_start_time` — constant — internal
 - `_template_response` — function — internal — Render a template with root_path injected into context.
+- `app` — constant — pub
+- `config` — constant — pub
 - `dashboard` — function — pub
 - `health_check` — function — pub
 - `lifespan` — function — pub
 - `STATIC_DIR` — constant — pub
+- `templates` — constant — pub
 - `TEMPLATES_DIR` — constant — pub
 - `WEB_DIR` — constant — pub
 
@@ -83,6 +101,32 @@ _Alphabetical, regenerated by regen-map._
   - `jobs_db_path` — method — pub
   - `metrics_db_path` — method — pub
   - `state_path` — method — pub
+
+`config_db.py`
+- `_decode` — function — internal
+- `_encode` — function — internal
+- `_JSON_DECODE_FALLBACK` — constant — internal
+- `_SCHEMA_SQL` — constant — internal
+- `ConfigStore` — class — pub — SQLite-backed key-value config store, scoped by (module, key).
+  - `__init__` — constructor — pub
+  - `_connect` — method — internal
+  - `_init_schema` — method — internal
+  - `apply_to_caches` — method — pub — Overlay every stored value onto the in-memory config caches.
+  - `delete` — method — pub
+  - `get` — method — pub — Return decoded value or None if absent.
+  - `get_all` — method — pub — Return everything, indexed by (module, key) tuples.
+  - `get_module` — method — pub — Return all (key → value) pairs for one module.
+  - `reapply_one` — method — pub — After a single write, re-overlay just that value onto the
+  - `set` — method — pub — Upsert one (module, key) → value pair.
+
+`config_schema.py`
+- `_LLM_FIELDS` — constant — internal
+- `_RETRIEVAL_FIELDS` — constant — internal
+- `all_fields` — function — pub
+- `CONFIG_SECTIONS` — constant — pub
+- `ConfigField` — dataclass — pub
+- `ConfigSection` — dataclass — pub
+- `find_field` — function — pub
 
 `feedback_db.py`
 - `_SCHEMA` — constant — internal
@@ -116,6 +160,12 @@ _Alphabetical, regenerated by regen-map._
   - `list_jobs` — method — pub
   - `submit` — method — pub
   - `update_status` — method — pub
+
+`markdown_render.py`
+- `_DANGEROUS_TAG_OPEN_RE` — constant — internal
+- `_DANGEROUS_TAG_RE` — constant — internal
+- `_MD_EXTENSIONS` — constant — internal
+- `render_markdown` — function — pub — Convert markdown source to HTML, return Jinja-safe Markup.
 
 `metrics.py`
 - `_IDX_CAT_NAME_TS` — constant — internal
@@ -157,6 +207,8 @@ _Alphabetical, regenerated by regen-map._
 
 `resource_sampler.py`
 - `_DEFAULT_INTERVAL` — constant — internal
+- `_prev_cpu_idle` — constant — internal
+- `_prev_cpu_total` — constant — internal
 - `_read_cpu_percent` — function — internal — Read CPU utilization from /proc/stat using delta between calls.
 - `_read_disk_usage` — function — internal — Read disk usage for a path.
 - `_read_gpu_info` — function — internal — Read GPU utilization via nvidia-smi.
@@ -164,6 +216,14 @@ _Alphabetical, regenerated by regen-map._
 - `_sample_once` — function — internal
 - `_sampler_loop` — function — internal
 - `start_resource_sampler` — function — pub — Start the background sampler and return its task handle.
+
+`routes/config_route.py`
+- `_coerce` — function — internal — Convert a form string to the field's typed value.
+- `_current_dict_by_query_type` — function — internal — Build the {query_type: value} dict for a dict_by_query_type
+- `_current_value` — function — internal — Read the live effective value for a field via the resolver chain.
+- `config_page` — function — pub
+- `config_save` — function — pub — Persist edits, invalidate caches, clear cached pipeline.
+- `router` — constant — pub
 
 `routes/corrections.py`
 - `_list_envs_with_status` — function — internal
@@ -239,7 +299,7 @@ _Alphabetical, regenerated by regen-map._
 - `router` — constant — pub
 
 `routes/pipeline.py`
-- `_list_environments` — function — internal — Scan environments/*.json and return summary dicts.
+- `_list_environments` — function — internal — Scan environments/*.
 - `_record_stage_metrics` — function — internal — Record pipeline stage metrics to MetricsStore (fire-and-forget safe).
 - `_stages_for_template` — function — internal — Build stage list for dropdown rendering.
 - `ENVIRONMENTS_DIR` — constant — pub
@@ -250,23 +310,30 @@ _Alphabetical, regenerated by regen-map._
 - `submit_pipeline` — function — pub
 
 `routes/playground.py`
-- `_run_query_for_test` — function — internal — Adapt the existing /query pipeline runner into a dict shape.
-- `playground_ask` — function — pub — Submit a question, run the query pipeline, log the Q&A row.
+- `_run_query_for_test` — function — internal — Adapt the existing /query pipeline runner into a dict shape
+- `_SECTIONS` — constant — internal
+- `playground_ask` — function — pub — Submit a question, run the query pipeline, log the Q&A row,
 - `playground_feedback` — function — pub — Update an existing Q&A row with the user's vote / comment.
 - `playground_page` — function — pub
+- `playground_synthesize_group` — function — pub — Step 3c — user picked a group from a disambiguation response.
 - `router` — constant — pub
 
 `routes/query.py`
 - `_build_llm_from_env_or_default` — function — internal — Construct the LLM provider for /query and /test.
 - `_build_pipeline` — function — internal — Construct a QueryPipeline + LLM.
-- `_find_env_config_for_web` — function — internal — Locate the env JSON whose env_dir matches the Web UI's env_dir_path.
-- `_get_or_build_pipeline` — function — internal — Return (pipeline, llm) cached on app.state.
-- `_graph_path` — function — internal — Resolve <env_dir>/out/graph/knowledge_graph.json.
+- `_config_store_get` — function — internal — Best-effort read from app.
+- `_DEFAULT_MAX_DISTANCE_THRESHOLD` — constant — internal
+- `_find_env_config_for_web` — function — internal — Locate the env JSON whose `env_dir` matches the Web UI's
+- `_get_or_build_pipeline` — function — internal — Return (pipeline, llm) cached on `app.
+- `_graph_path` — function — internal — Resolve `<env_dir>/out/graph/knowledge_graph.
+- `_MAX_DISTANCE_THRESHOLD_ENV_VAR` — constant — internal
 - `_pipeline_build_lock` — constant — internal
-- `_PipelineBuildError` — class — internal — Raised by _build_pipeline when prerequisites aren't met.
+- `_PipelineBuildError` — class — internal — Raised by `_build_pipeline` when prerequisites aren't met
 - `_record_llm_metrics` — function — internal — Record LLM call metrics to MetricsStore (fire-and-forget safe).
-- `_run_query_sync` — function — internal — Run the query pipeline synchronously (called via asyncio.to_thread).
-- `_vectorstore_dir` — function — internal — Resolve <env_dir>/out/vectorstore/.
+- `_resolve_max_distance_threshold` — function — internal — Return the threshold to pass to QueryPipeline.
+- `_resolve_top_k_cap` — function — internal — Resolve the user-configured Top-K cap from the ConfigStore.
+- `_run_query_sync` — function — internal — Run the query pipeline synchronously (called via asyncio.
+- `_vectorstore_dir` — function — internal — Resolve `<env_dir>/out/vectorstore/`.
 - `PROJECT_ROOT` — constant — pub
 - `query_page` — function — pub
 - `query_result` — function — pub

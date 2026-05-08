@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-05-05 by regen-map. Do not hand-edit.
+Generated 2026-05-07 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -55,6 +55,8 @@ flowchart TD
     m_graph --> m_resolver
     m_graph --> m_standards
     m_graph --> m_taxonomy
+    m_llm --> m_env
+    m_llm --> m_pipeline
     m_parser --> m_extraction
     m_parser --> m_models
     m_parser --> m_profiler
@@ -72,6 +74,7 @@ flowchart TD
     m_pipeline --> m_vectorstore
     m_profiler --> m_extraction
     m_profiler --> m_models
+    m_query --> m_env
     m_query --> m_graph
     m_query --> m_llm
     m_query --> m_resolver
@@ -107,6 +110,8 @@ nora/
 ├── CLAUDE.md
 ├── config/
 │   ├── env.json
+│   ├── llm.json
+│   ├── retrieval.json
 │   └── web.json
 ├── CONTRIBUTING.md
 ├── core/
@@ -149,6 +154,7 @@ nora/
 │   │   ├── llm/                                       # LLM abstraction layer.
 │   │   │   ├── __init__.py
 │   │   │   ├── base.py                                # LLM provider abstraction layer.
+│   │   │   ├── llm_debug.py                           # LLM debug — verify the active LLM provider and probe arbitrary endpoints.
 │   │   │   ├── mock_provider.py                       # Mock LLM provider for testing without API keys.
 │   │   │   ├── model_picker.py                        # Hardware detection and LLM model selection.
 │   │   │   ├── MODULE.md
@@ -186,8 +192,10 @@ nora/
 │   │   │   ├── __init__.py
 │   │   │   ├── analyzer.py                            # Query analyzer (TDD 7.1).
 │   │   │   ├── bm25_index.py                          # BM25 sparse retrieval index for the query pipeline.
+│   │   │   ├── citation_audit.py                      # Citation audit (Stage 6.5).
 │   │   │   ├── context_builder.py                     # Context assembler (TDD 7.5).
 │   │   │   ├── graph_scope.py                         # Graph scoper (TDD 7.3).
+│   │   │   ├── grouping.py                            # Hierarchy-based chunk grouping (Stage 4.7).
 │   │   │   ├── MODULE.md
 │   │   │   ├── pipeline.py                            # Query pipeline orchestrator (TDD 7).
 │   │   │   ├── query_cli.py                           # CLI for the query pipeline (PoC Step 10).
@@ -195,6 +203,7 @@ nora/
 │   │   │   ├── reranker.py                            # Cross-encoder reranker — final-pass relevance scoring on the
 │   │   │   ├── resolver.py                            # MNO and release resolver (TDD 7.2).
 │   │   │   ├── RETRIEVAL.md
+│   │   │   ├── retrieval_debug.py                     # Retrieval debug — pinpoint why retrieval behaves differently across
 │   │   │   ├── rewriter.py                            # Query rewriting / expansion (TDD §7 — pre-retrieval enrichment).
 │   │   │   ├── schema.py                              # Query pipeline data models (TDD 7.1-7.6).
 │   │   │   └── synthesizer.py                         # LLM synthesizer (TDD 7.6).
@@ -241,8 +250,11 @@ nora/
 │   │       ├── __init__.py
 │   │       ├── app.py                                 # NORA Web UI — FastAPI application.
 │   │       ├── config.py                              # Web UI configuration.
+│   │       ├── config_db.py                           # SQLite-backed config store for the web Config page.
+│   │       ├── config_schema.py                       # Schema describing the Config page's editable knobs.
 │   │       ├── feedback_db.py                         # Test-page feedback store — async SQLite log of question / answer /
 │   │       ├── jobs.py                                # Job queue for NORA pipeline execution tracking.
+│   │       ├── markdown_render.py                     # Markdown → HTML rendering for LLM-synthesized answers.
 │   │       ├── metrics.py                             # Metrics persistence store for NORA observability.
 │   │       ├── middleware.py                          # Request timing middleware for NORA Web UI.
 │   │       ├── MODULE.md
@@ -250,6 +262,7 @@ nora/
 │   │       ├── resource_sampler.py                    # Background resource sampler for NORA observability.
 │   │       ├── routes/
 │   │       │   ├── __init__.py                        # Web UI route packages.
+│   │       │   ├── config_route.py                    # Config page — read/edit configurable knobs persisted to the
 │   │       │   ├── corrections.py                     # Corrections routes — profile + taxonomy editors and compact FIX reports.
 │   │       │   ├── dashboard.py                       # Dashboard page and API routes.
 │   │       │   ├── environments.py                    # Environments page and API routes.
@@ -282,7 +295,9 @@ nora/
 │   │       │       └── htmx/
 │   │       │           └── htmx.min.js
 │   │       └── templates/
+│   │           ├── _config_save_ack.html
 │   │           ├── base.html
+│   │           ├── config.html
 │   │           ├── corrections/
 │   │           │   ├── index.html
 │   │           │   ├── profile.html
@@ -325,6 +340,7 @@ nora/
 │       ├── __init__.py
 │       ├── test_bm25_index.py                         # Unit tests for BM25 sparse retrieval (`bm25_index.py`).
 │       ├── test_chunk_builder_definitions.py          # Tests for FR-35 [D-032] inline definition expansion in chunk_builder.
+│       ├── test_chunk_builder_hierarchy.py            # Tests for hierarchy path prefixing in chunk text and metadata.
 │       ├── test_chunk_builder_subsections.py          # Tests for parent-chunk augmentation with child titles.
 │       ├── test_document_ir.py                        # Tests for DocumentIR serialize/deserialize round-trip.
 │       ├── test_embedding_ollama.py                   # Tests for OllamaEmbedder + make_embedder factory.
@@ -343,8 +359,13 @@ nora/
 │       ├── test_pipeline.py                           # Pipeline smoke tests — extract, profile, and parse real PDFs.
 │       ├── test_profile_schema.py                     # Tests for DocumentProfile serialize/deserialize round-trip.
 │       ├── test_query.py                              # Tests for the query pipeline (PoC Step 10).
+│       ├── test_query_citation_audit.py               # Tests for Stage 6.5 — per-sentence citation audit.
+│       ├── test_query_grouping.py                     # Tests for hierarchy-based chunk grouping (Stage 4.7).
+│       ├── test_query_grouping_pipeline.py            # Tests for Stage 4.7 (hierarchy grouping) pipeline integration.
+│       ├── test_query_intent.py                       # Tests for Step 4 — FACT and SUMMARIZE intent classification + routing.
 │       ├── test_query_reranker.py                     # Tests for `core/src/query/reranker.py` — cross-encoder reranker
 │       ├── test_query_rewriter.py                     # Tests for `core/src/query/rewriter.py` — pre-retrieval query expansion.
+│       ├── test_query_threshold.py                    # Tests for the relevance threshold filter in QueryPipeline (Stage 4.5).
 │       ├── test_resolver.py                           # Tests for the cross-reference resolver.
 │       ├── test_revhist_omission.py                   # FR-34 revision-history omission — profiler detection + parser drop.
 │       ├── test_standards.py                          # Tests for the standards ingestion pipeline (Step 7).
@@ -353,7 +374,9 @@ nora/
 │       ├── test_taxonomy.py                           # Tests for the feature taxonomy pipeline (Step 6).
 │       ├── test_vectorstore.py                        # Tests for vector store construction (PoC Step 9).
 │       ├── test_web_config.py                         # Tests for `core/src/web/config.py` — env_dir + DB-path resolution.
+│       ├── test_web_config_db.py                      # Tests for ConfigStore + Config-page wiring.
 │       ├── test_web_jobs.py                           # Tests for the NORA web job queue.
+│       ├── test_web_markdown_render.py                # Tests for the web markdown renderer.
 │       ├── test_web_path_mapper.py                    # Tests for the web path mapper module.
 │       └── test_xlsx_extractor.py                     # Tests for XLSXExtractor (FR-1).
 ├── create_presentation.py                             # Generate NORA leadership presentation.
@@ -367,7 +390,6 @@ nora/
 │   │       ├── __init__.py
 │   │       └── test_proprietary_provider.py           # Smoke tests for the ProprietaryLLMProvider stub.
 │   └── profiles/
-│       ├── tests/
 │       └── vzw_oa_profile.json
 ├── docs/
 │   └── compact/
