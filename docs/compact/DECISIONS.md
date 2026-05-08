@@ -2345,3 +2345,262 @@ is enforced), D-044 (unified LLM config; the chain this layer
 extends), D-050 (Phase 3-config infrastructure;
 `config/retrieval.json` is one of the JSON files this layer sits
 above).
+
+---
+
+## D-054: Cline scaffold for on-prem teacher/student collaboration
+
+**Date**: 2026-05-07
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+NORA processes proprietary US-MNO requirement documents that cannot
+leave the on-prem network. Two debug-loop pain points emerged this
+work-week:
+
+1. The user couldn't show me corpus content (no copy-paste between
+   on-prem and cloud machines) so I was designing parser rules and
+   profile schemas blind, relying on the user to manually translate
+   observations into compact reports each iteration. Slow and
+   error-prone.
+2. Existing on-prem AI partners (Cline) could see the corpus and
+   were perfectly capable of running NORA's CLIs, profiling docs,
+   running pipelines — but had no structured contract telling them
+   what their role was vs the cloud LLM's, what to leak vs not,
+   and how to format outputs so the user could hand-type them
+   into the cloud chat.
+
+The user proposed: split responsibilities. On-prem AI (Cline) sees
+the corpus, profiles, debugs, and produces compact redacted
+reports. Cloud AI ("Teacher LLM," intentionally generic — the
+scaffold doesn't name a vendor) sees the full repo, designs and
+codes. Code transfers via git; observations transfer via hand-typed
+reports. Per-project scaffolding tells Cline what to do.
+
+**Decision**
+14-file scaffold under the NORA repo, structured as:
+
+- **`.clinerules/` (always-on, ~7KB total)** — Cline's rule engine
+  auto-loads everything in this directory:
+  - `00-project.md` — what NORA is, where to read more
+  - `01-role.md` — Cline as on-prem student, the cloud "Teacher LLM"
+    as teacher, the standard loop diagram (playbook → redacted
+    report → hand-typed → code via git → re-test)
+  - `02-content-safety.md` — full redaction protocol with literal-
+    string mapping at `<env_dir>/state/cline-mapping.json` (on-prem
+    only; placeholders `<MNO{N}>` / `<PLAN{N}>` / `<REQID-{N}>`);
+    forward redaction for outgoing reports, reverse substitution
+    for incoming Teacher LLM responses; hard rules for what never
+    leaves on-prem (verbatim prose, file paths under `<env_dir>/input/`,
+    requirement-body content, table cell data)
+  - `03-output-discipline.md` — hand-typeable reports (≤30 lines
+    max), tabular over prose, fixed format per playbook, six
+    standard report types (ORIENT / MAP / PROF / RULE / RPT /
+    BUNDLE)
+- **`cline-playbooks/` (invokable manually)** — 6 initial
+  playbooks (orient / mapping / profile-corpus / debug-pipeline
+  / derive-rule / share-back) + 3 bootstrap-related additions
+  (annotation-schema / bootstrap / feedback-loop, captured
+  separately as D-055).
+
+Workflow loop:
+```
+   ┌── on-prem (Cline + corpus) ──┐               ┌── cloud (Teacher LLM) ──┐
+   │  1. invoke playbook          │   manual      │  3. read report         │
+   │  2. produce compact report   │   typing      │  4. design + code       │
+   │  6. git pull                 │ ◀── git ────  │  5. commit              │
+   │  7. run new code             │               │                         │
+   │  8. produce next report      │ ───────────▶  │  9. respond             │
+   └──────────────────────────────┘               └─────────────────────────┘
+```
+
+Steps 3 + 9 are user-typed manually. Code never moves through chat —
+only through git.
+
+**Why this over alternatives**
+- *Everything in `.clinerules/` (single concatenated rules file)* —
+  rejected. Cline concatenates every file in the directory into one
+  always-on prompt; bundling 7 playbooks + 4 always-on rules would
+  bloat every Cline interaction with playbook content not relevant
+  to that conversation. Splitting playbooks into a manually-invoked
+  directory keeps the always-on budget tight.
+- *Have Cline write code under `core/src/`* — rejected. Two reasons:
+  (a) Teacher LLM has the full design context; Cline doesn't need
+  to and shouldn't second-guess architecture decisions; (b) bounding
+  Cline's authority makes review easier — the user only reviews
+  reports going out and Teacher LLM's commits going in, never an
+  in-place Cline-edited core source file.
+- *Generic "AI assistant" naming* — rejected (initially used "Claude"
+  per the cloud-side reality, but corrected per user preference to
+  "Teacher LLM"). The vendor-neutral naming makes the scaffold
+  portable (different team members may use different cloud LLMs;
+  the scaffold doesn't care).
+- *Copy-paste between machines* — rejected by physics: the user's
+  on-prem and cloud machines are air-gapped (no shared clipboard).
+  Hand-typing budget drives every report to ≤30 lines, tabular,
+  numerical-not-prose. Code transfer goes through git.
+- *Always-default redaction mapping at `<env_dir>/state/`* —
+  considered. Decided **opt-in** with an explicit `<env_dir>/state/
+  cline-mapping.json` path. The mapping never enters git (env_dir
+  is gitignored). Cline allocates new placeholders on demand;
+  the user reviews periodically.
+
+**Consequences**
+- **Scaffold lives in NORA repo for v1.** When a second project
+  with on-prem corpus needs the same pattern, lift to a portable
+  `compact-cline-template/` (analogous to the COMPACT scaffold for
+  Teacher LLM, which is the user-global `.claude/skills/`
+  scaffold). For v1, NORA-specific paths/CLIs are hardcoded —
+  faster to validate the design, cleaner to template after.
+- **New on-prem-only file** at `<env_dir>/state/cline-mapping.json`.
+  Per-env, never in git. Schema covers MNO short / MNO alias / MNO
+  full name / Plan ID / Plan name / Release / Req ID. Stable
+  indexes per category — once allocated, never changes. Cline
+  emits a `MAPPING:` line inline whenever it allocates a new entry.
+- **Hand-typing budget is the tightest constraint.** Every report
+  type has a hard line limit. PROF ≤15. RULE ≤10. RPT ≤25. BUNDLE
+  ≤40. Without these caps, the workflow doesn't scale.
+- **Validation gap surfaced and tracked**: the loop is end-to-end
+  unproven on a real corpus until the user runs orient → mapping →
+  profile-corpus on a work-PC doc and reports back. Flagged in
+  STATUS.md.
+- **Annotation web UI for PDF/DOCX/XLSX deferred** as a separate
+  Teacher-LLM task. Schema doesn't change when the UI lands;
+  hand-typed JSON works in the interim.
+
+**Related**: D-008 (web UI for non-CLI team members; the Cline
+scaffold partners with that channel — Cline reads Parse Review
+output, web UI hosts the human-review side), D-022 (per-env
+runtime directory — the redaction mapping is one more file under
+`<env_dir>/state/`), D-055 (bootstrap → feedback-loop pattern;
+the Day-0 / Day-N rule-derivation flow that rides on this
+scaffold). The scaffold itself is independent of any specific
+ADR — D-054 stands alone as "how on-prem and cloud AIs collaborate
+in this project" and D-055 is the rule-derivation pattern that
+runs on top of it.
+
+---
+
+## D-055: Bootstrap → feedback-loop pattern for human-in-the-loop rule derivation
+
+**Date**: 2026-05-08
+**Status**: Accepted
+**Phase**: Development
+
+**Context**
+The cline scaffold (D-054) lets Cline derive parser/profile rules
+from on-prem corpus content, but the v1 derivation path
+(`derive-rule.md`) had Cline sample the corpus itself (10 instances
++ 10 NEAR-misses per element) and infer rules from those. That's
+brittle: Cline's choice of "instances" can be unrepresentative;
+self-reported coverage stats can be wrong because Cline scores its
+own rule.
+
+The user proposed a more grounded loop:
+
+1. **Day 0** — humans annotate 3-5 corpus files marking regions of
+   each kind (TOC / section_heading / strikethrough / etc).
+   Annotations capture location + kind, not verbatim content.
+2. **Day 0** — Cline reads the annotations, derives rules from
+   the human-marked regions, emits a compact BOOTSTRAP report.
+3. **Day 0** — Teacher LLM commits initial profile + parser code.
+4. **Day N** — humans review parser output via the existing Parse
+   Review web page, mark wrong rows / missed rows.
+5. **Day N** — Cline reads the review-derived corrections (CSV from
+   the web page) and emits a FEEDBACK report categorizing failure
+   modes and proposing rule refinements.
+6. **Day N** — Teacher LLM commits the refinement + an integration
+   test that pins the failure mode it just fixed.
+7. Loop steps 4-6 until coverage stabilizes.
+
+**Decision**
+Three new files in `cline-playbooks/`:
+
+- **`annotation-schema.md`** (reference, ~225 lines) — JSON sidecar
+  format per source doc at `<env_dir>/annotations/<plan>_annotations.json`.
+  Supports 9 kinds: `section_heading`, `req_id`, `toc`,
+  `strikethrough`, `version_history`, `definitions`, `applicability`,
+  `priority`, `references` (with `intra_doc` / `cross_doc` / `spec`
+  subkinds). Region format per doc-type: PDF (page+bbox or
+  line_range), DOCX (paragraph indices or table+row), XLSX (sheet+rows).
+  **Positive examples only** — false positives caught later by the
+  feedback loop, not by negative annotations.
+- **`bootstrap.md`** (invokable, ~120 lines) — reads annotations,
+  groups by kind across docs, derives one rule per kind, emits
+  BOOTSTRAP report (≤25 lines, one line per kind with regex/heuristic
+  + sigma=annotation-count + TP).
+- **`feedback-loop.md`** (invokable, ~110 lines) — reads
+  `<env_dir>/reports/audit/<plan>_audit.csv` and per-req correction
+  overrides, categorizes FPs/FNs by structural failure mode (max 3
+  per kind), proposes rule refinement, emits FEEDBACK report (≤20
+  lines, ≤3 kinds per report — split into multiple reports if more).
+
+`derive-rule.md` (the pre-existing fallback playbook) is now
+explicitly the **fallback** — for cases where annotations don't
+exist yet AND the parser hasn't run yet. The README's
+decision-diagram routes humans to bootstrap → feedback-loop when
+annotations are available.
+
+**Why this over alternatives**
+- *Negative annotations (mark "this is NOT a TOC")* — rejected for
+  v1. User feedback: "Difficult to provide negative examples for
+  bootstrap annotations. However, human feedback later on actual
+  parse output will catch FPs." Accept the FN-only signal at
+  bootstrap; let the feedback loop catch FP rate after the parser
+  has run on the full corpus.
+- *Cline writes profiles directly* — rejected. Per D-054 invariant
+  ("Cline doesn't write code under `core/src/`"). Cline emits the
+  BOOTSTRAP/FEEDBACK reports; Teacher LLM commits the profile.json
+  changes and any parser code. Stricter separation = easier review.
+- *Annotation web UI for v1* — deferred. User selected option (b)
+  ("Annotate page in NORA web UI") for the long term, but
+  acknowledged the substantial scope (PDF.js for PDFs, IR-rendering
+  for DOCX/XLSX). For v1, hand-typed JSON sidecars validate the
+  schema and the loop end-to-end. Schema doesn't change when the
+  UI lands.
+- *Cline emits one report per kind* — rejected for bootstrap (one
+  combined BOOTSTRAP report covering all annotated kinds is more
+  efficient for the user's typing trip). Kept per-kind in feedback-
+  loop because feedback usually focuses on 1-3 kinds at a time and
+  per-kind detail helps Teacher LLM make targeted fixes.
+
+**Consequences**
+- **New on-prem-only directory** `<env_dir>/annotations/` for
+  hand-typed JSON until the web UI lands. Per the ban on `<env_dir>`
+  in git (D-022), these never enter the repo.
+- **Reference subkinds become first-class.** The `references` kind
+  with `intra_doc` / `cross_doc` / `spec` subkinds means the parser
+  may need new code for cross-doc reference resolution and 3GPP
+  spec citation handling. NORA's parser already has some of this
+  (the resolve stage handles intra-doc + cross-doc xrefs); spec
+  citations are partially captured but not as a first-class
+  annotation kind. When the user runs bootstrap on a corpus and the
+  BOOTSTRAP report names `references` as a kind to add coverage
+  for, that becomes a Teacher-LLM commit.
+- **Three new playbook files** — schema (reference), bootstrap
+  (invokable), feedback-loop (invokable). `derive-rule.md` updated
+  with a front-pointer noting the preferred path.
+- **Bootstrap is positive-only** — accept that bootstrap rule rates
+  are TP/sigma, not TP/FP/FN. The feedback loop is where FP rates
+  get measured (against real parser output reviewed by humans).
+- **Loop convergence is unproven on a real corpus.** Flagged in
+  STATUS.md as "validate the cline scaffold end-to-end on the work
+  PC" — orient → mapping → profile-corpus → bootstrap → run
+  pipeline → feedback-loop. Iterate playbook formats based on what
+  the work PC produces.
+- **Annotations cap is empirical**: 3-5 docs, 5-10 examples per
+  kind per doc. Smaller → low-confidence rule (BOOTSTRAP report
+  flags `LOW_PROV: <kind>` when sigma < 3). Larger → tedious for
+  the human. Tunable per project.
+
+**Related**: D-008 (web UI for non-CLI team members; Parse Review
+page is the feedback-loop input channel), D-027 (parser table-
+anchored requirements; this loop is how new corpus types validate
+that parser change generalizes), D-054 (cline scaffold; this is the
+rule-derivation pattern that runs on top of it), D-038 (table-
+anchored definitions extraction; same shape — corpus-derived rule
+that could have come through bootstrap had the loop existed). The
+loop is corpus-agnostic and stage-agnostic but currently exercised
+mostly on `parse` and `profile`; could extend to `resolve` and
+`eval` per the playbook table in `feedback-loop.md`.
