@@ -38,6 +38,21 @@ from core.src.web.routes.query import router as query_router
 from core.src.web.routes.playground import router as playground_router
 from core.src.web.routes.config_route import router as config_router
 
+# Configure logging at module-import time (not just inside the
+# `if __name__ == "__main__":` launcher block). With `uvicorn.run(...,
+# reload=True)`, uvicorn forks a worker that re-imports this module
+# but never executes the launcher block — leaving the worker at the
+# default WARNING level. That silently drops every `logger.info(...)`
+# call in the request path (Web LLM resolved, [Query knobs], etc.),
+# which makes the Config page impossible to verify from logs alone.
+# Setting basicConfig here covers both the parent and the worker.
+# `force=False` (the default) means the launcher's later basicConfig
+# call is a no-op, so nothing changes for the foreground-launch path.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-8s %(name)s  %(message)s",
+)
+
 logger = logging.getLogger(__name__)
 
 WEB_DIR = Path(__file__).resolve().parent
