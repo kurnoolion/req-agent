@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 # ── Patterns ─────────────────────────────────────────────────────────
 
-_VZ_REQ_RE = re.compile(r"VZ_REQ_[A-Z0-9_]+\d+")
+_VZ_REQ_RE = re.compile(r"VZ_REQ_[A-Z0-9_]+(?:\s[A-Z0-9]+)?_\d+")
 
 _META_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("plan_name",    re.compile(r"^Plan\s+Name:\s*(.+)$",      re.IGNORECASE)),
@@ -38,12 +38,14 @@ _META_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("release_date", re.compile(r"^Release\s+Date:\s*(.+)$",   re.IGNORECASE)),
 ]
 
-# Standards — 3GPP with explicit section number
+# Standards — spec with explicit section number.
+# Matches "3GPP TS X.Y", "3GPP X.Y", or "TS X.Y"; always normalised to
+# canonical "3GPP TS X.Y" in the output.
 _STD_DETAIL_RE = re.compile(
-    r"3GPP\s+TS\s+(\d[\d.]*\d)\s+(?:[Ss]ection\s+)?(\d[\d.]*\d)"
+    r"(?:3GPP\s+TS|3GPP|TS)\s+(\d[\d.]*\d)\s+(?:[Ss]ection\s+)?(\d[\d.]*\d)"
 )
-# Standards — 3GPP spec only (no section)
-_STD_SPEC_RE = re.compile(r"3GPP\s+TS\s+(\d[\d.]*\d)")
+# Standards — spec only (no section number)
+_STD_SPEC_RE = re.compile(r"(?:3GPP\s+TS|3GPP|TS)\s+(\d[\d.]*\d)")
 # Release number in nearby context
 _STD_RELEASE_RE = re.compile(r"[Rr]elease\s+(\d+)")
 # OMA DM
@@ -171,7 +173,17 @@ class StyleDrivenParser:
         for req in requirements:
             req.cross_references = _extract_cross_refs(req.text)
 
+        # Pass 1: scan raw blocks — catches spec+release in same block and
+        # preamble text that belongs to no requirement.
         std_releases = _extract_standards_releases(doc)
+        # Pass 2: fill gaps where spec and release span different blocks.
+        # req.text is the concatenated paragraph text for each requirement,
+        # so _extract_cross_refs already resolved pairs that cross block
+        # boundaries. We merge here, never overwriting pass-1 entries.
+        for req in requirements:
+            for std_ref in req.cross_references.standards:
+                if std_ref.spec and std_ref.release:
+                    std_releases.setdefault(std_ref.spec, std_ref.release)
 
         tree = RequirementTree(
             mno=doc.mno,
@@ -279,9 +291,11 @@ def _extract_cross_refs(text: str) -> CrossReferences:
 def _extract_standards_releases(doc: DocumentIR) -> dict[str, str]:
     """Scan all blocks for 3GPP spec+release pairs; build top-level dict."""
     releases: dict[str, str] = {}
-    pat1 = re.compile(r"3GPP\s+TS\s+(\d[\d.]*\d).*?[Rr]elease\s+(\d+)")
+    pat1 = re.compile(
+        r"(?:3GPP\s+TS|3GPP|TS)\s+(\d[\d.]*\d).*?[Rr]elease\s+(\d+)"
+    )
     pat2 = re.compile(
-        r"[Rr]elease\s+(\d+)\s+(?:version\s+of\s+)?3GPP\s+TS\s+(\d[\d.]*\d)"
+        r"[Rr]elease\s+(\d+)\s+(?:version\s+of\s+)?(?:3GPP\s+TS|3GPP|TS)\s+(\d[\d.]*\d)"
     )
     for b in doc.content_blocks:
         if not b.text:
