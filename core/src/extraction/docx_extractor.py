@@ -45,7 +45,7 @@ _HEADING_DEFAULT_SIZE = {
 }
 _BODY_DEFAULT_SIZE = 11.0
 
-_HEADING_STYLE_RE = re.compile(r"^heading\s*(\d+)$", re.IGNORECASE)
+_HEADING_STYLE_RE = re.compile(r"^Heading\s*(\d+)$", re.IGNORECASE)
 
 # Req-ID marker used to identify the title/id split point in a heading.
 _VZ_REQ_MARKER = "VZ_REQ_"
@@ -211,6 +211,9 @@ class DOCXExtractor(BaseExtractor):
             if size is None and run.font.size is not None:
                 try:
                     size = float(run.font.size.pt)
+                    # weird behavior of fixed header font size of 7 returned by docX API
+                    if level is not None:
+                        size = size * 2
                 except Exception:
                     size = None
             if run.bold:
