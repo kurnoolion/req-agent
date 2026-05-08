@@ -367,10 +367,12 @@ class DOCXExtractor(BaseExtractor):
         headers   = rows_text[0]
         body_rows = rows_text[1:]
 
-        # Skip degenerate tables — single empty column
+        # Skip tables where every cell is empty (layout spacers).
+        # A table with at least one non-empty header cell has real content
+        # and must be emitted — including legitimate 1×1 tables.
         non_empty_headers = [h for h in headers if h]
         total_cells = sum(1 for row in body_rows for c in row if c)
-        if len(non_empty_headers) <= 1 and total_cells == 0:
+        if len(non_empty_headers) == 0 and total_cells == 0:
             return None
 
         return ContentBlock(
