@@ -34,6 +34,10 @@ class ConfigField:
     category: str  # "feature" | "value" | "tunable"
     help: str = ""
     choices: list[str] = field(default_factory=list)
+    value_kind: str = ""
+    """For kind='dict_by_query_type': the type of each cell —
+    'float' / 'int' / 'bool'. Drives form input rendering and
+    coercion of the per-type rows. Empty for non-map fields."""
 
 
 @dataclass
@@ -170,6 +174,22 @@ _RETRIEVAL_FIELDS: list[ConfigField] = [
             "normally retrieve 50 chunks; setting this to 25 caps them "
             "at 25 regardless of intent. Empty / 0 = no cap (per-type "
             "widening unconstrained, current default behavior)."
+        ),
+    ),
+    ConfigField(
+        module="retrieval", key="bm25_weight_by_type",
+        label="BM25 Weight by QueryType",
+        kind="dict_by_query_type", value_kind="float",
+        category="tunable",
+        help=(
+            "Per-QueryType BM25 weight in the RRF fusion. 0.0 = pure "
+            "dense (no BM25 contribution). Empirical defaults: 0.5 for "
+            "SINGLE_DOC / FACT / STANDARDS_COMPARISON / TRACEABILITY "
+            "(specific tokens benefit from term-match), 0.2 for "
+            "SUMMARIZE (mostly dense — user paraphrases), 0.0 for "
+            "CROSS_DOC / FEATURE_LEVEL / CROSS_MNO_COMPARISON / "
+            "RELEASE_DIFF / GENERAL (parent chunks too thin to compete "
+            "with BM25-favored leaves). Tune per-corpus."
         ),
     ),
 ]

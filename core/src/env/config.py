@@ -160,6 +160,14 @@ class RetrievalConfig:
     Reserved for Step 4 intent classification (Fact intent will likely
     want a stricter gap than general queries)."""
 
+    bm25_weight_by_type: dict[str, float] = field(default_factory=dict)
+    """Per-QueryType override for the BM25 weight in RRF fusion. Keys
+    are `QueryType.value` strings. Empty dict (default) means
+    `pipeline._TYPE_BM25_WEIGHT` built-in defaults apply. Set entries
+    here to override per-type without code changes — useful for
+    tuning hybrid retrieval against a new corpus where the default
+    empirical values are off."""
+
     @classmethod
     def load(cls, path: Path | None = None) -> RetrievalConfig:
         config_path = path or DEFAULT_RETRIEVAL_CONFIG_PATH
@@ -176,11 +184,16 @@ class RetrievalConfig:
         eg = data.get("enable_grouping")
         gt = data.get("gap_threshold")
         gtbt = data.get("gap_threshold_by_type") or {}
+        bm25bt = data.get("bm25_weight_by_type") or {}
         return cls(
             enable_grouping=bool(eg) if eg is not None else None,
             gap_threshold=float(gt) if gt is not None else None,
             gap_threshold_by_type={
                 str(k): float(v) for k, v in gtbt.items()
+                if isinstance(v, (int, float))
+            },
+            bm25_weight_by_type={
+                str(k): float(v) for k, v in bm25bt.items()
                 if isinstance(v, (int, float))
             },
         )
@@ -230,6 +243,38 @@ def resolve_grouping_enabled(cli_value: bool | None = None) -> bool:
     if cfg_value is not None:
         return cfg_value
     return DEFAULT_ENABLE_GROUPING
+
+
+def resolve_bm25_weight(
+    query_type: str | None = None,
+    cli_value: float | None = None,
+) -> float:
+    """Resolve the BM25 weight for the RRF fusion at query time.
+
+    Precedence: CLI flag > config/retrieval.json
+    `bm25_weight_by_type[query_type]` (DB layer overlays this via
+    apply_to_caches) > pipeline `_TYPE_BM25_WEIGHT` built-in default
+    > 0.0 (pure dense).
+
+    No env-var tier — per-type maps are file-only by convention
+    (see D-050: shell-level overrides for ten query types would be
+    untidy; admins use the Config page or edit the JSON file).
+    """
+    if cli_value is not None:
+        return float(cli_value)
+    if query_type:
+        cfg = _retrieval_config()
+        if query_type in cfg.bm25_weight_by_type:
+            return cfg.bm25_weight_by_type[query_type]
+        # Fall back to the built-in per-type default in pipeline.py.
+        from core.src.query.pipeline import _TYPE_BM25_WEIGHT
+        from core.src.query.schema import QueryType
+        try:
+            qt_enum = QueryType(query_type)
+        except ValueError:
+            return 0.0
+        return _TYPE_BM25_WEIGHT.get(qt_enum, 0.0)
+    return 0.0
 
 
 def resolve_gap_threshold(

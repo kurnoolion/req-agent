@@ -41,10 +41,17 @@ def _current_value(field: ConfigField) -> Any:
     Used to seed the form. Falls through CLI flag (n/a here) > env
     var > DB > config file > default; whichever wins is what shows
     in the input.
+
+    For `kind="dict_by_query_type"` returns a dict keyed by
+    QueryType.value with the effective per-type value (DB / cache
+    overlay > pipeline built-in > 0.0). Pre-populates every
+    QueryType so the table editor renders all rows.
     """
     from core.src.env import config as env_cfg
 
     try:
+        if field.kind == "dict_by_query_type":
+            return _current_dict_by_query_type(field)
         if field.module == "llm":
             cfg = env_cfg._llm_config()
             return getattr(cfg, field.key, None)
@@ -63,6 +70,23 @@ def _current_value(field: ConfigField) -> Any:
     except Exception as e:
         logger.debug("current_value(%s, %s) failed: %s", field.module, field.key, e)
     return None
+
+
+def _current_dict_by_query_type(field: ConfigField) -> dict[str, Any]:
+    """Build the {query_type: value} dict for a dict_by_query_type
+    field, with current effective values for every QueryType."""
+    from core.src.query.schema import QueryType
+    out: dict[str, Any] = {}
+    for qt in QueryType:
+        # Each known field has a corresponding resolver path. We hard-
+        # code the wiring here (one branch per field) rather than
+        # generic introspection — keeps the dispatch explicit.
+        if field.module == "retrieval" and field.key == "bm25_weight_by_type":
+            from core.src.env.config import resolve_bm25_weight
+            out[qt.value] = resolve_bm25_weight(query_type=qt.value)
+        else:
+            out[qt.value] = 0.0
+    return out
 
 
 # ── Form value coercion ──────────────────────────────────────
@@ -114,12 +138,25 @@ async def config_page(request: Request):
         by_category: dict[str, list] = {"feature": [], "value": [], "tunable": []}
         for f in section.fields:
             current = _current_value(f)
+            # For dict-by-query-type fields, surface per-row entries
+            # so the template can iterate them in deterministic order.
+            type_rows = []
+            if f.kind == "dict_by_query_type" and isinstance(current, dict):
+                from core.src.query.schema import QueryType
+                for qt in QueryType:
+                    val = current.get(qt.value, 0.0)
+                    type_rows.append({
+                        "query_type": qt.value,
+                        "value_str": ("" if val is None
+                                      else str(val)),
+                    })
             # For checkboxes / enums the value drives the rendered state.
             by_category[f.category].append({
                 "field": f,
                 "current": current,
                 "current_str": "" if current is None else str(current),
                 "is_truthy": bool(current),
+                "type_rows": type_rows,
             })
         sections_view.append({
             "module": section.module,
@@ -169,8 +206,35 @@ async def config_save(request: Request):
 
     # Iterate the schema so unchecked checkboxes are explicitly written
     # as False. (Form omits unchecked checkboxes entirely.)
+    from core.src.query.schema import QueryType
     from core.src.web.config_schema import all_fields
     for f in all_fields():
+        if f.kind == "dict_by_query_type":
+            # Collect per-QueryType inputs into a single dict.
+            by_type: dict[str, Any] = {}
+            row_errors: list[str] = []
+            for qt in QueryType:
+                row_form_key = f"{f.module}__{f.key}__{qt.value}"
+                row_raw = (form.get(row_form_key) or "").strip()
+                if row_raw == "":
+                    continue  # empty cell → skip; resolver falls back to default
+                try:
+                    if f.value_kind == "float":
+                        by_type[qt.value] = float(row_raw)
+                    elif f.value_kind == "int":
+                        by_type[qt.value] = int(row_raw)
+                    elif f.value_kind == "bool":
+                        by_type[qt.value] = row_raw.lower() in {"1", "true", "yes", "on"}
+                    else:
+                        by_type[qt.value] = row_raw
+                except (ValueError, TypeError) as e:
+                    row_errors.append(f"{f.label}/{qt.value}: {e}")
+            if row_errors:
+                errors.extend(row_errors)
+                continue
+            updates.append((f.module, f.key, by_type))
+            continue
+
         form_key = f"{f.module}__{f.key}"
         if f.kind == "bool":
             raw = "1" if form.get(form_key) else "0"

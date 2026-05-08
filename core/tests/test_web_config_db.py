@@ -170,9 +170,21 @@ class TestSchema:
             assert f.category in valid, f"{f.module}.{f.key} has unknown category {f.category!r}"
 
     def test_every_field_has_known_kind(self):
-        valid = {"bool", "string", "int", "float", "enum", "password"}
+        valid = {"bool", "string", "int", "float", "enum", "password",
+                 "dict_by_query_type"}
         for f in all_fields():
             assert f.kind in valid, f"{f.module}.{f.key} has unknown kind {f.kind!r}"
+
+    def test_dict_by_query_type_fields_have_value_kind(self):
+        """Per-type table fields must declare what each cell holds so
+        the form can coerce values correctly on save."""
+        valid_value_kinds = {"float", "int", "bool", "string"}
+        for f in all_fields():
+            if f.kind == "dict_by_query_type":
+                assert f.value_kind in valid_value_kinds, (
+                    f"{f.module}.{f.key} kind=dict_by_query_type but "
+                    f"value_kind={f.value_kind!r}"
+                )
 
     def test_enum_fields_have_choices(self):
         for f in all_fields():
@@ -239,6 +251,48 @@ class TestConfigRouteRenders:
 class TestConfigRouteSave:
     """Verify the save handler writes to the DB and clears the
     cached pipeline on app.state."""
+
+    def test_save_dict_by_query_type_persists_full_dict(self, tmp_path, monkeypatch):
+        """Per-type table editor: form fields named
+        <module>__<key>__<query_type> get collected into a single
+        dict and saved as one DB row."""
+        from fastapi.testclient import TestClient
+        db_path = tmp_path / "cfg.db"
+        monkeypatch.setenv("NORA_CONFIG_DB", str(db_path))
+        monkeypatch.setenv("ENV_DIR", str(tmp_path))
+        import importlib
+        import core.src.web.app as app_mod
+        importlib.reload(app_mod)
+        with TestClient(app_mod.app) as client:
+            data = {
+                "_submitted_by": "test",
+                # All required scalars (validation expects each schema field)
+                "llm__llm_provider": "ollama",
+                "llm__llm_model": "test-model",
+                "llm__llm_base_url": "",
+                "llm__llm_api_key": "",
+                "llm__llm_timeout": "0",
+                "llm__embedding_provider": "ollama",
+                "llm__embedding_model": "test-emb",
+                "retrieval__gap_threshold": "0.05",
+                "pipeline__max_distance_threshold": "0.5",
+                "pipeline__top_k_cap": "0",
+                # The new per-type rows: only some types have values
+                "retrieval__bm25_weight_by_type__fact": "0.9",
+                "retrieval__bm25_weight_by_type__summarize": "0.1",
+                "retrieval__bm25_weight_by_type__single_doc": "",  # empty → skipped
+            }
+            resp = client.post("/api/config/save", data=data)
+        assert resp.status_code == 200
+        assert "Saved" in resp.text
+        cs = ConfigStore(db_path)
+        saved = cs.get("retrieval", "bm25_weight_by_type")
+        assert saved is not None
+        assert saved.get("fact") == 0.9
+        assert saved.get("summarize") == 0.1
+        # Empty cell wasn't saved → key absent
+        assert "single_doc" not in saved
+
 
     def test_save_persists_value(self, tmp_path, monkeypatch):
         from fastapi.testclient import TestClient

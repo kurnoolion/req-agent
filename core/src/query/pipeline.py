@@ -453,7 +453,13 @@ class QueryPipeline:
         # widening. None / 0 = no cap.
         if self._top_k_cap and self._top_k_cap > 0:
             type_top_k = min(type_top_k, self._top_k_cap)
-        bm25_weight = _TYPE_BM25_WEIGHT.get(intent.query_type, 0.0)
+        # BM25 weight: resolved through the unified chain so admins can
+        # edit per-type values via the Config page without touching code.
+        # Falls back to _TYPE_BM25_WEIGHT built-in defaults when no
+        # override is set in DB / JSON. See D-041 (RRF fusion) + D-050
+        # (3-tier resolver) + the Config page table editor.
+        from core.src.env.config import resolve_bm25_weight
+        bm25_weight = resolve_bm25_weight(query_type=intent.query_type.value)
         rerank = _TYPE_RERANK_ENABLED.get(intent.query_type, False)
         # Per-query effective-knob log so admins can verify the
         # ConfigStore + resolver chain landed the values they expected.

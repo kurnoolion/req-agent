@@ -463,3 +463,76 @@ def test_resolve_gap_threshold_invalid_env_var_falls_through(monkeypatch, tmp_pa
         assert env_cfg.resolve_gap_threshold() == 0.06
     finally:
         env_cfg._reset_retrieval_config_cache()
+
+
+# ── BM25 weight per-type resolver ─────────────────────────────
+
+
+def test_resolve_bm25_weight_falls_back_to_pipeline_default(monkeypatch, tmp_path):
+    """When DB / file have no override, uses pipeline._TYPE_BM25_WEIGHT."""
+    from core.src.env import config as env_cfg
+    from core.src.query.pipeline import _TYPE_BM25_WEIGHT
+    from core.src.query.schema import QueryType
+    _isolate_retrieval_config(monkeypatch, tmp_path)
+    try:
+        # FACT has built-in default 0.5
+        assert env_cfg.resolve_bm25_weight(query_type="fact") == 0.5
+        # CROSS_DOC is omitted from the dict → 0.0
+        assert env_cfg.resolve_bm25_weight(query_type="cross_doc") == 0.0
+        # Sanity: returned value matches the pipeline dict
+        assert env_cfg.resolve_bm25_weight(query_type="summarize") == _TYPE_BM25_WEIGHT.get(QueryType.SUMMARIZE, 0.0)
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_bm25_weight_file_overrides_pipeline(monkeypatch, tmp_path):
+    """A value in config/retrieval.json's bm25_weight_by_type wins over
+    the pipeline built-in."""
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(
+        monkeypatch, tmp_path,
+        bm25_weight_by_type={"fact": 0.9, "summarize": 0.0},
+    )
+    try:
+        assert env_cfg.resolve_bm25_weight(query_type="fact") == 0.9
+        assert env_cfg.resolve_bm25_weight(query_type="summarize") == 0.0
+        # Types absent from the override dict still fall through to pipeline.
+        assert env_cfg.resolve_bm25_weight(query_type="single_doc") == 0.5
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_bm25_weight_cli_beats_file(monkeypatch, tmp_path):
+    """CLI flag is the highest priority."""
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(
+        monkeypatch, tmp_path,
+        bm25_weight_by_type={"fact": 0.9},
+    )
+    try:
+        assert env_cfg.resolve_bm25_weight(query_type="fact", cli_value=0.1) == 0.1
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_resolve_bm25_weight_unknown_query_type_returns_zero(monkeypatch, tmp_path):
+    """Unknown / mistyped query_type falls through to 0.0 (pure dense)."""
+    from core.src.env import config as env_cfg
+    _isolate_retrieval_config(monkeypatch, tmp_path)
+    try:
+        assert env_cfg.resolve_bm25_weight(query_type="not_a_real_type") == 0.0
+        assert env_cfg.resolve_bm25_weight(query_type=None) == 0.0
+    finally:
+        env_cfg._reset_retrieval_config_cache()
+
+
+def test_retrieval_config_parses_bm25_weight_by_type(tmp_path):
+    """RetrievalConfig.load round-trips bm25_weight_by_type."""
+    import json
+    from core.src.env.config import RetrievalConfig
+    p = tmp_path / "retrieval.json"
+    p.write_text(json.dumps({
+        "bm25_weight_by_type": {"single_doc": 0.7, "summarize": 0.1},
+    }))
+    cfg = RetrievalConfig.load(p)
+    assert cfg.bm25_weight_by_type == {"single_doc": 0.7, "summarize": 0.1}

@@ -124,20 +124,53 @@
             {% for item in section.tunables %}
               <div class="mb-3">
                 <label
-                  for="cf-{{ item.field.module }}-{{ item.field.key }}"
+                  {% if item.field.kind != 'dict_by_query_type' %}for="cf-{{ item.field.module }}-{{ item.field.key }}"{% endif %}
                   class="form-label small mb-1"
                 >
                   <strong>{{ item.field.label }}</strong>
                 </label>
-                <input
-                  type="number"
-                  step="{% if item.field.kind == 'float' %}any{% else %}1{% endif %}"
-                  class="form-control form-control-sm"
-                  id="cf-{{ item.field.module }}-{{ item.field.key }}"
-                  name="{{ item.field.module }}__{{ item.field.key }}"
-                  value="{{ item.current_str }}"
-                  {% if not db_enabled %}disabled{% endif %}
-                >
+                {% if item.field.kind == 'dict_by_query_type' %}
+                  <table class="table table-sm table-bordered mb-1" style="max-width: 480px;">
+                    <thead class="table-light">
+                      <tr>
+                        <th class="small">QueryType</th>
+                        <th class="small text-end">Value</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {% for row in item.type_rows %}
+                        <tr>
+                          <td class="small align-middle"><code>{{ row.query_type }}</code></td>
+                          <td class="text-end p-1">
+                            <input
+                              type="number"
+                              step="{% if item.field.value_kind == 'float' %}any{% else %}1{% endif %}"
+                              class="form-control form-control-sm text-end"
+                              style="max-width: 110px; display: inline-block;"
+                              id="cf-{{ item.field.module }}-{{ item.field.key }}-{{ row.query_type }}"
+                              name="{{ item.field.module }}__{{ item.field.key }}__{{ row.query_type }}"
+                              value="{{ row.value_str }}"
+                              {% if not db_enabled %}disabled{% endif %}
+                            >
+                          </td>
+                        </tr>
+                      {% endfor %}
+                    </tbody>
+                  </table>
+                  <div class="form-text small mb-2">
+                    Leave a cell empty to fall back to the built-in per-type default.
+                  </div>
+                {% else %}
+                  <input
+                    type="number"
+                    step="{% if item.field.kind == 'float' %}any{% else %}1{% endif %}"
+                    class="form-control form-control-sm"
+                    id="cf-{{ item.field.module }}-{{ item.field.key }}"
+                    name="{{ item.field.module }}__{{ item.field.key }}"
+                    value="{{ item.current_str }}"
+                    {% if not db_enabled %}disabled{% endif %}
+                  >
+                {% endif %}
                 {% if item.field.help %}
                   <div class="form-text small">{{ item.field.help }}</div>
                 {% endif %}
