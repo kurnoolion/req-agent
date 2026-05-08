@@ -22,9 +22,28 @@ Cline reads the playbook and executes the steps.
 | [`orient.md`](orient.md) | Load NORA's project context (run on first conversation per session) | `ORIENT` report (~5–8 lines) |
 | [`mapping.md`](mapping.md) | Maintain the redaction table at `<env_dir>/state/cline-mapping.json` | `MAP` report (~2–4 lines) |
 | [`profile-corpus.md`](profile-corpus.md) | Profile one document; capture format patterns | `PROF` report (~12–15 lines) |
-| [`derive-rule.md`](derive-rule.md) | Build a detection rule for one structural element | `RULE` report (~8–10 lines) |
+| [`bootstrap.md`](bootstrap.md) | **Day-0 rule derivation** from human-annotated docs (per `annotation-schema.md`) | `BOOTSTRAP` report (≤25 lines) |
+| [`feedback-loop.md`](feedback-loop.md) | **Day-N rule refinement** from Parse Review feedback | `FEEDBACK` report (≤20 lines) |
+| [`derive-rule.md`](derive-rule.md) | **Fallback** rule derivation (no annotations / no feedback yet) | `RULE` report (~8–10 lines) |
 | [`debug-pipeline.md`](debug-pipeline.md) | Run pipeline stages, capture stats | `RPT` report (~15–25 lines) |
 | [`share-back.md`](share-back.md) | Bundle multiple reports for one typing trip | `BUNDLE` report (≤40 lines) |
+
+### Reference (not invoked, just read)
+
+- [`annotation-schema.md`](annotation-schema.md) — JSON schema humans use to mark
+  structural elements; consumed by `bootstrap.md`.
+
+### When to use which rule-derivation playbook
+
+```
+   has annotations?  ─yes─►  bootstrap.md        (Day 0 cold start)
+                                  │
+                                  │ run parser, humans review via Parse Review page
+                                  ▼
+                             feedback-loop.md    (Day N refinement, repeat)
+
+   no annotations?   ─no──►  derive-rule.md      (fallback; lower confidence)
+```
 
 ## Workflow loop
 

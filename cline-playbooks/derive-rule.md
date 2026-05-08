@@ -4,6 +4,17 @@
 version history, requirement-ID format, definitions layout, etc.) — produce a `RULE`
 report Teacher LLM can use to update the parser/profiler.
 
+> **Use the bootstrap → feedback-loop path if possible.** When you have human annotations
+> in `<env_dir>/annotations/<plan>_annotations.json`, prefer:
+>
+> 1. `bootstrap.md` — derive initial rules from those annotations (Day 0).
+> 2. Run pipeline; have humans review via the Parse Review page.
+> 3. `feedback-loop.md` — refine from the review feedback (Day N+).
+>
+> `derive-rule.md` is the **fallback** for when no annotations exist and you need to
+> sample the corpus directly. It's lower-confidence because Cline picks the samples
+> rather than humans curating ground truth.
+
 **Input**: element name, one of:
 
 - `strikethrough` — line-strike on text (PDF graphic op or font flag)
