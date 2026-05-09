@@ -111,6 +111,7 @@ class ParseStats:
     toc_blocks_dropped: int = 0     # FR-34
     revhist_blocks_dropped: int = 0 # FR-34 (revision-history table omission)
     defs_extracted: int = 0         # FR-35 [D-032]
+    refs_extracted: int = 0         # D-059, D-061 (reference_list_map entries)
 
 
 @dataclass
@@ -131,6 +132,17 @@ class RequirementTree:
     in different MNO documents doesn't collide. Consumed at chunk-build
     time by the vectorstore stage."""
     definitions_section_number: str = ""
+    reference_list_map: dict[int, dict[str, Any]] = field(default_factory=dict)
+    """D-059, D-061: bibliography entries extracted from the document's
+    reference_list section. Map key = entry number (e.g. `5` for `[5]`);
+    value = `{"spec": "3GPP TS 24.301", "title"?: "...", "section"?: "..."}`.
+    Per-document scope (not aggregated across the corpus). Consumed by the
+    resolver when it sees an indirect spec citation (`reference_spec` with
+    `style=indirect`) — the bracketed number is looked up in this map to
+    get the actual spec name + optional default section."""
+    reference_list_section_number: str = ""
+    """Section number of the references / bibliography section when one
+    was identified (else empty)."""
     """Section number of the definitions / acronyms / glossary section
     when one was identified (else empty). The chunk builder uses it to
     skip inline expansion within the section's own chunks (and its
@@ -195,9 +207,14 @@ class RequirementTree:
                 toc_blocks_dropped=ps.get("toc_blocks_dropped", 0),
                 revhist_blocks_dropped=ps.get("revhist_blocks_dropped", 0),
                 defs_extracted=ps.get("defs_extracted", 0),
+                refs_extracted=ps.get("refs_extracted", 0),
             ),
             definitions_map=dict(data.get("definitions_map", {})),
             definitions_section_number=data.get("definitions_section_number", ""),
+            reference_list_map={
+                int(k): dict(v) for k, v in (data.get("reference_list_map") or {}).items()
+            },
+            reference_list_section_number=data.get("reference_list_section_number", ""),
         )
 
 
@@ -260,6 +277,17 @@ class GenericStructuralParser:
         self._definitions_entry_re = (
             re.compile(profile.definitions_entry_pattern, re.MULTILINE)
             if profile.definitions_entry_pattern
+            else None
+        )
+        # Reference-list / bibliography detection (D-059, D-061) — compiled once
+        self._reference_list_section_re = (
+            re.compile(profile.reference_list_section_pattern)
+            if profile.reference_list_section_pattern
+            else None
+        )
+        self._reference_list_entry_re = (
+            re.compile(profile.reference_list_entry_pattern, re.MULTILINE)
+            if profile.reference_list_entry_pattern
             else None
         )
         # Cross-reference regexes
@@ -346,6 +374,16 @@ class GenericStructuralParser:
         ) = self._extract_definitions(sections)
         self._parse_stats.defs_extracted = len(definitions_map)
 
+        # 8b. Extract reference / bibliography map from the references
+        #     section (D-059, D-061). Used by the resolver to resolve
+        #     indirect spec citations (`[5]` → spec lookup). The section
+        #     itself stays in the parsed tree.
+        (
+            reference_list_map,
+            reference_list_section_number,
+        ) = self._extract_reference_list(sections)
+        self._parse_stats.refs_extracted = len(reference_list_map)
+
         # 9. Build parse transparency log.
         parse_log = self._build_parse_log(
             doc,
@@ -366,6 +404,8 @@ class GenericStructuralParser:
             parse_stats=self._parse_stats,
             definitions_map=definitions_map,
             definitions_section_number=definitions_section_number,
+            reference_list_map=reference_list_map,
+            reference_list_section_number=reference_list_section_number,
             parse_log=parse_log,
         )
 
@@ -1320,6 +1360,118 @@ class GenericStructuralParser:
                     acronym_entries.append((term, expansion, "table"))
 
         return defs, target.section_number, target.title or "", acronym_entries
+
+    def _extract_reference_list(
+        self, sections: list[Requirement]
+    ) -> tuple[dict[int, dict[str, Any]], str]:
+        """D-059, D-061: extract `entry_number -> {spec, title?, section?}`
+        pairs from the document's references / bibliography section.
+
+        Mirrors :meth:`_extract_definitions`. Section detection runs
+        ``reference_list_section_pattern`` against each section's title;
+        the first match wins. Two layouts are supported, both contributing
+        to the same map (first-occurrence wins on duplicate numbers):
+
+        - **Body-text** layout (paragraph list). The section's ``text`` is
+          scanned via ``reference_list_entry_pattern`` (default tolerates
+          ``[N]``, ``(N)``, and ``N.`` numbering). The captured content
+          (group 2) is split into ``spec`` (everything up to the first
+          comma / quote / em-dash) and ``title`` (the rest).
+        - **Table-anchored** layout (rare for references but supported
+          for parity with definitions). 2+ col rows where col[0] parses
+          as a number and col[1] is the entry content. Headers folded
+          like definitions when they don't look canonical.
+
+        Per-document scope; consumed by the resolver when it sees an
+        indirect spec citation (``[5]`` → look up ``5`` in this map).
+
+        Returns (reference_list_map, section_number). When no section
+        matches, returns ({}, "").
+        """
+        if self._reference_list_section_re is None:
+            return {}, ""
+
+        target: Requirement | None = None
+        for s in sections:
+            if s.title and self._reference_list_section_re.search(s.title):
+                target = s
+                break
+        if target is None:
+            return {}, ""
+
+        refs: dict[int, dict[str, Any]] = {}
+
+        def _record(num: int, content: str) -> None:
+            if num in refs or not content:
+                return
+            spec, title = self._split_reference_entry(content)
+            if not spec:
+                return
+            entry: dict[str, Any] = {"spec": spec}
+            if title:
+                entry["title"] = title
+            refs[num] = entry
+
+        # Layout 1 — body-text line scan
+        if self._reference_list_entry_re is not None and target.text:
+            for m in self._reference_list_entry_re.finditer(target.text):
+                if not m.groups() or len(m.groups()) < 2:
+                    continue
+                num_str = m.group(1).strip()
+                content = m.group(2).strip()
+                try:
+                    num = int(num_str)
+                except (TypeError, ValueError):
+                    continue
+                _record(num, content)
+
+        # Layout 2 — table-anchored (parity with definitions)
+        for tbl in target.tables:
+            for row in tbl.rows:
+                if len(row) < 2:
+                    continue
+                num_str = re.sub(r"[^\d]", "", (row[0] or "")).strip()
+                content = re.sub(r"\s+", " ", (row[1] or "")).strip()
+                if not num_str or not content:
+                    continue
+                try:
+                    num = int(num_str)
+                except ValueError:
+                    continue
+                _record(num, content)
+
+        return refs, target.section_number
+
+    @staticmethod
+    def _split_reference_entry(content: str) -> tuple[str, str]:
+        """Split a reference entry's content into (spec, title).
+
+        Heuristic: spec is everything up to (but not including) the
+        first comma, opening quote, or em-dash; title is the remainder
+        (with surrounding quotes / dashes / commas stripped).
+
+        Examples:
+          "3GPP TS 24.301, \\"Non-Access-Stratum...\\"" → ("3GPP TS 24.301", "Non-Access-Stratum...")
+          "GSMA SGP.22 v3.0"                          → ("GSMA SGP.22 v3.0", "")
+          "ETSI TS 133 401 — Security Architecture"    → ("ETSI TS 133 401", "Security Architecture")
+        """
+        if not content:
+            return "", ""
+        # Find earliest split delimiter
+        candidates = []
+        for delim in (",", "—", "–", "—", "–", '"', "“"):
+            i = content.find(delim)
+            if i >= 0:
+                candidates.append(i)
+        if not candidates:
+            return content.strip(), ""
+        cut = min(candidates)
+        spec = content[:cut].strip()
+        rest = content[cut:].lstrip(",—–—–\"“ ").strip()
+        # Strip a trailing close-quote if the rest starts/ends with one
+        if rest.endswith('"') or rest.endswith("”"):
+            rest = rest.rstrip('"”').rstrip()
+        return spec, rest
 
     @staticmethod
     def _looks_like_definition_column_header(h0: str, h1: str) -> bool:

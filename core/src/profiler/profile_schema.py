@@ -220,6 +220,31 @@ class DocumentProfile:
     section title), which lowers the per-page match rate. Real-content
     pages essentially never reach 70% leader-dot patterns."""
 
+    # ── Reference list / bibliography extraction (D-059, D-061) ──
+    reference_list_section_pattern: str = (
+        r"(?i)^(references|bibliography|normative\s+references)$"
+    )
+    """Regex matched against section heading text. When a section's
+    title matches, its body text + tables are scanned via
+    `reference_list_entry_pattern` to populate
+    `RequirementTree.reference_list_map`. The map is later used by the
+    resolver to resolve indirect spec citations (`[5]`-style references
+    that point at a numbered entry in this section). Empty disables.
+    Companion to `definitions_section_pattern` — same pattern, applied
+    to the bibliography instead of the glossary."""
+
+    reference_list_entry_pattern: str = (
+        r"^\s*[\[\(]?(\d+)[\]\)\.]?\s+(.+?)\s*$"
+    )
+    """Per-line regex extracting `(number, spec)` pairs from the body
+    text of the reference list section. Capture group 1 = entry number;
+    group 2 = entry content (typically `<spec name>, "<title>"` or
+    `<spec name>, §<section>`). Default tolerates bracketed (`[5]`),
+    parenthesized (`(5)`), and plain (`5.`) numbering. The parser
+    extracts the spec name from group 2 with light heuristics
+    (everything up to the first comma / quote / em-dash). Empty
+    disables entry extraction even if the section is found."""
+
     # ── Revision/version history omission (FR-34) ────────────────
     revision_history_heading_pattern: str = (
         r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$"
@@ -318,5 +343,13 @@ class DocumentProfile:
             revision_history_heading_pattern=data.get(
                 "revision_history_heading_pattern",
                 r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$",
+            ),
+            reference_list_section_pattern=data.get(
+                "reference_list_section_pattern",
+                r"(?i)^(references|bibliography|normative\s+references)$",
+            ),
+            reference_list_entry_pattern=data.get(
+                "reference_list_entry_pattern",
+                r"^\s*[\[\(]?(\d+)[\]\)\.]?\s+(.+?)\s*$",
             ),
         )
