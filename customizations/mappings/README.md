@@ -12,48 +12,44 @@ profile in `customizations/profiles/<bootstrap_id>.json`). See
 `cline-playbooks/bootstrap.md` for the write step and
 `cline-playbooks/mapping.md` for the on-disk shape.
 
-## Why this directory is gitignored
+## Trust boundary — pre-push hook, NOT gitignore [D-062]
 
-Mapping files contain real proprietary names (MNO short / alias / full
-name, plan IDs, release codes) that **must never reach the public
-GitHub mirror**. The repo's `.gitignore` blocks every file in this
-directory except `.gitkeep` and this README. The work-PC pre-push hook
-(installed by `~/work/utils/git-sync/sync-work.sh`) further blocks any
-push to `github.com` from a machine where the mappings are present.
+This directory is **NOT gitignored**. The contents are committed,
+pushed to the company-internal git remote, and shared across team
+members through the normal git flow — that's the entire point: one
+source of truth for the team's mappings, identical across every work
+PC.
+
+The trust boundary that keeps mapping files off the **public** mirror
+(github.com) is the **pre-push hook** installed by
+`~/work/utils/git-sync/sync-work.sh`:
+
+- The hook rejects any `git push` whose remote URL contains
+  `github.com`.
+- Override: `NORA_ALLOW_PUBLIC_PUSH=1 git push origin main` —
+  intentional, audited, used only for verified-clean force-pushes
+  (e.g., a history rewrite that scrubs an earlier leak).
+- The hook installs idempotently on every `sync-work.sh` run, so a
+  missing/altered hook self-heals.
+
+If you're working on a personal PC that doesn't run `sync-work.sh`,
+**do not put mapping files in this directory**. The hook isn't there
+to protect you, and `git push origin` would push them to the public
+mirror.
 
 ## How runtime substitution finds the mapping
 
 `core.src.profiler.profile_substitute.load_substituted_profile()`
 searches in this order:
 
-1. `customizations/mappings/<profile_stem>.json` (this dir) — frozen
+1. `customizations/mappings/<profile_stem>.json` (this dir) —
    per-bootstrap snapshot.
 2. `<env_dir>/state/cline-mapping.json` — Cline's live mapping; always
-   present on a work PC, grows over time as new MNOs / plans are
-   onboarded.
+   present on a work PC, grows over time as new MNOs / plans / releases
+   are onboarded.
 3. None found → substitution is a no-op (profile used as-is). Public
    profiles like `vzw_oa_profile.json` rely on this path; their regex
    strings already carry real values.
-
-## Sharing across team members
-
-This dir is gitignored, so two work-PC developers don't share files
-through git directly. Three options to share / reproduce mappings:
-
-1. **Re-derive each PC** — Cline regenerates the mapping snapshot on
-   first bootstrap from `<env_dir>/state/cline-mapping.json`. The
-   redaction protocol is deterministic, so two developers running
-   bootstrap on the same corpus get identical mappings. This is the
-   default flow and needs no infrastructure.
-2. **Encrypted file sync** — Box / OneDrive / corporate share for the
-   directory contents. Symlink each developer's `customizations/
-   mappings/` to the share.
-3. **Separate internal-only repo** — host a private repo containing
-   just the mapping snapshots; clone alongside this repo and symlink
-   in. Suitable for larger teams with formal mapping governance.
-
-Option 1 is the recommended default; the others are layered on as the
-team's needs demand.
 
 ## Mapping file shape
 

@@ -10,7 +10,7 @@
     "kinds_with_rules": 7,
     "annotations": 31,
     "low_prov_kinds": ["toc", "definitions", "reference_list"],
-    "notes": "Replaces the previously-committed leaky profile (bs_d7a2c81f.json, removed in this commit + history rewrite). All proprietary tokens replaced with placeholders per D-062. Real values live in customizations/mappings/bs_d7a2c81f.json (gitignored, owned by Cline)."
+    "notes": "Replaces the previously-committed leaky profile (removed in this commit + history rewrite). All proprietary tokens replaced with placeholders per D-062. Real values live in customizations/mappings/bs_d7a2c81f.json (owned by Cline; pushed to company-internal git only — public-mirror leak prevented by sync-work.sh pre-push hook)."
   },
   "heading_detection": {
     "method": "numbering_pattern",

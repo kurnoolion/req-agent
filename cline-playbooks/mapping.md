@@ -112,6 +112,12 @@ snapshot in `bootstrap.md` Step 8, use the snapshot shape (placeholder NAME →
 real). Keys are bare names without `<>`; the substitution layer adds the
 brackets when matching against profile strings.
 
-**Gitignore.** `customizations/mappings/` is gitignored end-to-end. The
-on-prem work-PC `pre-push` hook (installed by `~/work/utils/git-sync/sync-work.sh`)
-further blocks any push to `github.com` from a host where mappings exist.
+**Trust boundary.** `customizations/mappings/` is NOT gitignored — the contents
+are committed and pushed to the company-internal git remote so team members share
+one canonical mapping. The work-PC pre-push hook (installed by
+`~/work/utils/git-sync/sync-work.sh`) is what keeps them off the **public** mirror:
+any `git push` whose remote URL is `github.com` is rejected unless
+`NORA_ALLOW_PUBLIC_PUSH=1` is set explicitly (audited override, used only for
+verified-clean force-pushes such as history rewrites). On a personal PC that
+doesn't run `sync-work.sh`, do not put mapping files in this directory — the hook
+isn't there to protect you.

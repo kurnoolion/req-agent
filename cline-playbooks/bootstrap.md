@@ -65,8 +65,11 @@ parser/profile rules exist for it.
    the entries this bootstrap's annotations reference (typically the MNO
    short / alias / name set, every PLAN seen, every REL seen). Skip per-`REQID-N`
    entries; the profile uses the generic `<DIGITS>` placeholder for numeric
-   suffixes, not specific req IDs. The directory is gitignored end-to-end and
-   never reaches the public mirror.
+   suffixes, not specific req IDs. The directory is **not** gitignored — the
+   snapshot gets committed and pushed to the company-internal git remote so the
+   team shares one canonical mapping; the work-PC pre-push hook (installed by
+   `~/work/utils/git-sync/sync-work.sh`) blocks any push to the public mirror
+   (`github.com`).
 
 ## Output: `BOOTSTRAP` report shape (apply mapping; max 25 lines)
 
@@ -142,7 +145,8 @@ if more. Cline writes the full error log on-prem.
 
 - **Maximum 25 lines** in the output report (excluding the `bootstrap_id` line, which is mandatory).
 - Do NOT write to `customizations/profiles/bs_<id>.json` — Teacher LLM does that.
-  You DO write `customizations/mappings/bs_<id>.json` (gitignored, owned by Cline) per Step 8.
+  You DO write `customizations/mappings/bs_<id>.json` (owned by Cline; pushed to
+  company-internal git, blocked from public github by the pre-push hook) per Step 8.
 - Do NOT commit anything to git. Stage 0 of the loop ends with the user typing the
   BOOTSTRAP report into Teacher LLM.
 - Apply mapping forward-redaction to every output token. Derived regex strings use
