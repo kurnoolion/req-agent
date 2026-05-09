@@ -838,7 +838,7 @@ derive a generalizing rule, not enough to be tedious.
    doc (`cline-playbooks/README.md`) into Cline
 3. Cline runs `orient.md` → `mapping.md` → `bootstrap.md` and emits a redacted
    BOOTSTRAP report (≤25 lines)
-4. You hand-type that report into the Teacher LLM (cloud Claude)
+4. You hand-type that report into the Teacher LLM
 5. Teacher LLM commits an updated `customizations/profiles/<plan>/profile.json`
    plus any new parser code (e.g. `reference_list_map` plumbing if it's the
    first corpus to need it)

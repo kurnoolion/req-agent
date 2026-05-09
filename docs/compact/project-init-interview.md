@@ -68,7 +68,7 @@ Core capabilities:
 
 ## 4. Domain constraints
 
-- **On-premise only in production** — proprietary MNO requirements cannot leave the corporate network; no external cloud AI.
+- **On-premise only in production** — proprietary MNO requirements cannot leave the corporate network; no off-premise LLM or external AI service.
 - **Offline / air-gapped install is first-class** — Ollama models and HuggingFace embeddings must install without internet (see `SETUP_OFFLINE.md`, `hf_offline.py`). Web UI assets are vendored.
 - **Resource-constrained inference** — PoC on personal PC (16 GB RAM, CPU-only, Intel Ultra 9 185H). Work laptop has 16 GB NVIDIA GPU. Model picker auto-selects based on detected hardware.
 - **Production LLM** — proprietary foundational model (thinking mode, context possibly up to 2M). OSS on-prem models permitted.

@@ -122,7 +122,7 @@ Pure vector-based RAG was evaluated and found inadequate because:
 | Constraint | Detail |
 |-----------|--------|
 | **LLM** | Proprietary foundational LLM for production; supports thinking mode; context window size TBD (potentially up to 2M tokens) |
-| **Infrastructure** | On-premise deployment; no external LLM or cloud AI services (data privacy/security) |
+| **Infrastructure** | On-premise deployment; no off-premise LLM or external AI services (data privacy/security) |
 | **Open source** | Some flexibility to use open-source models on-premise |
 | **PoC LLM** | Claude or Gemini (using only publicly available MNO requirements) |
 | **PoC environment** | Personal PC |

@@ -48,7 +48,7 @@
 
 **Constraints** *(persistent, not phase-scoped)*:
 
-- On-premise only in production; no external cloud AI for proprietary data
+- On-premise only in production; no off-premise LLM or external AI service for proprietary data
 - Offline / air-gapped install must work for Ollama and HuggingFace
 - Resource-constrained inference: 16 GB RAM CPU-only (personal PC); 16 GB NVIDIA GPU (work laptop)
 - Chat-mediated remote collaboration: AI partner cannot see production / work-PC artifacts; all cross-environment collaboration must use compact reports + stable error codes + no proprietary content

@@ -72,7 +72,7 @@ How to use this file:
 
 ### Deployment and install
 
-- **NFR-1** — Production runs fully on-premise; no external cloud AI service is invoked on proprietary MNO content.
+- **NFR-1** — Production runs fully on-premise; no off-premise LLM or external AI service is invoked on proprietary MNO content.
 - **NFR-2** — Offline / air-gapped install of the Ollama runtime, model weights (gemma3:12b, gemma4:e4b), and the HuggingFace sentence-embedding model works without internet access.
 - **NFR-3** — All Web UI static assets (Bootstrap, Bootstrap Icons, HTMX) are vendored locally; runtime never fetches from a CDN.
 

@@ -48,7 +48,7 @@ Cline reads the playbook and executes the steps.
 ## Workflow loop
 
 ```
-   ┌──── on-prem (Cline + corpus) ──┐               ┌──── cloud (Teacher LLM) ────┐
+   ┌──── on-prem (Cline + corpus) ──┐               ┌──── Teacher LLM ────────────┐
    │                                │   manual      │                        │
    │  1. user invokes a playbook    │   typing      │  3. read report        │
    │  2. Cline produces compact     │ ───────────▶  │  4. design + code      │

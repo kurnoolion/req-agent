@@ -1001,7 +1001,7 @@ constants that take effect on the next process start.
 
 **Location**: env vars or CLI flags. Precedence: **CLI > env var > config file > code default**.
 
-**When to tune**: switching LLM/embedding backends across machines or environments (cloud LLM on dev box, local Ollama on work laptop, mock for offline tests).
+**When to tune**: switching LLM/embedding backends across machines or environments (remote LLM on dev box, local Ollama on work laptop, mock for offline tests).
 
 | Variable / flag | Equivalent CLI flag | Purpose |
 |---|---|---|

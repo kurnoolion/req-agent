@@ -35,6 +35,6 @@ method signature must match (NFR-6, D-006).
   human-completion zone)
 - D-020: Bi-directional `core ↔ customizations` dependency
 - D-024: `customizations/` initial seeding
-- NFR-1: production runs fully on-premise; no external cloud AI on proprietary
-  content
+- NFR-1: production runs fully on-premise; no off-premise LLM or external AI
+  service on proprietary content
 - NFR-6: all LLM calls flow through the `LLMProvider` Protocol

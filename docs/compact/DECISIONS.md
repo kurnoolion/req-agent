@@ -238,7 +238,7 @@ Template (keep entries tight — this file is always in context):
 
 ---
 
-## D-029: LLM and embedding provider/model selectable at runtime; cloud LLM + local embeddings in v1
+## D-029: LLM and embedding provider/model selectable at runtime; remote LLM + local embeddings in v1
 **Status**: Active · **Date**: 2026-04-29
 **Decision**: Symmetric precedence for both: **CLI flag > `NORA_*` env > `EnvironmentConfig` > built-in default**. LLM: `ollama` or `openai-compatible`. Embedding: `sentence-transformers` or `ollama` (new `OllamaEmbedder` alongside existing `SentenceTransformerEmbedder`). Pipeline talks only to `make_embedder(config)`; new backend = new file. `EnvironmentConfig` carries `model_provider`/`model_name`/`embedding_provider`/`embedding_model`.
 **Why**: Different deployments have different access (cloud vs air-gapped). Embedding was hard-coded in `VectorStoreConfig()`. Vs config-only: loses ergonomic CLI overrides. Cloud embedding deferred — OpenRouter doesn't host embeddings, separate API seam adds creds/billing surface for marginal v1 benefit.
@@ -2367,13 +2367,13 @@ work-week:
 2. Existing on-prem AI partners (Cline) could see the corpus and
    were perfectly capable of running NORA's CLIs, profiling docs,
    running pipelines — but had no structured contract telling them
-   what their role was vs the cloud LLM's, what to leak vs not,
+   what their role was vs the Teacher LLM's, what to leak vs not,
    and how to format outputs so the user could hand-type them
-   into the cloud chat.
+   into the Teacher LLM chat.
 
 The user proposed: split responsibilities. On-prem AI (Cline) sees
 the corpus, profiles, debugs, and produces compact redacted
-reports. Cloud AI ("Teacher LLM," intentionally generic — the
+reports. The Teacher LLM (intentionally generic — the
 scaffold doesn't name a vendor) sees the full repo, designs and
 codes. Code transfers via git; observations transfer via hand-typed
 reports. Per-project scaffolding tells Cline what to do.
@@ -2432,10 +2432,10 @@ only through git.
   reports going out and Teacher LLM's commits going in, never an
   in-place Cline-edited core source file.
 - *Generic "AI assistant" naming* — rejected (initially used "Claude"
-  per the cloud-side reality, but corrected per user preference to
-  "Teacher LLM"). The vendor-neutral naming makes the scaffold
-  portable (different team members may use different cloud LLMs;
-  the scaffold doesn't care).
+  per the LLM provider in use at the time, but corrected per user
+  preference to "Teacher LLM"). The vendor-neutral naming makes the
+  scaffold portable (different team members may use different Teacher
+  LLMs; the scaffold doesn't care).
 - *Copy-paste between machines* — rejected by physics: the user's
   on-prem and cloud machines are air-gapped (no shared clipboard).
   Hand-typing budget drives every report to ≤30 lines, tabular,
@@ -2476,9 +2476,9 @@ runtime directory — the redaction mapping is one more file under
 `<env_dir>/state/`), D-055 (bootstrap → feedback-loop pattern;
 the Day-0 / Day-N rule-derivation flow that rides on this
 scaffold). The scaffold itself is independent of any specific
-ADR — D-054 stands alone as "how on-prem and cloud AIs collaborate
-in this project" and D-055 is the rule-derivation pattern that
-runs on top of it.
+ADR — D-054 stands alone as "how on-prem (Cline) and the Teacher LLM
+collaborate in this project" and D-055 is the rule-derivation
+pattern that runs on top of it.
 
 ---
 

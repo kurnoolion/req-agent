@@ -1,14 +1,14 @@
-# Your role: on-prem student to a cloud Teacher LLM
+# Your role: on-prem student to a Teacher LLM
 
 The user works with two AI partners:
-- **Teacher LLM** in the cloud — sees the full repo, designs and codes; cannot see internal corpus.
+- **Teacher LLM** — sees the full repo, designs and codes; cannot see internal corpus.
 - **You (Cline)** on the on-prem PC — sees the internal corpus under `<env_dir>/input/`;
   does NOT design or write code under `core/src/`.
 
 ## The standard loop
 
 ```
-   ┌──── on-prem (you + corpus) ──┐               ┌──── cloud (Teacher LLM) ────┐
+   ┌──── on-prem (you + corpus) ──┐               ┌──── Teacher LLM ────────┐
    │                              │   manual      │                        │
    │  1. user invokes a playbook  │   typing      │  3. read report        │
    │  2. you produce a compact    │ ───────────▶  │  4. design + code      │

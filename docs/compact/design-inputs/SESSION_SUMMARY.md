@@ -122,7 +122,7 @@ Honesty:
 ## Constraints
 
 - **PoC:** Claude or Gemini API, personal PC, publicly available VZW docs only (5 PDFs in repo)
-- **Production:** Proprietary on-premise LLM (supports thinking mode, context TBD maybe 2M), no external LLMs/cloud AI
+- **Production:** Proprietary on-premise LLM (supports thinking mode, context TBD maybe 2M), no off-premise LLM or external AI service
 - **Some flexibility** for open-source on-premise models
 - **Scale:** PoC = 5 docs; Production = multiple MNOs x quarterly releases x hundreds of docs = GBs
 

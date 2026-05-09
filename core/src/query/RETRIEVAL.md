@@ -965,7 +965,7 @@ cd <repo_root> && python -m core.src.pipeline.run_cli \
 --llm-provider ollama --model gemma3:12b --model-timeout 600
 ```
 
-**B. Local embeddings + cloud LLM (best taxonomy quality):**
+**B. Local embeddings + remote LLM (best taxonomy quality):**
 ```bash
 --embedding-provider ollama --embedding-model qwen3-embedding:4b-q8_0 \
 --llm-provider openai-compatible --model qwen/qwen3-235b-a22b --model-timeout 600
