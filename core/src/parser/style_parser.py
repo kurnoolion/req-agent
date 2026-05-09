@@ -45,7 +45,8 @@ _META_PATTERNS: list[tuple[str, re.Pattern]] = [
 _SPEC_NUM = r"\d+\.\s*\d+(?:\s*-\s*\d+)?"
 
 # Spec prefix variants — all normalised to "3GPP TS" in output
-_SPEC_PFX = r"(?:3GPP\s+(?:TS|TR)|TS|TR)"
+# Order: longest match first so "3GPP TS/TR" beats bare "3GPP" in alternation
+_SPEC_PFX = r"(?:3GPP\s+(?:TS|TR)|3GPP|TS|TR)"
 
 # Section number: multi-level dotted (e.g. 5.1.1, 4.2.7.10)
 _SEC_NUM = r"\d+(?:\.\d+)+"

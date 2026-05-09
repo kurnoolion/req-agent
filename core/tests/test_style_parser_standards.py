@@ -257,6 +257,21 @@ class TestSpecStandalone:
         assert len(refs) == 1
         assert refs[0].spec == "3GPP TS 38.322"
 
+    def test_bare_3gpp_without_ts(self):
+        """'3GPP 34.562' (no TS/TR) should match and normalize to 3GPP TS."""
+        text = "as defined in 3GPP 34.562"
+        refs = _extract_standards_refs(text)
+        assert len(refs) == 1
+        assert refs[0].spec == "3GPP TS 34.562"
+
+    def test_bare_3gpp_with_section(self):
+        text = "per 3GPP 24.301 section 5.5.1"
+        refs = _extract_standards_refs(text)
+        r = _find(refs, "24.301")
+        assert r is not None
+        assert r.spec == "3GPP TS 24.301"
+        assert r.section == "5.5.1"
+
 
 # ── Spec normalisation ────────────────────────────────────────────────────────
 
