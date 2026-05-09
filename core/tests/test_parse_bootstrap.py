@@ -294,6 +294,53 @@ class TestDocxRenderAlignment:
         # No extra index emitted (e.g. for the empty paragraph).
         assert f'data-block-idx="{len(ir_indices)}"' not in html
 
+    def test_image_only_first_paragraph_does_not_drift_indices(self, tmp_path):
+        """Regression: an image-only paragraph at the start of the doc
+        (very common — `doc.add_picture()` produces this shape) emits
+        an IMAGE block at IR index 0. The renderer must emit a
+        placeholder at data-block-idx=0 too, otherwise every
+        subsequent paragraph drifts by 1 in the preview.
+        """
+        from io import BytesIO
+        from docx import Document
+        from PIL import Image
+        # Build a tiny PNG via PIL so python-docx's image-format
+        # validator accepts it (raw byte literals trip its EXIF probe).
+        buf = BytesIO()
+        Image.new("RGB", (4, 4), color=(255, 0, 0)).save(buf, format="PNG")
+        buf.seek(0)
+        doc = Document()
+        doc.add_picture(buf)                  # IR block 0 — IMAGE
+        doc.add_paragraph("First paragraph.")  # IR block 1 — PARAGRAPH
+        doc.add_paragraph("Second paragraph.") # IR block 2 — PARAGRAPH
+        docx_path = tmp_path / "image_first.docx"
+        doc.save(str(docx_path))
+
+        ir = DOCXExtractor().extract(docx_path)
+        ir_types = [(b.position.index, b.type.value) for b in ir.content_blocks]
+        # Expect: image at 0, paragraphs at 1 and 2
+        assert any(t == (0, "image") for t in ir_types), (
+            f"expected IMAGE at IR index 0; got {ir_types}"
+        )
+
+        html = render_docx_html(docx_path)
+        # The renderer MUST emit data-block-idx=0 (image placeholder),
+        # data-block-idx=1 (first paragraph), data-block-idx=2 (second).
+        # Pre-fix: the empty-text image-only paragraph was skipped
+        # entirely, so the first emitted element got idx 0 and every
+        # IR index past the image drifted by 1.
+        for idx in (0, 1, 2):
+            assert f'data-block-idx="{idx}"' in html, (
+                f"missing data-block-idx={idx} in html:\n{html}"
+            )
+        # The first paragraph's text appears in the element with idx=1
+        # (NOT idx=0 — that would be the drift bug).
+        import re
+        m = re.search(r'data-block-idx="1"[^>]*>([^<]*)', html)
+        assert m and "First paragraph" in m.group(1), (
+            f"data-block-idx=1 should hold 'First paragraph', got: {html}"
+        )
+
     def test_table_row_indices_emitted(self, tmp_path):
         docx_path = tmp_path / "fixture.docx"
         _build_fixture_docx(docx_path)

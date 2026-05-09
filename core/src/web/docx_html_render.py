@@ -36,11 +36,16 @@ def render_docx_html(file_path: Path) -> str:
         if tag == qn("w:p"):
             para = DocxParagraph(child, doc)
             text = (para.text or "").strip()
-            if not text:
-                continue
-            parts.append(_render_paragraph(para, text, block_idx))
-            block_idx += 1
-            # Inline images inside this paragraph each consume one index.
+            # Mirror DOCXExtractor exactly: a w:p emits a paragraph
+            # block IFF text is non-empty (extractor's _paragraph_block
+            # returns None on empty text), but inline images are
+            # extracted UNCONDITIONALLY even when the paragraph has no
+            # text. Common case: `doc.add_picture()` produces an
+            # image-only paragraph; mishandling it here drifts every
+            # subsequent data-block-idx by 1.
+            if text:
+                parts.append(_render_paragraph(para, text, block_idx))
+                block_idx += 1
             image_count = _count_paragraph_images(doc, para)
             for _ in range(image_count):
                 parts.append(
