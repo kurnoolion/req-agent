@@ -360,6 +360,26 @@ class TestBootstrapRoutes:
         # Bootstrap save button
         assert "bs-save-btn" in resp.text
 
+    def test_view_state_uses_application_json(self, web_client):
+        """State must travel via <script type="application/json">, NOT
+        an inline <script>. Inline scripts inserted via innerHTML do NOT
+        execute, so the JS would never see the annotations.
+        """
+        client, env_dir = web_client
+        plan_dir = env_dir / "input" / "VZW" / "OA-test"
+        plan_dir.mkdir(parents=True)
+        _build_fixture_docx(plan_dir / "LTEAT.docx")
+        ir = DOCXExtractor().extract(plan_dir / "LTEAT.docx")
+        (env_dir / "out" / "extract").mkdir(parents=True)
+        ir.save_json(env_dir / "out" / "extract" / "LTEAT_ir.json")
+
+        resp = client.get("/parse-review/bootstrap/LTEAT/view")
+        assert 'id="bs-state-data"' in resp.text
+        assert 'type="application/json"' in resp.text
+        # Must NOT use an executable inline <script> for state — that breaks
+        # innerHTML-based loading.
+        assert "window._bsState =" not in resp.text
+
     def test_load_annotations_when_absent(self, web_client):
         client, env_dir = web_client
         plan_dir = env_dir / "input" / "VZW" / "OA-test"

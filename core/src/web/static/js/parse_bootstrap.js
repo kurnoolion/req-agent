@@ -142,6 +142,18 @@
     // -----------------------------------------------------------------
 
     function wireDocView() {
+        // The view template embeds initial state as <script type="application/json">.
+        // Inline <script> wouldn't execute through innerHTML, but this content type
+        // is treated as data and survives innerHTML insertion intact.
+        const stateEl = document.getElementById('bs-state-data');
+        if (stateEl) {
+            try {
+                window._bsState = JSON.parse(stateEl.textContent);
+            } catch (e) {
+                console.error('Failed to parse bs-state-data:', e);
+                window._bsState = { docId: '', docPath: '', annotations: [] };
+            }
+        }
         selectedBlocks = [];
         selectedRows = null;
         anchorRowIdx = null;

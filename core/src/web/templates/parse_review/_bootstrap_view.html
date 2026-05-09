@@ -123,11 +123,9 @@
   </div>
 </div>
 
-<script>
-window._bsState = {
-    docId: {{ doc_id | tojson }},
-    docPath: {{ ('<env_dir>/' + docx_rel_path) | tojson }},
-    annotations: {{ annotations | tojson }},
-};
-</script>
+<script id="bs-state-data" type="application/json">{
+  "docId": {{ doc_id | tojson }},
+  "docPath": {{ ('<env_dir>/' + docx_rel_path) | tojson }},
+  "annotations": {{ annotations | tojson }}
+}</script>
 {% endif %}
