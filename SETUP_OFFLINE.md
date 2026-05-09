@@ -129,37 +129,36 @@ NORA surfaces this as `ERR PIP-E001: Unhandled error: ...`.
 
 NORA auto-detects a cached model and enables `HF_HUB_OFFLINE=1` automatically (see `src/vectorstore/hf_offline.py`), so the only action required is getting the cache onto the Work PC.
 
-**Option A — use the tarball vendored in this repo (default model only).**
+**Option A — build the HF cache tarball on a connected machine, transfer to Work PC.**
 
-`assets/hf_cache/all-MiniLM-L6-v2.tgz` (80 MB) is checked into the repo and pulled with `git pull`. On the Work PC:
+Pick the embedding model your env will use (default `all-MiniLM-L6-v2`; configurable via `VectorStoreConfig.embedding_model`). On a machine with internet access:
+
+```bash
+# One-time warm-up — substitute the model name as needed
+python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
+
+# Bundle the cache for transfer (the path component matches the model;
+# substitute appropriately for non-default models)
+cd ~/.cache/huggingface
+tar czf /tmp/hf_cache.tgz hub/models--sentence-transformers--all-MiniLM-L6-v2
+```
+
+Transfer `/tmp/hf_cache.tgz` to the Work PC by your usual offline channel (Box / OneDrive / USB), then extract:
 
 ```bash
 mkdir -p ~/.cache/huggingface
 cd ~/.cache/huggingface
-tar xzf /path/to/nora/assets/hf_cache/all-MiniLM-L6-v2.tgz
+tar xzf /path/to/hf_cache.tgz
 
 # Verify a snapshot with config.json exists
-ls hub/models--sentence-transformers--all-MiniLM-L6-v2/snapshots/*/config.json
+ls hub/models--sentence-transformers--*/snapshots/*/config.json
 ```
 
 No env vars to export. Next pipeline run, `enable_offline_if_cached` finds the snapshot, flips `HF_HUB_OFFLINE=1` + `TRANSFORMERS_OFFLINE=1`, patches `huggingface_hub.constants.HF_HUB_OFFLINE = True`, and the revision HEAD call is skipped entirely.
 
-**Option B — build a tarball for a different model.**
+For non-default models (`all-mpnet-base-v2`, `BAAI/bge-small-en-v1.5`, etc.), substitute the model name in both the `SentenceTransformer(...)` warm-up call and the `tar czf` path component.
 
-If your env uses something other than `all-MiniLM-L6-v2` (e.g., `all-mpnet-base-v2`, `BAAI/bge-small-en-v1.5`), build the tarball yourself on an internet-connected machine:
-
-```bash
-# One-time warm-up if the cache is empty
-python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-mpnet-base-v2')"
-
-# Bundle the cache — substitute the model name
-cd ~/.cache/huggingface
-tar czf /tmp/hf_cache.tgz hub/models--sentence-transformers--all-mpnet-base-v2
-```
-
-Then transfer `/tmp/hf_cache.tgz` to the Work PC and extract under `~/.cache/huggingface/` as in Option A.
-
-**Option C — use Ollama for embeddings (skip the HF cache).**
+**Option B — use Ollama for embeddings (skip the HF cache entirely).**
 
 Pull an embedding model via the same offline path used for the LLM (section 2 — manual blob download or `ollama pull` on a connected machine, then transfer `~/.ollama/models`):
 
