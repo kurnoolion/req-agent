@@ -17,6 +17,7 @@ from typing import Optional
 from core.src.models.document import BlockType, DocumentIR
 from core.src.parser.structural_parser import (
     CrossReferences,
+    DocStandardRef,
     ImageRef,
     ParseStats,
     Requirement,
@@ -38,16 +39,74 @@ _META_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("release_date", re.compile(r"^Release\s+Date:\s*(.+)$",   re.IGNORECASE)),
 ]
 
-# Standards — spec with explicit section number.
-# Matches "3GPP TS X.Y", "3GPP X.Y", or "TS X.Y"; always normalised to
-# canonical "3GPP TS X.Y" in the output.
-_STD_DETAIL_RE = re.compile(
-    r"(?:3GPP\s+TS|3GPP|TS)\s+(\d[\d.]*\d)\s+(?:[Ss]ection\s+)?(\d[\d.]*\d)"
+# ── Standards extraction constants ────────────────────────────────────────────
+
+# Spec number: allows internal spaces ("38. 322") and hyphen suffix ("38.101-1")
+_SPEC_NUM = r"\d+\.\s*\d+(?:\s*-\s*\d+)?"
+
+# Spec prefix variants — all normalised to "3GPP TS" in output
+_SPEC_PFX = r"(?:3GPP\s+(?:TS|TR)|TS|TR)"
+
+# Section number: multi-level dotted (e.g. 5.1.1, 4.2.7.10)
+_SEC_NUM = r"\d+(?:\.\d+)+"
+
+# Annex identifier: capital letter with optional .N (e.g. A, L.1, J)
+_ANNEX_ID = r"[A-Z](?:\.\d+)?"
+
+# Section list: comma/slash/space-separated numbers with optional "and/or" tail
+# e.g. "5.3.1, 5.3.2, 5.4.1, and 5.4.2" or "4.2.7.10/4.2.7.2/4.2.7.14"
+_SECS_LIST = (
+    r"[\d.,/]+(?:\s+[\d.,/]+)*"
+    r"(?:\s+(?:and|or)\s+[\d.,/]+)?"
 )
-# Standards — spec only (no section number)
-_STD_SPEC_RE = re.compile(r"(?:3GPP\s+TS|3GPP|TS)\s+(\d[\d.]*\d)")
-# Release number in nearby context
+
+# ── Compound patterns (most-specific → least-specific) ────────────────────────
+
+# Table X.Y-Z in SPEC
+_PAT_TABLE = re.compile(
+    rf"[Tt]able\s+([\w./\-]+)\s+in\s+(?:{_SPEC_PFX})\s+({_SPEC_NUM})"
+)
+
+# Annex X of SPEC
+_PAT_ANNEX_OF = re.compile(
+    rf"[Aa]nnex\s+({_ANNEX_ID})\s+of\s+(?:{_SPEC_PFX})\s+({_SPEC_NUM})"
+)
+
+# Section X of vN.M.P [...] of SPEC (version string encodes release)
+_PAT_SEC_VER_OF = re.compile(
+    rf"[Ss]ection\s+({_SEC_NUM})\s+of\s+v(\d+)\.\d+\.\d+[^.]*?of\s+(?:{_SPEC_PFX})\s+({_SPEC_NUM})"
+)
+
+# Section(s) X,Y,Z of SPEC (plain list — runs after _PAT_SEC_VER_OF)
+_PAT_SECS_OF = re.compile(
+    rf"[Ss]ections?\s+({_SECS_LIST})\s+of\s+(?:{_SPEC_PFX})\s+({_SPEC_NUM})"
+)
+
+# 3GPP Release N version of SPEC
+_PAT_REL_OF = re.compile(
+    rf"3GPP\s+[Rr]elease\s+(\d+)\s+version\s+of\s+(?:{_SPEC_PFX})\s+({_SPEC_NUM})"
+)
+
+# SPEC [specification] Annex X
+_PAT_SPEC_ANNEX = re.compile(
+    rf"(?:{_SPEC_PFX})\s+({_SPEC_NUM})\s+(?:specification\s+)?[Aa]nnex\s+({_ANNEX_ID})"
+)
+
+# SPEC section(s) X,Y
+_PAT_SPEC_SECS = re.compile(
+    rf"(?:{_SPEC_PFX})\s+({_SPEC_NUM})\s+[Ss]ections?\s+({_SECS_LIST})"
+)
+
+# SPEC standalone (fallback — lowest priority)
+_PAT_SPEC_ONLY = re.compile(
+    rf"(?:{_SPEC_PFX})\s+({_SPEC_NUM})"
+)
+
+# Release number in context window
 _STD_RELEASE_RE = re.compile(r"[Rr]elease\s+(\d+)")
+# Version string release (e.g. v15.6.0 → Release 15)
+_VERSION_RELEASE_RE = re.compile(r"\bv(\d+)\.\d+")
+
 # OMA DM
 _OMA_RE = re.compile(r"(?:OMADM|OMA\s+DM)\s+[\d.]+")
 _OMA_SECTION_RE = re.compile(r"[Ss]ection\s+([\d.]+)")
@@ -173,17 +232,25 @@ class StyleDrivenParser:
         for req in requirements:
             req.cross_references = _extract_cross_refs(req.text)
 
-        # Pass 1: scan raw blocks — catches spec+release in same block and
-        # preamble text that belongs to no requirement.
-        std_releases = _extract_standards_releases(doc)
-        # Pass 2: fill gaps where spec and release span different blocks.
-        # req.text is the concatenated paragraph text for each requirement,
-        # so _extract_cross_refs already resolved pairs that cross block
-        # boundaries. We merge here, never overwriting pass-1 entries.
+        # Build doc-level standards list: one DocStandardRef per unique
+        # (req_id, spec, section, annex, table, release) tuple.
+        seen_keys: set[tuple] = set()
+        doc_std_refs: list[DocStandardRef] = []
         for req in requirements:
             for std_ref in req.cross_references.standards:
-                if std_ref.spec and std_ref.release:
-                    std_releases.setdefault(std_ref.spec, std_ref.release)
+                if not std_ref.spec:
+                    continue
+                key = (req.req_id, std_ref.spec, std_ref.section, std_ref.annex, std_ref.table, std_ref.release)
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    doc_std_refs.append(DocStandardRef(
+                        req_id=req.req_id,
+                        spec=std_ref.spec,
+                        section=std_ref.section,
+                        release=std_ref.release,
+                        annex=std_ref.annex,
+                        table=std_ref.table,
+                    ))
 
         tree = RequirementTree(
             mno=doc.mno,
@@ -192,7 +259,7 @@ class StyleDrivenParser:
             plan_name=meta["plan_name"],
             version=meta["version"],
             release_date=meta["release_date"],
-            referenced_standards_releases=std_releases,
+            referenced_standards_releases=doc_std_refs,
             requirements=requirements,
             parse_stats=ParseStats(),
         )
@@ -227,85 +294,146 @@ def _try_extract_metadata(text: str, meta: dict[str, str]) -> None:
             return
 
 
-def _extract_cross_refs(text: str) -> CrossReferences:
+_WHITESPACE_RE = re.compile(r"\s+")
+
+
+def _norm_spec(num_raw: str) -> str:
+    """Normalise a raw spec number to canonical '3GPP TS X.Y[-Z]' form."""
+    return "3GPP TS " + _WHITESPACE_RE.sub("", num_raw)
+
+
+def _parse_secs(raw: str) -> list[str]:
+    """Extract individual section numbers from a list string."""
+    return re.findall(r"\d+(?:\.\d+)+", raw)
+
+
+def _find_release(ctx: str) -> str:
+    """Return the first release found in a context string, else ''."""
+    m = _STD_RELEASE_RE.search(ctx)
+    if m:
+        return f"Release {m.group(1)}"
+    m = _VERSION_RELEASE_RE.search(ctx)
+    if m:
+        return f"Release {m.group(1)}"
+    return ""
+
+
+def _extract_standards_refs(text: str) -> list[StandardsRef]:
+    """Extract all standards references from requirement text.
+
+    Patterns are tried most-specific first.  Each compound match claims
+    the positions of the contained spec tokens so the fallback
+    (_PAT_SPEC_ONLY) does not double-emit them.
+    """
     if not text:
-        return CrossReferences()
+        return []
 
-    refs = CrossReferences()
+    refs: list[StandardsRef] = []
+    claimed: set[int] = set()   # start positions of spec matches already handled
 
-    # Internal VZ_REQ_ references — caller's own req_id filtering is upstream
-    for m in _VZ_REQ_RE.finditer(text):
-        rid = m.group()
-        if rid not in refs.internal:
-            refs.internal.append(rid)
+    def _claim(m_start: int, m_end: int) -> None:
+        """Mark every _PAT_SPEC_ONLY hit inside [m_start, m_end] as claimed."""
+        for sm in _PAT_SPEC_ONLY.finditer(text, m_start, m_end):
+            claimed.add(sm.start())
 
-    # 3GPP with explicit section number (more specific — run first)
-    seen_detailed: set[tuple[str, str]] = set()
-    for m in _STD_DETAIL_RE.finditer(text):
-        spec    = f"3GPP TS {m.group(1)}"
-        section = m.group(2)
-        key = (spec, section)
-        if key in seen_detailed:
-            continue
-        seen_detailed.add(key)
-        ctx = text[max(0, m.start() - 100): m.end() + 100]
-        rm  = _STD_RELEASE_RE.search(ctx)
-        refs.standards.append(StandardsRef(
-            spec=spec,
-            section=section,
-            release=f"Release {rm.group(1)}" if rm else "",
+    def _ctx(m_start: int, m_end: int) -> str:
+        return text[max(0, m_start - 100): min(len(text), m_end + 100)]
+
+    # 1. Table X in SPEC
+    for m in _PAT_TABLE.finditer(text):
+        refs.append(StandardsRef(spec=_norm_spec(m.group(2)), table=m.group(1).strip()))
+        _claim(m.start(), m.end())
+
+    # 2. Annex X of SPEC
+    for m in _PAT_ANNEX_OF.finditer(text):
+        refs.append(StandardsRef(spec=_norm_spec(m.group(2)), annex=m.group(1)))
+        _claim(m.start(), m.end())
+
+    # 3. Section X of vN.M.P [...] of SPEC  (version string encodes release)
+    for m in _PAT_SEC_VER_OF.finditer(text):
+        refs.append(StandardsRef(
+            spec=_norm_spec(m.group(3)),
+            section=m.group(1),
+            release=f"Release {m.group(2)}",
         ))
+        _claim(m.start(), m.end())
 
-    # 3GPP spec-only (no section number found by detail pattern)
-    for m in _STD_SPEC_RE.finditer(text):
-        spec = f"3GPP TS {m.group(1)}"
-        if any(s.spec == spec for s in refs.standards):
-            continue
-        ctx = text[max(0, m.start() - 100): m.end() + 100]
-        rm  = _STD_RELEASE_RE.search(ctx)
-        refs.standards.append(StandardsRef(
-            spec=spec,
-            section="",
-            release=f"Release {rm.group(1)}" if rm else "",
+    # 4. Section(s) X,Y,Z of SPEC
+    for m in _PAT_SECS_OF.finditer(text):
+        spec = _norm_spec(m.group(2))
+        release = _find_release(_ctx(m.start(), m.end()))
+        secs = _parse_secs(m.group(1))
+        for sec in secs:
+            refs.append(StandardsRef(spec=spec, section=sec, release=release))
+        if not secs:
+            refs.append(StandardsRef(spec=spec, release=release))
+        _claim(m.start(), m.end())
+
+    # 5. 3GPP Release N version of SPEC
+    for m in _PAT_REL_OF.finditer(text):
+        refs.append(StandardsRef(
+            spec=_norm_spec(m.group(2)),
+            release=f"Release {m.group(1)}",
         ))
+        _claim(m.start(), m.end())
 
-    # OMA DM references
+    # 6. SPEC [specification] Annex X
+    for m in _PAT_SPEC_ANNEX.finditer(text):
+        refs.append(StandardsRef(spec=_norm_spec(m.group(1)), annex=m.group(2)))
+        _claim(m.start(), m.end())
+
+    # 7. SPEC section(s) X,Y
+    for m in _PAT_SPEC_SECS.finditer(text):
+        spec = _norm_spec(m.group(1))
+        release = _find_release(_ctx(m.start(), m.end()))
+        secs = _parse_secs(m.group(2))
+        for sec in secs:
+            refs.append(StandardsRef(spec=spec, section=sec, release=release))
+        if not secs:
+            refs.append(StandardsRef(spec=spec, release=release))
+        _claim(m.start(), m.end())
+
+    # 8. OMA DM references (separate spec space — no position claiming needed)
     for m in _OMA_RE.finditer(text):
-        raw  = m.group()
+        raw = m.group()
         spec = re.sub(r"OMA\s+DM", "OMADM", raw)
         spec = re.sub(r"\s+", " ", spec).strip()
-        ws   = max(0, m.start() - _CONTEXT_WINDOW)
-        we   = min(len(text), m.end() + _CONTEXT_WINDOW)
-        win  = text[ws:we]
+        win = text[max(0, m.start() - _CONTEXT_WINDOW): min(len(text), m.end() + _CONTEXT_WINDOW)]
         sec_m = _OMA_SECTION_RE.search(win)
         rel_m = _STD_RELEASE_RE.search(win)
-        refs.standards.append(StandardsRef(
+        refs.append(StandardsRef(
             spec=spec,
             section=sec_m.group(1) if sec_m else "",
             release=f"Release {rel_m.group(1)}" if rel_m else "",
         ))
 
-    return refs
-
-
-def _extract_standards_releases(doc: DocumentIR) -> dict[str, str]:
-    """Scan all blocks for 3GPP spec+release pairs; build top-level dict."""
-    releases: dict[str, str] = {}
-    pat1 = re.compile(
-        r"(?:3GPP\s+TS|3GPP|TS)\s+(\d[\d.]*\d).*?[Rr]elease\s+(\d+)"
-    )
-    pat2 = re.compile(
-        r"[Rr]elease\s+(\d+)\s+(?:version\s+of\s+)?(?:3GPP\s+TS|3GPP|TS)\s+(\d[\d.]*\d)"
-    )
-    for b in doc.content_blocks:
-        if not b.text:
+    # 9. SPEC standalone (fallback — skip positions claimed by compound patterns)
+    for m in _PAT_SPEC_ONLY.finditer(text):
+        if m.start() in claimed:
             continue
-        for m in pat1.finditer(b.text):
-            spec = f"3GPP TS {m.group(1)}"
-            if spec not in releases:
-                releases[spec] = f"Release {m.group(2)}"
-        for m in pat2.finditer(b.text):
-            spec = f"3GPP TS {m.group(2)}"
-            if spec not in releases:
-                releases[spec] = f"Release {m.group(1)}"
-    return releases
+        refs.append(StandardsRef(
+            spec=_norm_spec(m.group(1)),
+            release=_find_release(_ctx(m.start(), m.end())),
+        ))
+
+    # Deduplicate preserving first-occurrence order
+    seen: set[tuple] = set()
+    unique: list[StandardsRef] = []
+    for r in refs:
+        key = (r.spec, r.section, r.annex, r.table, r.release)
+        if key not in seen:
+            seen.add(key)
+            unique.append(r)
+    return unique
+
+
+def _extract_cross_refs(text: str) -> CrossReferences:
+    if not text:
+        return CrossReferences()
+    refs = CrossReferences()
+    for m in _VZ_REQ_RE.finditer(text):
+        rid = m.group()
+        if rid not in refs.internal:
+            refs.internal.append(rid)
+    refs.standards = _extract_standards_refs(text)
+    return refs

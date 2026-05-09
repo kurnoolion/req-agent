@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from core.src.parser.structural_parser import RequirementTree, Requirement, StandardsRef
+from core.src.parser.structural_parser import RequirementTree, Requirement, StandardsRef, DocStandardRef
 
 logger = logging.getLogger(__name__)
 
@@ -232,11 +232,12 @@ class CrossReferenceResolver:
         release_source = "inline" if release else ""
 
         if not release:
-            # Try doc-level mapping
-            doc_release = tree.referenced_standards_releases.get(std_ref.spec, "")
-            if doc_release:
-                release = doc_release
-                release_source = "doc_level"
+            # Try doc-level list for a matching spec entry that carries a release
+            for doc_ref in tree.referenced_standards_releases:
+                if doc_ref.spec == std_ref.spec and doc_ref.release:
+                    release = doc_ref.release
+                    release_source = "doc_level"
+                    break
 
         status = RefStatus.RESOLVED if release else RefStatus.UNRESOLVED
 

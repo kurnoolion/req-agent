@@ -70,6 +70,19 @@ class StandardsRef:
     spec: str = ""
     section: str = ""
     release: str = ""
+    annex: str = ""
+    table: str = ""
+
+
+@dataclass
+class DocStandardRef:
+    """A standards reference attributed to a specific requirement (doc-level index)."""
+    req_id: str = ""
+    spec: str = ""
+    section: str = ""
+    release: str = ""
+    annex: str = ""
+    table: str = ""
 
 
 @dataclass
@@ -121,7 +134,7 @@ class RequirementTree:
     plan_name: str = ""
     version: str = ""
     release_date: str = ""
-    referenced_standards_releases: dict[str, str] = field(default_factory=dict)
+    referenced_standards_releases: list[DocStandardRef] = field(default_factory=list)
     requirements: list[Requirement] = field(default_factory=list)
     parse_stats: ParseStats = field(default_factory=ParseStats)
     definitions_map: dict[str, str] = field(default_factory=dict)
@@ -149,6 +162,13 @@ class RequirementTree:
     def load_json(cls, path: Path) -> RequirementTree:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
+        raw_std = data.get("referenced_standards_releases", [])
+        if isinstance(raw_std, dict):
+            # Legacy format: dict[str, str] → convert to list[DocStandardRef]
+            doc_std_refs = [DocStandardRef(spec=k, release=v) for k, v in raw_std.items()]
+        else:
+            doc_std_refs = [DocStandardRef(**r) for r in raw_std]
+
         reqs = []
         for r in data.get("requirements", []):
             xr = r.get("cross_references", {})
@@ -181,7 +201,7 @@ class RequirementTree:
             plan_name=data.get("plan_name", ""),
             version=data.get("version", ""),
             release_date=data.get("release_date", ""),
-            referenced_standards_releases=data.get("referenced_standards_releases", {}),
+            referenced_standards_releases=doc_std_refs,
             requirements=reqs,
             parse_stats=ParseStats(
                 struck_blocks_dropped=ps.get("struck_blocks_dropped", 0),
@@ -1329,14 +1349,14 @@ class GenericStructuralParser:
 
     def _extract_standards_releases(
         self, doc: DocumentIR
-    ) -> dict[str, str]:
+    ) -> list[DocStandardRef]:
         """Extract referenced standards releases from the document.
 
         Scans all text for patterns like:
         - "3GPP TS 24.301 Release 10"
         - "Release 10 version of 3GPP TS 24.301"
         """
-        releases: dict[str, str] = {}
+        seen: dict[str, str] = {}  # spec → first release found
 
         # Pattern 1: "3GPP TS X.X ... Release N"
         pat1 = re.compile(r"3GPP\s+TS\s+(\d[\d.]*\d).*?[Rr]elease\s+(\d+)")
@@ -1347,12 +1367,12 @@ class GenericStructuralParser:
             for m in pat1.finditer(b.text):
                 spec = f"3GPP TS {m.group(1)}"
                 release = f"Release {m.group(2)}"
-                if spec not in releases:
-                    releases[spec] = release
+                if spec not in seen:
+                    seen[spec] = release
             for m in pat2.finditer(b.text):
                 spec = f"3GPP TS {m.group(2)}"
                 release = f"Release {m.group(1)}"
-                if spec not in releases:
-                    releases[spec] = release
+                if spec not in seen:
+                    seen[spec] = release
 
-        return releases
+        return [DocStandardRef(spec=spec, release=rel) for spec, rel in seen.items()]

@@ -6,6 +6,7 @@ import pytest
 
 from core.src.parser.structural_parser import (
     CrossReferences,
+    DocStandardRef,
     Requirement,
     RequirementTree,
     StandardsRef,
@@ -45,11 +46,15 @@ def _make_tree(
     reqs: list[Requirement],
     std_releases: dict[str, str] | None = None,
 ) -> RequirementTree:
+    doc_refs: list[DocStandardRef] = [
+        DocStandardRef(spec=spec, release=rel)
+        for spec, rel in (std_releases or {}).items()
+    ]
     return RequirementTree(
         plan_id=plan_id,
         mno="TEST",
         release="2026",
-        referenced_standards_releases=std_releases or {},
+        referenced_standards_releases=doc_refs,
         requirements=reqs,
     )
 
