@@ -3,6 +3,8 @@
 **Purpose**
 Standalone, LLM-free document-structure profiler. Analyzes representative `DocumentIR`s from [extraction](../extraction/MODULE.md) and emits a `DocumentProfile` — a JSON artifact of heading rules, requirement-ID patterns, zone classifications, header/footer filters, cross-reference patterns, applicability detection rules, definitions-section detection rules, TOC detection rules, and priority-marker detection rules. The profile drives the generic structural parser, replacing per-MNO parser code with human-editable configuration. Serves FR-2 (LLM-free profiling), FR-31 (priority markers), FR-32 (applicability detection rules), FR-33 (`ignore_strikeout` toggle), FR-34 (TOC detection), FR-35 (definitions section + entry detection). Profile JSON files are committed under `customizations/profiles/` per D-024 (human-curated, AI-scaffolded).
 
+For the human-annotator's guide to the 13 annotation kinds the Bootstrap web UI captures (and which the profiler turns into rules through the Cline → Teacher-LLM loop), see [`ANNOTATIONS.md`](ANNOTATIONS.md).
+
 **Public surface**
 - `DocumentProfiler` (profiler.py) — `create_profile(docs, profile_name="") -> DocumentProfile`; also `update_profile()`, `validate_profile()` (coverage check against held-out docs)
 - `DocumentProfile` (profile_schema.py) — full profile container with `to_dict`, `save_json`, `load_json`

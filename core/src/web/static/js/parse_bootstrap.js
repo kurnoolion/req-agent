@@ -33,16 +33,41 @@
         priority: [
             { key: 'position', label: 'position', type: 'enum', choices: ['', 'after_heading', 'inline_in_para', 'separate_block'] },
         ],
-        references: [
-            { key: 'subkind', label: 'subkind*', type: 'enum', choices: ['intra_doc', 'cross_doc', 'spec'], required: true },
-            { key: 'target_kind', label: 'target_kind', type: 'enum', choices: ['', 'section_number', 'req_id', 'spec_ts_section'] },
+        reference_intra_doc: [
             { key: 'inline', label: 'inline', type: 'bool' },
+            { key: 'target.section_number', label: 'target.section_number', type: 'string', placeholder: '1.2.3' },
+            { key: 'target.req_id', label: 'target.req_id', type: 'string', placeholder: '<MNO>_REQ_<PLAN>_<NUM>' },
+        ],
+        reference_cross_doc: [
+            { key: 'inline', label: 'inline', type: 'bool' },
+            { key: 'target.plan_id', label: 'target.plan_id', type: 'string', placeholder: '<PLAN>' },
+            { key: 'target.section_number', label: 'target.section_number', type: 'string' },
+            { key: 'target.req_id', label: 'target.req_id', type: 'string' },
+        ],
+        reference_spec: [
+            { key: 'style', label: 'style*', type: 'enum', choices: ['direct', 'indirect'], required: true },
+            { key: 'inline', label: 'inline', type: 'bool' },
+            { key: 'target.spec', label: 'target.spec', type: 'string', placeholder: '3GPP TS 24.301' },
+            { key: 'target.section', label: 'target.section', type: 'string', placeholder: '5.5.1.2.6' },
+            { key: 'target.ref_number', label: 'target.ref_number', type: 'int', min: 1 },
+        ],
+        reference_list: [
+            { key: 'numbering_style', label: 'numbering_style', type: 'enum', choices: ['', 'bracketed', 'plain', 'parenthesized'] },
+            { key: 'layout', label: 'layout', type: 'enum', choices: ['', 'paragraph_list', 'two_col_table', 'three_col_table'] },
+        ],
+        reference_list_entry: [
+            { key: 'number', label: 'number', type: 'int', min: 0 },
+            { key: 'title_hint_chars', label: 'title_hint_chars', type: 'int', min: 0 },
+            { key: 'target.spec', label: 'target.spec', type: 'string', placeholder: '3GPP TS 24.301' },
+            { key: 'target.section', label: 'target.section', type: 'string' },
         ],
     };
 
     const KIND_ORDER = [
         'section_heading', 'req_id', 'toc', 'strikethrough', 'version_history',
-        'definitions', 'applicability', 'priority', 'references',
+        'definitions', 'applicability', 'priority',
+        'reference_intra_doc', 'reference_cross_doc', 'reference_spec',
+        'reference_list', 'reference_list_entry',
     ];
 
     let ROOT = '';
@@ -295,7 +320,17 @@
         fields.forEach(f => {
             const lbl = document.createElement('label');
             lbl.textContent = f.label;
-            const inp = buildInput(f, existing ? existing[f.key] : undefined);
+            // For target.<sub> keys, pull from existing.target.<sub>
+            let value;
+            if (existing) {
+                if (f.key.startsWith('target.')) {
+                    const sub = f.key.slice(7);
+                    value = existing.target ? existing.target[sub] : undefined;
+                } else {
+                    value = existing[f.key];
+                }
+            }
+            const inp = buildInput(f, value);
             inp.dataset.key = f.key;
             inp.dataset.type = f.type;
             inp.dataset.required = f.required ? '1' : '0';
@@ -367,6 +402,7 @@
             kind: pendingKind,
             region: buildRegion(),
         };
+        const target = {};
         let invalid = false;
         fields.forEach(inp => {
             const key = inp.dataset.key;
@@ -377,14 +413,21 @@
                 if (required) invalid = key;
                 return;
             }
-            if (type === 'int') payload[key] = parseInt(raw, 10);
-            else if (type === 'bool') payload[key] = (raw === 'true');
-            else payload[key] = raw;
+            let parsed;
+            if (type === 'int') parsed = parseInt(raw, 10);
+            else if (type === 'bool') parsed = (raw === 'true');
+            else parsed = raw;
+            if (key.startsWith('target.')) {
+                target[key.slice(7)] = parsed;
+            } else {
+                payload[key] = parsed;
+            }
         });
         if (invalid) {
             alert(`Field "${invalid}" is required for kind "${pendingKind}".`);
             return;
         }
+        if (Object.keys(target).length) payload.target = target;
         const notes = document.getElementById('bs-form-notes').value.trim();
         if (notes) payload.notes = notes;
 
@@ -480,14 +523,18 @@
                 : `${ann.region.block_indices[0]}–${ann.region.block_indices[ann.region.block_indices.length - 1]}`)
             : `#${ann.region.block_index}` + (ann.region.row_range ? ` r${ann.region.row_range[0]}–${ann.region.row_range[1]}` : '');
         const meta = Object.entries(ann)
-            .filter(([k]) => !['id', 'kind', 'region', 'notes'].includes(k))
+            .filter(([k]) => !['id', 'kind', 'region', 'notes', 'target'].includes(k))
             .map(([k, v]) => `${k}=${v}`)
             .join(' ');
+        const targetMeta = ann.target
+            ? '→ ' + Object.entries(ann.target).map(([k, v]) => `${k}=${v}`).join(' ')
+            : '';
         return `<div class="bs-ann-item" data-id="${escapeAttr(ann.id)}">
           <span class="bs-ann-kind bs-ann-kind-${ann.kind}">${ann.kind}</span>
           <div class="flex-grow-1" style="min-width:0;">
             <div class="bs-ann-region">${escapeHtml(region)}</div>
             ${meta ? `<div class="bs-ann-meta">${escapeHtml(meta)}</div>` : ''}
+            ${targetMeta ? `<div class="bs-ann-meta text-primary">${escapeHtml(targetMeta)}</div>` : ''}
             ${ann.notes ? `<div class="text-muted small fst-italic">${escapeHtml(ann.notes)}</div>` : ''}
           </div>
           <button class="btn btn-xs btn-outline-danger bs-ann-del ms-auto" title="Delete">✗</button>

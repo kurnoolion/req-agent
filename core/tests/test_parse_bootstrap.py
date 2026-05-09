@@ -59,20 +59,123 @@ class TestSchemaValidation:
             ]))
         assert any("kind" in e for e in exc.value.errors)
 
-    def test_references_requires_subkind(self):
-        with pytest.raises(AnnotationValidationError) as exc:
+    def test_old_references_kind_rejected(self):
+        # The old single `references` kind is gone; split into 3 kinds.
+        with pytest.raises(AnnotationValidationError):
             validate_annotation_file(self._payload(annotations=[
                 {"id": "ann_001", "kind": "references", "region": {"block_indices": [3]}},
             ]))
-        assert any("subkind" in e for e in exc.value.errors)
 
-    def test_references_with_valid_subkind(self):
+    def test_reference_intra_doc_minimal(self):
         out = validate_annotation_file(self._payload(annotations=[
-            {"id": "ann_001", "kind": "references", "region": {"block_indices": [3]},
-             "subkind": "spec", "target_kind": "spec_ts_section"},
+            {"id": "ann_001", "kind": "reference_intra_doc",
+             "region": {"block_indices": [3]}},
         ]))
-        assert out["annotations"][0]["subkind"] == "spec"
-        assert out["annotations"][0]["target_kind"] == "spec_ts_section"
+        assert out["annotations"][0]["kind"] == "reference_intra_doc"
+
+    def test_reference_intra_doc_with_target(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "reference_intra_doc",
+             "region": {"block_indices": [3]},
+             "inline": True,
+             "target": {"section_number": "3.5.2.1"}},
+        ]))
+        ann = out["annotations"][0]
+        assert ann["target"] == {"section_number": "3.5.2.1"}
+        assert ann["inline"] is True
+
+    def test_reference_cross_doc_with_target(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "reference_cross_doc",
+             "region": {"block_indices": [3]},
+             "target": {"plan_id": "<PLAN1>", "req_id": "<MNO>_REQ_<PLAN1>_45"}},
+        ]))
+        ann = out["annotations"][0]
+        assert ann["target"]["plan_id"] == "<PLAN1>"
+        assert ann["target"]["req_id"] == "<MNO>_REQ_<PLAN1>_45"
+
+    def test_reference_spec_requires_style(self):
+        with pytest.raises(AnnotationValidationError) as exc:
+            validate_annotation_file(self._payload(annotations=[
+                {"id": "ann_001", "kind": "reference_spec",
+                 "region": {"block_indices": [3]}},
+            ]))
+        assert any("style" in e for e in exc.value.errors)
+
+    def test_reference_spec_direct_with_target(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "reference_spec", "style": "direct",
+             "region": {"block_indices": [3]},
+             "target": {"spec": "3GPP TS 24.301", "section": "5.5.1.2.6"}},
+        ]))
+        ann = out["annotations"][0]
+        assert ann["style"] == "direct"
+        assert ann["target"] == {"spec": "3GPP TS 24.301", "section": "5.5.1.2.6"}
+
+    def test_reference_spec_indirect_with_target(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "reference_spec", "style": "indirect",
+             "region": {"block_indices": [3]},
+             "target": {"ref_number": 5}},
+        ]))
+        ann = out["annotations"][0]
+        assert ann["style"] == "indirect"
+        assert ann["target"] == {"ref_number": 5}
+
+    def test_reference_spec_invalid_style_rejected(self):
+        with pytest.raises(AnnotationValidationError):
+            validate_annotation_file(self._payload(annotations=[
+                {"id": "ann_001", "kind": "reference_spec", "style": "fancy",
+                 "region": {"block_indices": [3]}},
+            ]))
+
+    def test_reference_list_with_layout(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "reference_list",
+             "region": {"block_indices": [201, 202, 203]},
+             "numbering_style": "bracketed", "layout": "paragraph_list"},
+        ]))
+        ann = out["annotations"][0]
+        assert ann["numbering_style"] == "bracketed"
+        assert ann["layout"] == "paragraph_list"
+
+    def test_reference_list_entry_with_number_and_target(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "reference_list_entry",
+             "region": {"block_indices": [205]},
+             "number": 5, "title_hint_chars": 67,
+             "target": {"spec": "3GPP TS 24.301"}},
+        ]))
+        ann = out["annotations"][0]
+        assert ann["number"] == 5
+        assert ann["title_hint_chars"] == 67
+        assert ann["target"] == {"spec": "3GPP TS 24.301"}
+
+    def test_target_unknown_keys_stripped(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "reference_intra_doc",
+             "region": {"block_indices": [3]},
+             "target": {"section_number": "1.2", "future_field": "drop"}},
+        ]))
+        assert "future_field" not in out["annotations"][0]["target"]
+        assert out["annotations"][0]["target"]["section_number"] == "1.2"
+
+    def test_target_ref_number_must_be_int(self):
+        with pytest.raises(AnnotationValidationError) as exc:
+            validate_annotation_file(self._payload(annotations=[
+                {"id": "ann_001", "kind": "reference_spec", "style": "indirect",
+                 "region": {"block_indices": [3]},
+                 "target": {"ref_number": "five"}},
+            ]))
+        assert any("ref_number" in e for e in exc.value.errors)
+
+    def test_target_must_be_object_not_list(self):
+        with pytest.raises(AnnotationValidationError):
+            validate_annotation_file(self._payload(annotations=[
+                {"id": "ann_001", "kind": "reference_intra_doc",
+                 "region": {"block_indices": [3]},
+                 "target": ["not", "a", "dict"]},
+            ]))
 
     def test_block_indices_must_be_non_negative_ints(self):
         with pytest.raises(AnnotationValidationError):
@@ -282,6 +385,9 @@ class TestBootstrapRoutes:
                 {"id": "ann_002", "kind": "strikethrough",
                  "region": {"block_index": 4, "row_range": [0, 0]},
                  "subkind": "table_row"},
+                {"id": "ann_003", "kind": "reference_spec", "style": "indirect",
+                 "region": {"block_indices": [3]},
+                 "target": {"ref_number": 5}},
             ],
         }
         resp = client.post("/parse-review/bootstrap/LTEAT/annotations", json=payload)
@@ -291,12 +397,13 @@ class TestBootstrapRoutes:
         path = env_dir / "annotations" / "LTEAT_annotations.json"
         assert path.exists()
         on_disk = json.loads(path.read_text(encoding="utf-8"))
-        assert len(on_disk["annotations"]) == 2
+        assert len(on_disk["annotations"]) == 3
 
         resp = client.get("/parse-review/bootstrap/LTEAT/annotations")
         body = resp.json()
-        assert len(body["annotations"]) == 2
+        assert len(body["annotations"]) == 3
         assert body["annotations"][1]["region"]["row_range"] == [0, 0]
+        assert body["annotations"][2]["target"] == {"ref_number": 5}
 
     def test_save_validation_error_returns_400(self, web_client):
         client, env_dir = web_client
@@ -307,7 +414,7 @@ class TestBootstrapRoutes:
             "version": SCHEMA_VERSION,
             "doc_path": "<env_dir>/.../LTEAT.docx",
             "annotations": [
-                {"id": "ann_001", "kind": "references",  # missing subkind
+                {"id": "ann_001", "kind": "reference_spec",  # missing style
                  "region": {"block_indices": [1]}},
             ],
         }
@@ -315,4 +422,4 @@ class TestBootstrapRoutes:
         assert resp.status_code == 400
         body = resp.json()
         assert body["ok"] is False
-        assert any("subkind" in e for e in body["errors"])
+        assert any("style" in e for e in body["errors"])

@@ -31,7 +31,7 @@ parser/profile rules exist for it.
    - **Compute self-coverage**: TP = annotations the rule matches when re-run on the source.
    - Note: there are no negative annotations, so FP rate isn't measurable from annotations
      alone — that's caught by the feedback loop later.
-5. For `references` kind: derive separate rules per `subkind` (intra_doc / cross_doc / spec).
+5. For reference kinds: derive separate detection rules for each of the 5 reference kinds (`reference_intra_doc`, `reference_cross_doc`, `reference_spec` with `style=direct` and `style=indirect` as separate sub-rules, `reference_list` section pattern, `reference_list_entry` per-entry pattern). Indirect spec citations have a two-step pipeline path: parser detects `[N]` at source → looks up entry N in the doc's `reference_list_map` → resolver hits the standards graph. The `target` dict on annotations is **ignored for rule derivation** — it's reserved for resolver-eval ground truth.
 6. Apply mapping forward-redaction to all output values (per `02-content-safety.md`).
 
 ## Output: `BOOTSTRAP` report shape (apply mapping; max 25 lines)
@@ -41,18 +41,20 @@ BOOTSTRAP v=1 docs=<N> kinds=<M> annotations=<total>
 prov: <PLAN0>, <PLAN1>, <PLAN2>      ← which plans contributed annotations
 mapping: v=<N> entries=<N>
 
-section_heading: <regex or pattern>          sigma=<N> TP=<N>
-req_id:          <regex with placeholders>   sigma=<N> TP=<N>
-toc:             <heuristic>                 sigma=<N> TP=<N>
-strikethrough:   <heuristic>                 sigma=<N> TP=<N>
-version_history: <regex>                     sigma=<N> TP=<N>
-definitions:     <layout>                    sigma=<N> TP=<N>
-applicability:   <heuristic>                 sigma=<N> TP=<N>
-priority:        <regex>                     sigma=<N> TP=<N>
-references:
-  intra_doc:     <regex>                     sigma=<N> TP=<N>
-  cross_doc:     <regex>                     sigma=<N> TP=<N>
-  spec:          <regex>                     sigma=<N> TP=<N>
+section_heading:           <regex or pattern>     sigma=<N> TP=<N>
+req_id:                    <regex>                sigma=<N> TP=<N>
+toc:                       <heuristic>            sigma=<N> TP=<N>
+strikethrough:             <heuristic>            sigma=<N> TP=<N>
+version_history:           <regex>                sigma=<N> TP=<N>
+definitions:               <layout>               sigma=<N> TP=<N>
+applicability:             <heuristic>            sigma=<N> TP=<N>
+priority:                  <regex>                sigma=<N> TP=<N>
+reference_intra_doc:       <regex>                sigma=<N> TP=<N>
+reference_cross_doc:       <regex>                sigma=<N> TP=<N>
+reference_spec_direct:     <regex>                sigma=<N> TP=<N>
+reference_spec_indirect:   <regex>                sigma=<N> TP=<N>
+reference_list_section:    <heading regex>        sigma=<N> TP=<N>
+reference_list_entry:      <per-entry regex>      sigma=<N> TP=<N>
 
 errors: <count> validation issues (if any)
 
@@ -94,10 +96,12 @@ if more. Cline writes the full error log on-prem.
 - **definitions**: layout description + column-header detection.
 - **applicability**: position + content-shape (typically a parenthesized tag list).
 - **priority**: regex or position-based marker.
-- **references**:
-  - intra_doc: regex matching section-number or req-id within the same doc's plan
-  - cross_doc: regex matching plan-prefixed reference shape
-  - spec: regex matching `3GPP TS X.Y, Section Z` and similar spec citation shapes
+- **reference_intra_doc**: regex matching section-number or req-id within the same doc's plan
+- **reference_cross_doc**: regex matching plan-prefixed reference shape
+- **reference_spec** (style=direct): regex matching `3GPP TS X.Y[, §Z]` and similar inline spec citation shapes
+- **reference_spec** (style=indirect): regex matching bracketed/parenthesized numbered citations (`[5]`, `(5)`, etc) — derive separately from the direct pattern; report as `reference_spec_indirect` in the BOOTSTRAP block
+- **reference_list**: section-heading regex (`^References$|^Bibliography$|...`) plus a layout hint (paragraph_list / two_col_table). Mirrors `definitions` — Teacher LLM will wire this to a `reference_list_map` in the parsed tree, parallel to `definitions_map`.
+- **reference_list_entry**: per-entry regex with capture groups for `(number, spec, [optional section])`. Used by the parser to populate `reference_list_map`. The `target` field on annotations (when present) is resolver-eval ground truth, not rule-derivation input.
 
 ## Constraints
 

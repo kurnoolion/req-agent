@@ -32,7 +32,11 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
   - `render_docx_html(file_path) -> str` — emits an HTML fragment for the Bootstrap annotation harness. Walks docx body in `DOCXExtractor`'s order and applies the same skip rules (empty paragraphs, degenerate tables) so every emitted element's `data-block-idx` matches the IR's `ContentBlock.position.index`. Tables also emit `data-row-idx` per body row for row-range annotations.
 - Annotation schema (bootstrap_schema.py):
   - `validate_annotation_file(payload) -> dict` — server-side validator for `<env_dir>/annotations/<plan>_annotations.json` per `cline-playbooks/annotation-schema.md`; returns sanitized payload (extra fields stripped) or raises `AnnotationValidationError` with a per-field error list.
-  - `KINDS`, `REFERENCE_SUBKINDS`, `STRIKETHROUGH_SUBKINDS`, `TOC_PATTERN_HINTS`, `DEFINITIONS_LAYOUTS`, `REQ_ID_PLACEMENTS`, `APPLICABILITY_POSITIONS`, `VERSION_HISTORY_SUBTYPES`, `REFERENCE_TARGET_KINDS`, `STRIKETHROUGH_VISUALS`, `NOTES_MAX_CHARS`, `SCHEMA_VERSION` — authoritative enum / cap constants.
+  - `KINDS` — 13 kinds: `section_heading`, `req_id`, `toc`, `strikethrough`, `version_history`, `definitions`, `applicability`, `priority`, plus 5 reference kinds (`reference_intra_doc`, `reference_cross_doc`, `reference_spec`, `reference_list`, `reference_list_entry`).
+  - `SPEC_REFERENCE_STYLES` (`direct` / `indirect`) — required field for `reference_spec` kind.
+  - `REFERENCE_LIST_NUMBERING_STYLES`, `REFERENCE_LIST_LAYOUTS`, `STRIKETHROUGH_SUBKINDS`, `STRIKETHROUGH_VISUALS`, `TOC_PATTERN_HINTS`, `DEFINITIONS_LAYOUTS`, `REQ_ID_PLACEMENTS`, `APPLICABILITY_POSITIONS`, `VERSION_HISTORY_SUBTYPES` — authoritative enum constants.
+  - `TARGET_KEYS_BY_KIND` — per-kind allowed keys for the optional ground-truth `target` dict (intra_doc: section_number/req_id; cross_doc: +plan_id; reference_spec: spec/section/ref_number; reference_list_entry: spec/section). Unknown keys silently stripped on save.
+  - `NOTES_MAX_CHARS`, `SCHEMA_VERSION` — caps.
   - `AnnotationValidationError` — raised on validation failure; carries `errors: list[str]`.
 - `MetricsMiddleware` (middleware.py) — captures every request's timing and error count; fire-and-forget
 - `PathMapper(mappings)` (path_mapper.py) — `to_linux()`, `to_windows()`; translates Windows UNC paths to Linux mount points
@@ -55,6 +59,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - **Markdown renderer strips dangerous HTML before parsing**: `render_markdown` removes `<script>` / `<style>` / `<iframe>` / `<object>` / `<embed>` / `<svg>` / `<math>` tags (paired and self-closing) before invoking the markdown library. LLM answer text on the Test page goes through this filter; raw chunk text in the click-to-expand fragment view deliberately doesn't (the indexed body may contain literal markdown syntax that's part of the requirement, e.g. `**MUST**` in 3GPP-style specs).
 - **Logging configured at module-import time**, not just inside the `if __name__ == "__main__":` launcher block. Required because `uvicorn.run(reload=True)` spawns a worker that re-imports the module but never executes the launcher block; without basicConfig at import, the worker's loggers default to WARNING and silently drop every `logger.info(...)` in the request path (verification lines like `Web LLM resolved`, `[Query knobs]`, `ConfigStore active` would never reach stderr).
 - **Bootstrap-tab DOCX renderer is index-aligned with the extractor**: `docx_html_render.render_docx_html` walks the docx body in `DOCXExtractor.extract`'s order and applies the same skip rules (empty paragraphs and degenerate single-empty-column tables consume no index). This guarantees every `data-block-idx` in the rendered HTML corresponds to a real `ContentBlock.position.index` in the saved IR — a regression here would silently misalign every annotation.
+- **Bootstrap reference detection is decoupled from resolution**: annotation kinds capture the *source-token shape* of references (5 kinds: `reference_intra_doc`, `reference_cross_doc`, `reference_spec` with `style=direct|indirect`, `reference_list`, `reference_list_entry`). The optional `target` dict is **ignored by Cline's rule derivation** — it carries resolver-eval ground truth only. Indirect spec citations (`[5]`) flow through a two-step path the parser already supports for `definitions`: section-level annotation marks the references list; per-entry pattern populates a `reference_list_map: dict[int, {spec, section?}]` on the parsed tree; the resolver looks up the bracketed number in that map at resolve time. This split keeps detection rules portable across MNOs and lets resolution evolve independently.
 
 **Key choices**
 - FastAPI over Streamlit / Gradio because the UI needs fine-grained routing (corrections, files, jobs) and reverse-proxy deployment — SESSION_SUMMARY §19.
@@ -91,6 +96,7 @@ _Alphabetical, regenerated by regen-map._
 
 `bootstrap_schema.py`
 - `_apply_kind_fields` — function — internal — Copy kind-specific optional fields from *ann* to *out* with validation.
+- `_apply_target` — function — internal — Validate and copy the optional `target` dict for reference-* kinds.
 - `_Ctx` — dataclass — internal
   - `err` — method — internal
 - `_opt_bool` — function — internal
@@ -105,12 +111,14 @@ _Alphabetical, regenerated by regen-map._
 - `DEFINITIONS_LAYOUTS` — constant — pub
 - `KINDS` — constant — pub
 - `NOTES_MAX_CHARS` — constant — pub
-- `REFERENCE_SUBKINDS` — constant — pub
-- `REFERENCE_TARGET_KINDS` — constant — pub
+- `REFERENCE_LIST_LAYOUTS` — constant — pub
+- `REFERENCE_LIST_NUMBERING_STYLES` — constant — pub
 - `REQ_ID_PLACEMENTS` — constant — pub
 - `SCHEMA_VERSION` — constant — pub
+- `SPEC_REFERENCE_STYLES` — constant — pub
 - `STRIKETHROUGH_SUBKINDS` — constant — pub
 - `STRIKETHROUGH_VISUALS` — constant — pub
+- `TARGET_KEYS_BY_KIND` — constant — pub
 - `TOC_PATTERN_HINTS` — constant — pub
 - `validate_annotation_file` — function — pub — Validate a full annotation-file payload and return the sanitized form.
 - `VERSION_HISTORY_SUBTYPES` — constant — pub

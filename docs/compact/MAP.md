@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-05-08 by regen-map. Do not hand-edit.
+Generated 2026-05-09 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -183,6 +183,7 @@ nora/
 │   │   │   └── stages.py                              # Pipeline stage functions.
 │   │   ├── profiler/                                  # Standalone, LLM-free document-structure profiler.
 │   │   │   ├── __init__.py
+│   │   │   ├── ANNOTATIONS.md                         # Human-annotator's guide to the 13 annotation kinds the Bootstrap UI captures.
 │   │   │   ├── MODULE.md
 │   │   │   ├── profile_cli.py                         # CLI entry point for the DocumentProfiler.
 │   │   │   ├── profile_debug.py                       # Profile debug — inspect / bootstrap / validate document profiles.

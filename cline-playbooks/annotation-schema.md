@@ -110,16 +110,67 @@ A priority marker (mandatory / optional / conditional / etc).
 Optional fields:
 - `position`: same as applicability
 
-### `references`
+### `reference_intra_doc`
 
-A reference to another section, plan, or public spec.
-
-Required additional field:
-- `subkind`: `"intra_doc"` | `"cross_doc"` | `"spec"`
+A reference to another section or requirement *within the same document*.
 
 Optional fields:
-- `target_kind`: `"section_number"` | `"req_id"` | `"spec_ts_section"`
 - `inline`: bool (true if the reference is inline within a paragraph)
+- `target`: optional ground-truth dict with allowed keys:
+  - `section_number`: e.g. `"3.5.2.1"`
+  - `req_id`: e.g. `"<MNO>_REQ_<PLAN>_45"` (use placeholders per redaction protocol)
+
+### `reference_cross_doc`
+
+A reference to a requirement or section in a *different* document (other plan / MNO / release).
+
+Optional fields:
+- `inline`: bool
+- `target`: optional ground-truth dict with allowed keys:
+  - `plan_id`: e.g. `"<PLAN1>"`
+  - `section_number`: e.g. `"4.2"`
+  - `req_id`: e.g. `"<MNO>_REQ_<PLAN1>_45"`
+
+### `reference_spec`
+
+A reference to a public standards document (3GPP, GSMA, ETSI, …).
+
+**Required** additional field:
+- `style`:
+  - `"direct"` — inline spec citation, e.g. `"3GPP TS 24.301, §5.5.1.2.6"`
+  - `"indirect"` — bracketed numbered citation, e.g. `"[5]"`, that resolves via the doc's references list
+
+Optional fields:
+- `inline`: bool
+- `target`: optional ground-truth dict with allowed keys:
+  - `spec`: e.g. `"3GPP TS 24.301"` (use for `style="direct"`)
+  - `section`: e.g. `"5.5.1.2.6"` (use for `style="direct"`)
+  - `ref_number`: integer (use for `style="indirect"` — points at the references-list entry by number)
+
+### `reference_list`
+
+The references / bibliography section that holds numbered entries indirect spec
+citations resolve through. Mirrors the `definitions` pattern: section-level
+annotation marks where the lookup table lives; entry rows are derived by the
+parser using a profile-derived per-entry pattern.
+
+Optional fields:
+- `numbering_style`: `"bracketed"` (`[1] [2] ...`) | `"plain"` (`1. 2. ...`) | `"parenthesized"` (`(1) (2) ...`)
+- `layout`: `"paragraph_list"` | `"two_col_table"` | `"three_col_table"`
+
+### `reference_list_entry`
+
+An individual entry inside a `reference_list` section. Optional ground-truth
+annotation: marking 2-3 example entries per doc gives Cline enough variety to
+derive the per-entry parsing rule, and provides resolver-eval ground truth for
+the spec each entry maps to.
+
+Optional fields:
+- `number`: the entry's number in the list (e.g., `5` for `[5]`)
+- `title_hint_chars`: integer length-only signal (the entry's title text NEVER appears in the annotation)
+- `target`: optional ground-truth dict with allowed keys:
+  - `spec`: e.g. `"3GPP TS 24.301"`
+  - `section`: e.g. `"5.5.1.2.6"` (when the entry pins a default section)
 
 ## Region format (per doc type)
 

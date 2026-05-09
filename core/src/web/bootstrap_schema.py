@@ -9,6 +9,19 @@ annotations, or ``block_index`` + ``row_range`` for row-precise table
 annotations); kind-specific optional fields use allowed enum values; ``id``
 values are unique within the file; ``notes`` stays under 30 chars.
 
+References split into three top-level kinds: ``reference_intra_doc`` (same
+doc), ``reference_cross_doc`` (other plan/MNO), ``reference_spec`` (public
+standard). Spec citations carry a required ``style`` field (``direct`` for
+inline ``3GPP TS X.Y §Z`` shape; ``indirect`` for bracketed citations like
+``[5]`` that resolve via the doc's references list). Two supporting kinds
+mirror the definitions/glossary pattern: ``reference_list`` marks the
+bibliography section; ``reference_list_entry`` marks individual numbered
+entries (optional ground truth for resolver eval).
+
+Each reference kind accepts an optional ``target`` dict with kind-specific
+allowed keys; unknown keys are silently stripped. Target is purely
+informational for rule derivation — it becomes resolver-eval ground truth.
+
 Validation returns the sanitized payload (extra unknown fields stripped per
 kind) or raises :class:`AnnotationValidationError` listing every issue.
 """
@@ -30,14 +43,23 @@ KINDS: tuple[str, ...] = (
     "definitions",
     "applicability",
     "priority",
-    "references",
+    "reference_intra_doc",
+    "reference_cross_doc",
+    "reference_spec",
+    "reference_list",
+    "reference_list_entry",
 )
 
-REFERENCE_SUBKINDS: tuple[str, ...] = ("intra_doc", "cross_doc", "spec")
-REFERENCE_TARGET_KINDS: tuple[str, ...] = (
-    "section_number",
-    "req_id",
-    "spec_ts_section",
+SPEC_REFERENCE_STYLES: tuple[str, ...] = ("direct", "indirect")
+REFERENCE_LIST_NUMBERING_STYLES: tuple[str, ...] = (
+    "bracketed",
+    "plain",
+    "parenthesized",
+)
+REFERENCE_LIST_LAYOUTS: tuple[str, ...] = (
+    "paragraph_list",
+    "two_col_table",
+    "three_col_table",
 )
 STRIKETHROUGH_SUBKINDS: tuple[str, ...] = (
     "full_paragraph",
@@ -64,6 +86,15 @@ APPLICABILITY_POSITIONS: tuple[str, ...] = (
     "separate_block",
 )
 VERSION_HISTORY_SUBTYPES: tuple[str, ...] = ("heading_only", "full_block")
+
+# Per-kind allowed keys for the optional `target` dict. Type is the JSON
+# scalar type (`str` or `int`); unknown keys are silently stripped on save.
+TARGET_KEYS_BY_KIND: dict[str, dict[str, type]] = {
+    "reference_intra_doc": {"section_number": str, "req_id": str},
+    "reference_cross_doc": {"plan_id": str, "section_number": str, "req_id": str},
+    "reference_spec": {"spec": str, "section": str, "ref_number": int},
+    "reference_list_entry": {"spec": str, "section": str},
+}
 
 
 class AnnotationValidationError(ValueError):
@@ -267,17 +298,36 @@ def _apply_kind_fields(
     elif kind == "priority":
         _opt_enum(ann, out, "position", APPLICABILITY_POSITIONS, prefix, ctx)
 
-    elif kind == "references":
-        sub = ann.get("subkind")
-        if sub not in REFERENCE_SUBKINDS:
+    elif kind == "reference_intra_doc":
+        _opt_bool(ann, out, "inline", prefix, ctx)
+        _apply_target(ann, out, prefix, ctx, kind)
+
+    elif kind == "reference_cross_doc":
+        _opt_bool(ann, out, "inline", prefix, ctx)
+        _apply_target(ann, out, prefix, ctx, kind)
+
+    elif kind == "reference_spec":
+        style = ann.get("style")
+        if style not in SPEC_REFERENCE_STYLES:
             ctx.err(
-                f"{prefix}.subkind must be one of {REFERENCE_SUBKINDS} for "
-                f"kind='references'; got {sub!r}"
+                f"{prefix}.style must be one of {SPEC_REFERENCE_STYLES} for "
+                f"kind='reference_spec'; got {style!r}"
             )
         else:
-            out["subkind"] = sub
-        _opt_enum(ann, out, "target_kind", REFERENCE_TARGET_KINDS, prefix, ctx)
+            out["style"] = style
         _opt_bool(ann, out, "inline", prefix, ctx)
+        _apply_target(ann, out, prefix, ctx, kind)
+
+    elif kind == "reference_list":
+        _opt_enum(
+            ann, out, "numbering_style", REFERENCE_LIST_NUMBERING_STYLES, prefix, ctx
+        )
+        _opt_enum(ann, out, "layout", REFERENCE_LIST_LAYOUTS, prefix, ctx)
+
+    elif kind == "reference_list_entry":
+        _opt_int(ann, out, "number", prefix, ctx, lo=0)
+        _opt_int(ann, out, "title_hint_chars", prefix, ctx, lo=0)
+        _apply_target(ann, out, prefix, ctx, kind)
 
 
 # ---------------------------------------------------------------------------
@@ -329,3 +379,35 @@ def _opt_enum(ann, out, key, allowed, prefix, ctx):
         ctx.err(f"{prefix}.{key} must be one of {allowed}; got {v!r}")
         return
     out[key] = v
+
+
+def _apply_target(ann, out, prefix, ctx, kind):
+    """Validate and copy the optional `target` dict for reference-* kinds.
+
+    Unknown keys silently stripped; type-mismatched values flagged.
+    """
+    target = ann.get("target")
+    if target is None:
+        return
+    if not isinstance(target, dict):
+        ctx.err(f"{prefix}.target must be an object")
+        return
+    allowed = TARGET_KEYS_BY_KIND.get(kind, {})
+    clean: dict[str, Any] = {}
+    for k, v in target.items():
+        if k not in allowed:
+            continue  # silently drop unknown keys (forward compatibility)
+        expected_type = allowed[k]
+        if expected_type is int:
+            if not isinstance(v, int) or isinstance(v, bool):
+                ctx.err(f"{prefix}.target.{k} must be an integer")
+                continue
+            clean[k] = v
+        else:  # str
+            if not isinstance(v, str):
+                ctx.err(f"{prefix}.target.{k} must be a string")
+                continue
+            if v:
+                clean[k] = v
+    if clean:
+        out["target"] = clean

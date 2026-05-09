@@ -78,7 +78,7 @@
 </div><!-- /bs-panes -->
 
 <!-- Kind picker (popover, hidden by default) -->
-<div id="bs-kind-menu" class="ctx-menu d-none">
+<div id="bs-kind-menu" class="ctx-menu d-none" style="min-width:240px;">
     <div class="ctx-menu-hdr">Annotate as</div>
     <div class="ctx-menu-item" data-kind="section_heading"><i class="bi bi-bookmark"></i>section_heading</div>
     <div class="ctx-menu-item" data-kind="req_id"><i class="bi bi-hash"></i>req_id</div>
@@ -88,7 +88,13 @@
     <div class="ctx-menu-item" data-kind="definitions"><i class="bi bi-book"></i>definitions</div>
     <div class="ctx-menu-item" data-kind="applicability"><i class="bi bi-funnel"></i>applicability</div>
     <div class="ctx-menu-item" data-kind="priority"><i class="bi bi-flag"></i>priority</div>
-    <div class="ctx-menu-item" data-kind="references"><i class="bi bi-link-45deg"></i>references</div>
+    <div class="ctx-menu-divider"></div>
+    <div class="ctx-menu-hdr">References</div>
+    <div class="ctx-menu-item" data-kind="reference_intra_doc"><i class="bi bi-link"></i>reference_intra_doc</div>
+    <div class="ctx-menu-item" data-kind="reference_cross_doc"><i class="bi bi-link-45deg"></i>reference_cross_doc</div>
+    <div class="ctx-menu-item" data-kind="reference_spec"><i class="bi bi-journal-bookmark"></i>reference_spec</div>
+    <div class="ctx-menu-item" data-kind="reference_list"><i class="bi bi-list-columns"></i>reference_list</div>
+    <div class="ctx-menu-item" data-kind="reference_list_entry"><i class="bi bi-card-list"></i>reference_list_entry</div>
     <div class="ctx-menu-divider"></div>
     <div class="ctx-menu-item" data-kind="__cancel"><i class="bi bi-x"></i>Cancel</div>
 </div>
