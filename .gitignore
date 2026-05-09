@@ -30,6 +30,10 @@ data/
 # Extracted images (byproduct of PDF extraction)
 extracted_images/
 
+# HuggingFace model cache tarballs — too large for the repo (80 MB+);
+# pulled via the standard HF download path on first use.
+assets/hf_cache/
+
 # Pytest
 .pytest_cache/
 
