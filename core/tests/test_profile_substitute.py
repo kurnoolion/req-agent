@@ -84,9 +84,9 @@ class TestSubstituteGeneric:
         p = DocumentProfile(
             requirement_id=RequirementIdPattern(pattern="<MNO0>_REQ_(<PLAN0>|<PLAN>)"),
         )
-        out = substitute_placeholders(p, {"MNO0": "VZ", "PLAN0": "<PLAN0>"})
-        # <PLAN0> resolves to <PLAN0>; <PLAN> falls through to the generic class.
-        assert out.requirement_id.pattern == "VZ_REQ_(<PLAN0>|[A-Z0-9_]+)"
+        out = substitute_placeholders(p, {"MNO0": "VZ", "PLAN0": "PLANX"})
+        # <PLAN0> resolves to PLANX; <PLAN> falls through to the generic class.
+        assert out.requirement_id.pattern == "VZ_REQ_(PLANX|[A-Z0-9_]+)"
 
 
 class TestSubstituteAcrossFields:
@@ -145,8 +145,8 @@ class TestUnresolvedPlaceholderWarns:
 class TestNormalizeMapping:
     def test_snapshot_shape_passthrough(self):
         # `{"MNO0": "VZ"}` — bare placeholder name, real value (snapshot shape)
-        assert _normalize_mapping({"MNO0": "VZ", "PLAN0": "<PLAN0>"}) == {
-            "MNO0": "VZ", "PLAN0": "<PLAN0>",
+        assert _normalize_mapping({"MNO0": "VZ", "PLAN0": "PLANX"}) == {
+            "MNO0": "VZ", "PLAN0": "PLANX",
         }
 
     def test_live_shape_inverted_correctly(self):
@@ -155,17 +155,17 @@ class TestNormalizeMapping:
 
     def test_cline_forward_redaction_shape_inverted(self):
         # `{"VZ": "<MNO0>"}` — real value → placeholder (Cline live forward-redaction shape)
-        assert _normalize_mapping({"VZ": "<MNO0>", "<PLAN0>": "<PLAN0>"}) == {
-            "MNO0": "VZ", "PLAN0": "<PLAN0>",
+        assert _normalize_mapping({"VZ": "<MNO0>", "PLANX": "<PLAN0>"}) == {
+            "MNO0": "VZ", "PLAN0": "PLANX",
         }
 
     def test_mixed_shapes_both_handled(self):
         result = _normalize_mapping({
             "<MNO0>": "VZ",        # bracketed key
-            "<PLAN0>": "<PLAN0>",   # live forward
+            "PLANX": "<PLAN0>",    # live forward
             "REL0": "Feb2026",     # snapshot bare
         })
-        assert result == {"MNO0": "VZ", "PLAN0": "<PLAN0>", "REL0": "Feb2026"}
+        assert result == {"MNO0": "VZ", "PLAN0": "PLANX", "REL0": "Feb2026"}
 
 
 # ---------------------------------------------------------------------------
