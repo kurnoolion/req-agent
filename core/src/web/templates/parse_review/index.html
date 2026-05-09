@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}Parse Review — NORA{% endblock %}
+{% block title %}Parse — NORA{% endblock %}
 {% block nav_parse_review %}active{% endblock %}
 
 {% block extra_head %}
@@ -43,69 +43,149 @@
 .review-block table { font-size: .72rem; }
 /* Sync-scroll highlight on active pane */
 .pane-body.scroll-source { outline: 2px solid #3b82f620; }
+/* Bootstrap tab styling */
+.bs-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; border: 1px solid #dee2e6; border-radius: 4px; }
+.bs-block { padding: 4px 6px; margin-bottom: 3px; border-radius: 3px; border: 1px solid transparent; cursor: default; position: relative; }
+.bs-block:hover { border-color: #ced4da; background: #f8fafc; }
+.bs-block.bs-selected { border-color: #2563eb; background: #dbeafe40; }
+.bs-block.bs-anchor { border-color: #2563eb; background: #dbeafe; box-shadow: inset 0 0 0 1px #2563eb; }
+.bs-block-actions { position: absolute; right: 4px; top: 2px; display: none; gap: 2px; }
+.bs-block:hover .bs-block-actions { display: flex; }
+.bs-idx { font-family: monospace; font-size: .65rem; color: #94a3b8; margin-right: 4px; }
+.bs-row-pick { cursor: pointer; }
+.bs-row-pick:hover { background: #f0f9ff; }
+.bs-row-pick.bs-row-selected { background: #dbeafe; }
+.bs-row-pick.bs-row-anchor { background: #2563eb; color: #fff; }
+.bs-anns-list { font-size: .78rem; }
+.bs-ann-item { padding: 4px 6px; border-bottom: 1px solid #f1f5f9; cursor: pointer; display: flex; gap: 4px; align-items: start; }
+.bs-ann-item:hover { background: #f8fafc; }
+.bs-ann-kind { font-weight: 600; font-size: .68rem; padding: 1px 5px; border-radius: 3px; background: #e0e7ff; color: #3730a3; white-space: nowrap; }
+.bs-ann-kind-section_heading { background: #d1fae5; color: #065f46; }
+.bs-ann-kind-req_id          { background: #ede9fe; color: #5b21b6; }
+.bs-ann-kind-toc             { background: #dbeafe; color: #1e40af; }
+.bs-ann-kind-strikethrough   { background: #fee2e2; color: #991b1b; }
+.bs-ann-kind-version_history { background: #ffedd5; color: #9a3412; }
+.bs-ann-kind-definitions     { background: #d1fae5; color: #047857; }
+.bs-ann-kind-applicability   { background: #fef3c7; color: #92400e; }
+.bs-ann-kind-priority        { background: #fce7f3; color: #9d174d; }
+.bs-ann-kind-references      { background: #e0e7ff; color: #3730a3; }
+.bs-ann-region { font-family: monospace; font-size: .68rem; color: #64748b; }
+.bs-ann-meta { font-size: .68rem; color: #475569; }
+.docx-block { margin: 4px 0; padding: 2px 4px; border-radius: 3px; cursor: default; }
+.docx-block:hover { background: #f8fafc; outline: 1px solid #cbd5e1; }
+.docx-block.bs-selected { background: #dbeafe40; outline: 1px solid #2563eb; }
+.docx-block.bs-anchor { background: #dbeafe; outline: 1px solid #2563eb; }
+.docx-bold { font-weight: 600; }
+.docx-italic { font-style: italic; }
+.docx-struck { text-decoration: line-through; color: #6b7280; }
+.docx-table { font-size: .72rem; border-collapse: collapse; width: 100%; }
+.docx-table th, .docx-table td { border: 1px solid #cbd5e1; padding: 2px 5px; vertical-align: top; }
+.docx-table th { background: #f1f5f9; }
+.docx-image { font-size: .7rem; color: #94a3b8; padding: 4px; border: 1px dashed #cbd5e1; text-align: center; }
+.kind-form-row { display: grid; grid-template-columns: max-content 1fr; gap: 4px 8px; align-items: center; font-size: .78rem; }
+.kind-form-row label { white-space: nowrap; color: #475569; }
+.kind-form-row input, .kind-form-row select { font-size: .78rem; padding: 2px 4px; }
 </style>
 {% endblock %}
 
 {% block content %}
 <div class="d-flex align-items-center justify-content-between pt-3 pb-2 mb-2 border-bottom">
-    <h1 class="h5 mb-0"><i class="bi bi-clipboard-check me-2"></i>Parse Review</h1>
+    <h1 class="h5 mb-0"><i class="bi bi-clipboard-check me-2"></i>Parse</h1>
 </div>
 
-{% if log_dir_missing %}
-<div class="alert alert-warning">
-    No parse output found. Run the <strong>extract</strong> and <strong>parse</strong> stages first.
-</div>
-{% elif not docs %}
-<div class="alert alert-info">No parsed documents found.</div>
-{% else %}
+<ul class="nav nav-tabs mb-2" id="parse-tabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-bootstrap-btn" data-bs-toggle="tab" data-bs-target="#tab-bootstrap" type="button" role="tab">
+            <i class="bi bi-tags me-1"></i>Bootstrap
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-review-btn" data-bs-toggle="tab" data-bs-target="#tab-review" type="button" role="tab">
+            <i class="bi bi-clipboard-check me-1"></i>Review
+        </button>
+    </li>
+</ul>
 
-<!-- Selector -->
-<div class="d-flex align-items-center gap-3 mb-2">
-    <div style="max-width:320px; flex:1;">
-        <select id="doc-select" class="form-select form-select-sm">
-            <option value="">— select document —</option>
-            {% for doc in docs %}
-            <option value="{{ doc }}">{{ doc }}</option>
-            {% endfor %}
-        </select>
+<div class="tab-content" id="parse-tab-content">
+
+    <!-- ===== BOOTSTRAP ===== -->
+    <div class="tab-pane fade show active" id="tab-bootstrap" role="tabpanel">
+        <div class="d-flex align-items-center gap-2 mb-2">
+            <div style="max-width:380px; flex:1;">
+                <select id="bs-doc-select" class="form-select form-select-sm">
+                    <option value="">— loading docs —</option>
+                </select>
+            </div>
+            <span id="bs-doc-info" class="text-muted small"></span>
+        </div>
+        <div id="bs-area">
+            <p class="text-muted small">Select a DOCX to start annotating. The dropdown lists files under
+                <code>&lt;env_dir&gt;/input/&lt;MNO&gt;/&lt;RELEASE&gt;/</code> that have an extract IR
+                (run the extract stage first if a doc is missing).</p>
+        </div>
     </div>
-    <span class="text-muted small">Select a document to open the 3-pane review.</span>
+
+    <!-- ===== REVIEW (existing) ===== -->
+    <div class="tab-pane fade" id="tab-review" role="tabpanel">
+        {% if log_dir_missing %}
+        <div class="alert alert-warning">
+            No parse output found. Run the <strong>extract</strong> and <strong>parse</strong> stages first.
+        </div>
+        {% elif not docs %}
+        <div class="alert alert-info">No parsed documents found.</div>
+        {% else %}
+        <div class="d-flex align-items-center gap-3 mb-2">
+            <div style="max-width:320px; flex:1;">
+                <select id="doc-select" class="form-select form-select-sm">
+                    <option value="">— select document —</option>
+                    {% for doc in docs %}
+                    <option value="{{ doc }}">{{ doc }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <span class="text-muted small">Select a document to open the 3-pane review.</span>
+        </div>
+        <div id="review-area">
+            <p class="text-muted small">No document selected.</p>
+        </div>
+        {% endif %}
+    </div>
+
 </div>
 
-<!-- 3-pane area — loaded via fetch() into this div -->
-<div id="review-area">
-    <p class="text-muted small">No document selected.</p>
-</div>
-
-{% endif %}
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="{{ root_path }}/static/js/parse_review.js"></script>
+<script src="{{ root_path }}/static/js/parse_bootstrap.js"></script>
 <script>
 (function () {
-    const sel = document.getElementById('doc-select');
-    if (!sel) return;
     const ROOT = document.body.dataset.rootPath || '';
-    sel.addEventListener('change', function () {
-        const docId = this.value;
-        if (!docId) {
-            document.getElementById('review-area').innerHTML = '<p class="text-muted small">No document selected.</p>';
-            return;
-        }
-        document.getElementById('review-area').innerHTML =
-            '<div class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading…</div>';
-        fetch(ROOT + '/parse-review/' + encodeURIComponent(docId) + '/view')
-            .then(r => r.text())
-            .then(html => {
-                document.getElementById('review-area').innerHTML = html;
-                if (window.initParseReview) window.initParseReview(docId, ROOT);
-            })
-            .catch(err => {
-                document.getElementById('review-area').innerHTML =
-                    '<div class="alert alert-danger">Failed to load: ' + err + '</div>';
-            });
-    });
+    // ----- Review tab wiring -----
+    const sel = document.getElementById('doc-select');
+    if (sel) {
+        sel.addEventListener('change', function () {
+            const docId = this.value;
+            if (!docId) {
+                document.getElementById('review-area').innerHTML = '<p class="text-muted small">No document selected.</p>';
+                return;
+            }
+            document.getElementById('review-area').innerHTML =
+                '<div class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading…</div>';
+            fetch(ROOT + '/parse-review/' + encodeURIComponent(docId) + '/view')
+                .then(r => r.text())
+                .then(html => {
+                    document.getElementById('review-area').innerHTML = html;
+                    if (window.initParseReview) window.initParseReview(docId, ROOT);
+                })
+                .catch(err => {
+                    document.getElementById('review-area').innerHTML =
+                        '<div class="alert alert-danger">Failed to load: ' + err + '</div>';
+                });
+        });
+    }
+    // ----- Bootstrap tab wiring -----
+    if (window.initParseBootstrap) window.initParseBootstrap(ROOT);
 })();
 </script>
 {% endblock %}

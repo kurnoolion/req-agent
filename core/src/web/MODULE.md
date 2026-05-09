@@ -28,10 +28,16 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
   - `find_field(module, key) -> ConfigField | None`, `all_fields() -> list[ConfigField]` — accessors.
 - Markdown rendering (markdown_render.py):
   - `render_markdown(text) -> Markup` — converts LLM answer markdown to Jinja-safe HTML (headers, bullets, **bold**, *italic*, fenced code, tables, `nl2br`). Registered as the `md` Jinja filter on `templates.env`. Strips dangerous tags defensively before parsing (script / style / iframe / object / embed / svg-with-onclick / math).
+- DOCX preview rendering (docx_html_render.py):
+  - `render_docx_html(file_path) -> str` — emits an HTML fragment for the Bootstrap annotation harness. Walks docx body in `DOCXExtractor`'s order and applies the same skip rules (empty paragraphs, degenerate tables) so every emitted element's `data-block-idx` matches the IR's `ContentBlock.position.index`. Tables also emit `data-row-idx` per body row for row-range annotations.
+- Annotation schema (bootstrap_schema.py):
+  - `validate_annotation_file(payload) -> dict` — server-side validator for `<env_dir>/annotations/<plan>_annotations.json` per `cline-playbooks/annotation-schema.md`; returns sanitized payload (extra fields stripped) or raises `AnnotationValidationError` with a per-field error list.
+  - `KINDS`, `REFERENCE_SUBKINDS`, `STRIKETHROUGH_SUBKINDS`, `TOC_PATTERN_HINTS`, `DEFINITIONS_LAYOUTS`, `REQ_ID_PLACEMENTS`, `APPLICABILITY_POSITIONS`, `VERSION_HISTORY_SUBTYPES`, `REFERENCE_TARGET_KINDS`, `STRIKETHROUGH_VISUALS`, `NOTES_MAX_CHARS`, `SCHEMA_VERSION` — authoritative enum / cap constants.
+  - `AnnotationValidationError` — raised on validation failure; carries `errors: list[str]`.
 - `MetricsMiddleware` (middleware.py) — captures every request's timing and error count; fire-and-forget
 - `PathMapper(mappings)` (path_mapper.py) — `to_linux()`, `to_windows()`; translates Windows UNC paths to Linux mount points
 - `ResourceSampler` (resource_sampler.py) — background task sampling CPU / memory / disk / GPU via `/proc` and `nvidia-smi` (no `psutil` dependency)
-- Routers (routes/): dashboard, environments, pipeline, jobs, query, corrections, files, metrics_route, parse_review (Parse Review UI), req_browser (Requirement Browser), resolve_review (Resolve Review UI), playground (Test page — `POST /api/test/ask`, `POST /api/test/synthesize-group` for D-049 disambiguation user-pick path, `POST /api/test/feedback`), config_route (Config page — `GET /config`, `POST /api/config/save`; D-053) — each mounted via `app.include_router`
+- Routers (routes/): dashboard, environments, pipeline, jobs, query, corrections, files, metrics_route, parse_review (Parse page — two tabs: **Bootstrap** annotation harness with `GET /parse-review/bootstrap/docs`, `GET /parse-review/bootstrap/<doc_id>/view`, `GET|POST /parse-review/bootstrap/<doc_id>/annotations` writing `<env_dir>/annotations/<plan>_annotations.json` atomically; **Review** post-parse 3-pane), req_browser (Requirement Browser), resolve_review (Resolve Review UI), playground (Test page — `POST /api/test/ask`, `POST /api/test/synthesize-group` for D-049 disambiguation user-pick path, `POST /api/test/feedback`), config_route (Config page — `GET /config`, `POST /api/config/save`; D-053) — each mounted via `app.include_router`
 - App state (set up in `lifespan`): `app.state.job_queue`, `app.state.metrics`, `app.state.feedback_store`, `app.state.path_mapper`, `app.state.config_store` (ConfigStore | None — None when `--config-db` is unset), `app.state.query_pipeline` (cached after first build; saving via `/api/config/save` sets it back to None so the next query rebuilds with the new resolved values).
 - CLI launcher (`if __name__ == "__main__"` in app.py): `--env-dir`, `--host`, `--port`, `--jobs-db`, `--metrics-db`, `--feedback-db`, `--config-db` (each maps to a corresponding `NORA_*_DB` / `ENV_DIR` env var so the uvicorn-reload worker re-import sees the same resolution).
 - Static + Templates: vendored under `static/` and `templates/` — no CDN at runtime
@@ -48,6 +54,7 @@ FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008). Provides p
 - **Config-page DB layer in resolver chain** [D-053]: when `--config-db` / `$NORA_CONFIG_DB` is set, lifespan startup instantiates `ConfigStore` and calls `apply_to_caches()`, which overlays every stored value onto the cached `LLMConfigFile` / `RetrievalConfig` instances. The existing `resolve_*` functions in `core/src/env/config.py` then automatically pick up the new tier — no plumbing changes elsewhere. Effective resolver chain becomes `CLI > env var > ConfigStore (DB) > config/*.json > defaults`. `POST /api/config/save` writes to the DB, calls `reapply_one` to refresh the cache, and sets `app.state.query_pipeline = None` so the next query rebuilds with the new resolved values.
 - **Markdown renderer strips dangerous HTML before parsing**: `render_markdown` removes `<script>` / `<style>` / `<iframe>` / `<object>` / `<embed>` / `<svg>` / `<math>` tags (paired and self-closing) before invoking the markdown library. LLM answer text on the Test page goes through this filter; raw chunk text in the click-to-expand fragment view deliberately doesn't (the indexed body may contain literal markdown syntax that's part of the requirement, e.g. `**MUST**` in 3GPP-style specs).
 - **Logging configured at module-import time**, not just inside the `if __name__ == "__main__":` launcher block. Required because `uvicorn.run(reload=True)` spawns a worker that re-imports the module but never executes the launcher block; without basicConfig at import, the worker's loggers default to WARNING and silently drop every `logger.info(...)` in the request path (verification lines like `Web LLM resolved`, `[Query knobs]`, `ConfigStore active` would never reach stderr).
+- **Bootstrap-tab DOCX renderer is index-aligned with the extractor**: `docx_html_render.render_docx_html` walks the docx body in `DOCXExtractor.extract`'s order and applies the same skip rules (empty paragraphs and degenerate single-empty-column tables consume no index). This guarantees every `data-block-idx` in the rendered HTML corresponds to a real `ContentBlock.position.index` in the saved IR — a regression here would silently misalign every annotation.
 
 **Key choices**
 - FastAPI over Streamlit / Gradio because the UI needs fine-grained routing (corrections, files, jobs) and reverse-proxy deployment — SESSION_SUMMARY §19.
@@ -81,6 +88,32 @@ _Alphabetical, regenerated by regen-map._
 - `templates` — constant — pub
 - `TEMPLATES_DIR` — constant — pub
 - `WEB_DIR` — constant — pub
+
+`bootstrap_schema.py`
+- `_apply_kind_fields` — function — internal — Copy kind-specific optional fields from *ann* to *out* with validation.
+- `_Ctx` — dataclass — internal
+  - `err` — method — internal
+- `_opt_bool` — function — internal
+- `_opt_enum` — function — internal
+- `_opt_int` — function — internal
+- `_opt_str` — function — internal
+- `_validate_annotation` — function — internal
+- `_validate_region` — function — internal
+- `AnnotationValidationError` — class — pub — Raised when an annotation payload fails schema validation.
+  - `__init__` — constructor — pub
+- `APPLICABILITY_POSITIONS` — constant — pub
+- `DEFINITIONS_LAYOUTS` — constant — pub
+- `KINDS` — constant — pub
+- `NOTES_MAX_CHARS` — constant — pub
+- `REFERENCE_SUBKINDS` — constant — pub
+- `REFERENCE_TARGET_KINDS` — constant — pub
+- `REQ_ID_PLACEMENTS` — constant — pub
+- `SCHEMA_VERSION` — constant — pub
+- `STRIKETHROUGH_SUBKINDS` — constant — pub
+- `STRIKETHROUGH_VISUALS` — constant — pub
+- `TOC_PATTERN_HINTS` — constant — pub
+- `validate_annotation_file` — function — pub — Validate a full annotation-file payload and return the sanitized form.
+- `VERSION_HISTORY_SUBTYPES` — constant — pub
 
 `config.py`
 - `_ENV_VAR_FEEDBACK_DB` — constant — internal
@@ -127,6 +160,15 @@ _Alphabetical, regenerated by regen-map._
 - `ConfigField` — dataclass — pub
 - `ConfigSection` — dataclass — pub
 - `find_field` — function — pub
+
+`docx_html_render.py`
+- `_count_paragraph_images` — function — internal — Count inline images inside *para* that the extractor would emit.
+- `_HEADING_STYLE_PREFIX` — constant — internal
+- `_heading_level` — function — internal
+- `_para_run_flags` — function — internal — Approximate (bold, italic, strikethrough) flags from runs.
+- `_render_paragraph` — function — internal
+- `_render_table` — function — internal
+- `render_docx_html` — function — pub — Render *file_path* as an HTML fragment with IR-aligned data attributes.
 
 `feedback_db.py`
 - `_SCHEMA` — constant — internal
@@ -287,11 +329,20 @@ _Alphabetical, regenerated by regen-map._
 - `router` — constant — pub
 
 `routes/parse_review.py`
+- `_annotations_dir` — function — internal
+- `_annotations_path` — function — internal
+- `_atomic_write_json` — function — internal
 - `_build_annotated_blocks` — function — internal — Load DocumentIR + ParseLog and return (blocks, log, error_message).
 - `_list_docs` — function — internal — Return doc IDs that have at least a parse log OR an IR file.
+- `_list_docx_inputs` — function — internal — List DOCX files under <env_dir>/input/<MNO>/<RELEASE>/ available for annotation.
 - `_load_log` — function — internal
 - `_load_or_default_review` — function — internal
 - `_parse_log_dir` — function — internal
+- `_resolve_docx_path` — function — internal
+- `bootstrap_list_docs` — function — pub
+- `bootstrap_load_annotations` — function — pub
+- `bootstrap_save_annotations` — function — pub
+- `bootstrap_view` — function — pub
 - `parse_review_index` — function — pub
 - `parse_review_report` — function — pub
 - `parse_review_save` — function — pub

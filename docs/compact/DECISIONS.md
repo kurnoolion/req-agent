@@ -2604,3 +2604,27 @@ that could have come through bootstrap had the loop existed). The
 loop is corpus-agnostic and stage-agnostic but currently exercised
 mostly on `parse` and `profile`; could extend to `resolve` and
 `eval` per the playbook table in `feedback-loop.md`.
+
+---
+
+## D-056: Build the annotation harness in NORA before exercising the Cline scaffold
+**Status**: Active · **Date**: 2026-05-08
+**Decision**: Ship a web-UI annotation editor (Bootstrap tab on the Parse page) that writes `<env_dir>/annotations/<plan>_annotations.json` per `cline-playbooks/annotation-schema.md`, before inviting the user to run Cline's `bootstrap.md` for the first time.
+**Why**: Annotation quality is the bottleneck on whether bootstrap-derived rules generalize; hand-typing JSON for 3-5 docs × 5-10 examples × 9 kinds is tedious and typo-prone, gating every new corpus onboarding. Vs ad-hoc CLI: doesn't let the human visually align selections against IR + DOCX preview. Vs deferring to "after first dry run": the dry run depends on the artifact this UI produces, so deferring just postpones the same work.
+**Consequences**: NORA web UI surface grows with one more page-tab. The DOCX renderer's index-alignment with `DOCXExtractor` becomes a load-bearing invariant (D-057). Annotation file format is now a contract between the UI and Cline's `bootstrap.md`; schema changes touch both. PDF/XLSX UIs still deferred; humans handwrite JSON for those formats until the next non-DOCX corpus arrives.
+
+---
+
+## D-057: Custom DOCX-to-HTML walker, index-aligned with DOCXExtractor
+**Status**: Active · **Date**: 2026-05-08
+**Decision**: `core/src/web/docx_html_render.py` walks `doc.element.body.iterchildren()` in the same order as `DOCXExtractor.extract` and applies the same skip rules (empty paragraphs return None; degenerate single-empty-column tables dropped). Every emitted HTML element carries `data-block-idx="N"` matching `ContentBlock.position.index`.
+**Why**: The IR's flat block index is what annotations reference and what Cline's `bootstrap.md` consumes — the renderer must match it. Vs mammoth: doesn't know about IR alignment, would require a separate post-pass to drop empty `<p></p>` and re-number, which is exactly the custom walker minus the dependency. Vs pypandoc: requires the pandoc binary, breaking the offline-install path. Vs no preview (IR-only): user explicitly chose side-by-side because IR-only loses too much context for hand-annotation.
+**Consequences**: Any change to `DOCXExtractor`'s iteration order or skip rules MUST mirror in `docx_html_render.py` or every saved annotation drifts on next render. Invariant added to `web/MODULE.md`. Test fixture (`test_parse_bootstrap.py::TestDocxRenderAlignment`) builds a DOCX in-memory and asserts indices match the extractor's output — the regression net. HTML output is functional, not pixel-faithful: no Word styles, no images rendered, no list bullets.
+
+---
+
+## D-058: Annotation region schema flattened to block_indices for PDF + DOCX
+**Status**: Active · **Date**: 2026-05-08
+**Decision**: PDF and DOCX annotation regions both use `region: {block_indices: [N, ...]}` (single block, range, or arbitrary set) with `region: {block_index: N, row_range: [start, end]}` for table-row precision. The earlier `paragraph_indices` (DOCX) / `page+bbox`/`page+line_range` (PDF) split is removed. XLSX retains sheet/cells/row_range (different IR shape).
+**Why**: PDF and DOCX extractors emit the same flat `DocumentIR` with sequential `ContentBlock.position.index`. Using paragraph/table/page indices forced a translation step that could drift or miscount. Single shape simplifies the validator, the UI, and Cline's rule-derivation. Row-range survives via `block_index + row_range`. Vs keeping the per-format split: makes the UI carry two region shapes for what's the same underlying data; Cline reads the same JSON either way.
+**Consequences**: `cline-playbooks/annotation-schema.md` updated; `bootstrap.md` and any future schema readers must consume the new shape (its prose doesn't reference old field names, so no edit needed today; flagged). No on-disk annotations existed under the old schema, so no migration. PDF UI when built inherits the same shape — no new region type needed. Loses the ability to express "this PDF page" as a first-class semantic; if needed later, can be re-added as an alternate region.

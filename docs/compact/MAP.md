@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-05-07 by regen-map. Do not hand-edit.
+Generated 2026-05-08 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -249,9 +249,11 @@ nora/
 │   │   └── web/                                       # FastAPI + Bootstrap 5 + HTMX Web UI for non-CLI team members (D-008).
 │   │       ├── __init__.py
 │   │       ├── app.py                                 # NORA Web UI — FastAPI application.
+│   │       ├── bootstrap_schema.py                    # Validation for bootstrap annotation files.
 │   │       ├── config.py                              # Web UI configuration.
 │   │       ├── config_db.py                           # SQLite-backed config store for the web Config page.
 │   │       ├── config_schema.py                       # Schema describing the Config page's editable knobs.
+│   │       ├── docx_html_render.py                    # DOCX → HTML renderer aligned with DOCXExtractor's block indexing.
 │   │       ├── feedback_db.py                         # Test-page feedback store — async SQLite log of question / answer /
 │   │       ├── jobs.py                                # Job queue for NORA pipeline execution tracking.
 │   │       ├── markdown_render.py                     # Markdown → HTML rendering for LLM-synthesized answers.
@@ -280,6 +282,7 @@ nora/
 │   │       │   │   └── style.css
 │   │       │   ├── js/
 │   │       │   │   ├── app.js
+│   │       │   │   ├── parse_bootstrap.js
 │   │       │   │   ├── parse_review.js
 │   │       │   │   ├── req_browser.js
 │   │       │   │   └── resolve_review.js
@@ -311,6 +314,7 @@ nora/
 │   │           ├── jobs.html
 │   │           ├── metrics.html
 │   │           ├── parse_review/
+│   │           │   ├── _bootstrap_view.html
 │   │           │   ├── _report.html
 │   │           │   ├── _view.html
 │   │           │   └── index.html
@@ -352,6 +356,7 @@ nora/
 │       ├── test_integration_oa_corpus.py              # Integration test: extract → profile → parse against the 5 Verizon OA PDFs.
 │       ├── test_openai_provider.py                    # Tests for OpenAICompatibleProvider — fully mocked, no network.
 │       ├── test_parse_audit.py                        # Tests for the per-document parse-audit tool (parse_audit.py).
+│       ├── test_parse_bootstrap.py                    # Tests for the Bootstrap annotation harness.
 │       ├── test_parse_log.py                          # Tests for ParseLog generation: dropped block recording, range merging,
 │       ├── test_parse_review.py                       # Tests for parse_review: template generation and compact report format.
 │       ├── test_patterns.py                           # Tests for regex patterns used across extraction, profiling, and parsing.

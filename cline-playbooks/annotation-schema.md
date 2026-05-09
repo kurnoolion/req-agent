@@ -126,52 +126,27 @@ Optional fields:
 The `region` field shape depends on the source document type. Cline detects from
 `doc_path` extension.
 
-### PDF
+### PDF / DOCX (flat IR — single sequential index across paragraphs / headings / tables / images)
 
+The PDF and DOCX extractors both produce the same `DocumentIR` with a single
+`block.position.index` numbered 0..N across the whole document. Annotation
+regions index that flat list directly.
+
+Single block:
 ```json
-"region": {
-  "pages": [12]                   // single-page region
-}
-```
-or
-```json
-"region": {
-  "pages": [5, 6, 7]              // multi-page region
-}
-```
-or
-```json
-"region": {
-  "page": 12,
-  "bbox": [72, 320, 540, 340]     // x1, y1, x2, y2 in PDF points
-}
-```
-or
-```json
-"region": {
-  "page": 12,
-  "line_range": [42, 42]          // line-numbered within the page (extractor's IR)
-}
+"region": { "block_indices": [142] }
 ```
 
-### DOCX
+Range of blocks (for TOC regions, definitions sections, version-history blocks):
+```json
+"region": { "block_indices": [12, 13, 14, 15, 16] }
+```
 
+Row-precise within a single table block:
 ```json
 "region": {
-  "paragraph_indices": [142]      // single paragraph (zero-based)
-}
-```
-or
-```json
-"region": {
-  "paragraph_indices": [142, 143, 144]
-}
-```
-or
-```json
-"region": {
-  "table_index": 7,
-  "row_range": [3, 5]             // rows within table 7
+  "block_index": 142,
+  "row_range": [3, 5]             // rows within block.rows (header excluded; 0-based)
 }
 ```
 
@@ -215,10 +190,24 @@ When Cline reads an annotation file, it validates:
 Validation failures are reported in the BOOTSTRAP report (one line per failure, ≤5 lines
 total — if more, the report says "skipping further validation errors" and the user fixes).
 
-## Web UI (planned, not built yet)
+## Web UI
 
-The annotation files will eventually be populated by a NORA web UI page that renders the
-extracted IR (PDF / DOCX / XLSX → unified IR view) and lets the user click-to-mark regions.
-Until that's built, hand-write the JSON or use a simple ad-hoc CLI.
+The annotation file is now populated via the **Bootstrap** tab on the **Parse** page in
+NORA's web UI (`/parse-review`). Selecting a DOCX from the dropdown opens a 3-pane editor:
 
-When the web UI lands, the schema doesn't change — only the input ergonomics.
+- **IR blocks** (left) — sequential `block.position.index` list; click `+` on a block to
+  annotate. Shift-click a second block extends a multi-block range.
+- **DOCX preview** (middle) — formatted-as-HTML preview with `data-block-idx` attributes
+  aligned to the IR pane. Reference only — clicks happen on the IR side.
+- **Annotations** (right) — list grouped by kind; click an entry to scroll to the region
+  or edit; ✗ deletes.
+
+Tables in the IR pane have row-pickers — click a row inside a table to start a row-range
+selection; shift-click another row to extend it; the resulting annotation gets
+`{ block_index, row_range }`.
+
+Save writes `<env_dir>/annotations/<plan>_annotations.json` atomically; server-side
+schema validation rejects malformed payloads with a 400 + per-field error list.
+
+PDF and XLSX support are not yet wired into the UI; hand-write the JSON for those
+formats until they land.
