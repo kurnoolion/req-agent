@@ -91,9 +91,12 @@ class StandardsReferenceCollector:
         """Collect all standards references and produce an aggregated index.
 
         Provide either directories or explicit file lists (not both).
+        Accepts both *_manifest.json (resolver output) and *_xrefs.json filenames.
         """
-        # Gather file lists
-        m_files = self._resolve_files(manifest_dir, manifest_files, "*_xrefs.json")
+        # Gather file lists — accept both filename conventions
+        m_files = self._resolve_files(manifest_dir, manifest_files, "*_manifest.json")
+        if not m_files:
+            m_files = self._resolve_files(manifest_dir, manifest_files, "*_xrefs.json")
         t_files = self._resolve_files(trees_dir, tree_files, "*_tree.json")
 
         # (spec_clean, release_num) → accumulated data
@@ -113,6 +116,32 @@ class StandardsReferenceCollector:
             total_refs += n
             plans_seen.add(f.stem.replace("_tree", ""))
 
+        # Dominant-release fallback: for specs with no release (rel_num=0),
+        # use the most common release seen for that spec across other entries.
+        spec_dominant: dict[str, int] = {}
+        for (spec, rel_num), entry in agg.items():
+            if rel_num > 0:
+                if spec not in spec_dominant or entry.ref_count > agg.get((spec, spec_dominant[spec]), _AccEntry()).ref_count:
+                    spec_dominant[spec] = rel_num
+
+        # Merge rel_num=0 entries into the dominant release entry
+        zero_keys = [(spec, 0) for spec, rel_num in agg if rel_num == 0]
+        for key in zero_keys:
+            spec = key[0]
+            fallback = spec_dominant.get(spec, 0)
+            if fallback:
+                target_key = (spec, fallback)
+                src = agg[key]
+                dst = agg[target_key]
+                dst.ref_count += src.ref_count
+                dst.source_plans |= src.source_plans
+                dst.sections.extend(src.sections)
+                dst.annexes.extend(src.annexes)
+                dst.tables.extend(src.tables)
+                del agg[key]
+            # If no dominant release exists for this spec, keep rel_num=0
+            # so it still appears in the reference index (marked as no-release)
+
         # Build output
         specs = []
         for (spec, rel_num), entry in sorted(agg.items()):
@@ -121,6 +150,8 @@ class StandardsReferenceCollector:
                 release=f"Release {rel_num}" if rel_num else "",
                 release_num=rel_num,
                 sections=sorted(set(entry.sections)),
+                annexes=sorted(set(entry.annexes)),
+                tables=sorted(set(entry.tables)),
                 source_plans=sorted(entry.source_plans),
                 ref_count=entry.ref_count,
             ))
@@ -147,7 +178,8 @@ class StandardsReferenceCollector:
         with open(path, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        plan_id = data.get("plan_id", path.stem.replace("_xrefs", ""))
+        stem = path.stem.replace("_manifest", "").replace("_xrefs", "")
+        plan_id = data.get("plan_id", stem)
         refs = data.get("standards_refs", [])
         count = 0
 
@@ -164,6 +196,19 @@ class StandardsReferenceCollector:
             entry = agg[key]
             entry.ref_count += 1
             entry.source_plans.add(plan_id)
+
+            section = ref.get("section", "").strip()
+            if section:
+                entry.sections.append(section)
+
+            annex = ref.get("annex", "").strip()
+            if annex:
+                entry.annexes.append(annex)
+
+            table = ref.get("table", "").strip()
+            if table:
+                entry.tables.append(table)
+
             count += 1
 
         return count
@@ -232,10 +277,12 @@ class StandardsReferenceCollector:
 
 class _AccEntry:
     """Accumulator for aggregating references."""
-    __slots__ = ("ref_count", "source_plans", "sections", "source_reqs")
+    __slots__ = ("ref_count", "source_plans", "sections", "annexes", "tables", "source_reqs")
 
     def __init__(self):
         self.ref_count = 0
         self.source_plans: set[str] = set()
         self.sections: list[str] = []
+        self.annexes: list[str] = []
+        self.tables: list[str] = []
         self.source_reqs: set[str] = set()

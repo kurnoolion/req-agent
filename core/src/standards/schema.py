@@ -29,6 +29,8 @@ class AggregatedSpecRef:
     release: str = ""
     release_num: int = 0        # numeric release (e.g., 11)
     sections: list[str] = field(default_factory=list)  # all referenced sections
+    annexes: list[str] = field(default_factory=list)   # all referenced annexes
+    tables: list[str] = field(default_factory=list)    # all referenced tables
     source_plans: list[str] = field(default_factory=list)
     ref_count: int = 0          # total reference count across all plans
 
