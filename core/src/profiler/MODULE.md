@@ -6,6 +6,10 @@ Standalone, LLM-free document-structure profiler. Analyzes representative `Docum
 For the human-annotator's guide to the 13 annotation kinds the Bootstrap web UI captures (and which the profiler turns into rules through the Cline → Teacher-LLM loop), see [`ANNOTATIONS.md`](ANNOTATIONS.md).
 
 **Public surface**
+- `load_substituted_profile(profile_path, env_dir=None) -> DocumentProfile` (profile_substitute.py) [D-062] — drop-in replacement for `DocumentProfile.load_json()` at the parser boundary. Loads the profile, finds a mapping (snapshot at `customizations/mappings/<profile_stem>.json` or fallback to `<env_dir>/state/cline-mapping.json`), and substitutes placeholders in every regex-string field. Specific placeholders (e.g. `<MNO0>`) → `re.escape(<mapped value>)`. Generic placeholders (`<MNO>`, `<PLAN>`, `<REL>`, `<DIGITS>`) → regex character class for the token's typical shape. No-op when no mapping found (covers public-corpus profiles like `vzw_oa_profile.json`).
+- `substitute_placeholders(profile, mapping) -> DocumentProfile` (profile_substitute.py) — pure function variant of the above; returns a deep-copied profile with substitution applied.
+- `find_mapping_file(profile_path, env_dir=None) -> Path | None` (profile_substitute.py) — discovery chain: snapshot → env_dir live → None.
+- `GENERIC_PLACEHOLDERS` (profile_substitute.py) — `{<DIGITS>: \d+, <MNO>: [A-Z]{2,4}, <PLAN>: [A-Z0-9_]+, <REL>: [A-Za-z0-9-]+}`.
 - `DocumentProfiler` (profiler.py) — `create_profile(docs, profile_name="") -> DocumentProfile`; also `update_profile()`, `validate_profile()` (coverage check against held-out docs)
 - `DocumentProfile` (profile_schema.py) — full profile container with `to_dict`, `save_json`, `load_json`
 - Profile subcomponents: `HeadingLevel`, `HeadingDetection`, `RequirementIdPattern`, `MetadataField`, `PlanMetadata`, `DocumentZone`, `HeaderFooter`, `CrossReferencePatterns`, `BodyText`, `ApplicabilityDetection` (FR-32 [D-030])

@@ -87,3 +87,31 @@ If entries were added, list them on subsequent lines (≤4 lines):
 - Never emit the real values back to the user via output if they were already
   redacted — only emit additions explicitly requested in this run.
 - Persist every change; never hold mappings in memory between invocations.
+
+## Two mapping locations [D-062]
+
+Cline maintains the mapping in **two** places, each with a distinct role:
+
+| Path | Owner | Lifecycle | Used by |
+|---|---|---|---|
+| `<env_dir>/state/cline-mapping.json` | Cline (this playbook) | Long-lived; grows across sessions as new MNOs / plans / releases are onboarded | Forward redaction in every report Cline emits; runtime substitution **fallback** when a per-bootstrap snapshot is missing |
+| `customizations/mappings/<bootstrap_id>.json` | Cline (`bootstrap.md` Step 8) | Per-bootstrap snapshot; immutable for a given bootstrap_id | Pipeline parse-stage substitution (`profile_substitute.load_substituted_profile`) |
+
+**On disk shape — different forms:**
+
+- *Live* (`<env_dir>/state/cline-mapping.json`): `{"<real>": "<placeholder>"}` —
+  forward-redaction direction (real → placeholder). This direction is what
+  Cline uses to scrub outgoing reports.
+- *Snapshot* (`customizations/mappings/<bootstrap_id>.json`): `{"NAME": "<real>"}` —
+  reverse direction (placeholder NAME without brackets → real value). This
+  direction is what the pipeline's substitution layer expects.
+
+The `profile_substitute._normalize_mapping` loader detects and accepts both
+shapes, so either direction works at parse time. But when **you** write the
+snapshot in `bootstrap.md` Step 8, use the snapshot shape (placeholder NAME →
+real). Keys are bare names without `<>`; the substitution layer adds the
+brackets when matching against profile strings.
+
+**Gitignore.** `customizations/mappings/` is gitignored end-to-end. The
+on-prem work-PC `pre-push` hook (installed by `~/work/utils/git-sync/sync-work.sh`)
+further blocks any push to `github.com` from a host where mappings exist.

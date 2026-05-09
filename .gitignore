@@ -39,6 +39,13 @@ git-sync/
 # Local environment definitions (keep .gitkeep only)
 environments/*.json
 
+# Per-bootstrap mapping snapshots (D-062). Owned by Cline. Keys
+# proprietary placeholders to real MNO / plan / release values; must
+# never reach the public mirror. Keep .gitkeep + README.
+customizations/mappings/*
+!customizations/mappings/.gitkeep
+!customizations/mappings/README.md
+
 
 # Vim swap files
 *.swp

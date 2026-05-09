@@ -18,26 +18,61 @@ parser/profile rules exist for it.
 
 ## Steps
 
-1. Read `cline-playbooks/annotation-schema.md` so you know the schema.
-2. For each annotated doc:
+1. **Bootstrap ID** [D-062]. Read or generate the bootstrap_id:
+   - If `<env_dir>/state/cline-bootstrap-id.txt` exists, read its single-line
+     contents and use it as the bootstrap_id for this run.
+   - Else, generate `bs_<8 random hex chars>` (e.g. `bs_a3f2b1c4`), write it
+     to `<env_dir>/state/cline-bootstrap-id.txt` (just the id, single line, no
+     trailing newline noise), and use it for this run.
+   The bootstrap_id is opaque — it carries no MNO / plan / release info and is
+   safe to embed in the public profile filename. Subsequent BOOTSTRAP runs on
+   the same env reuse the same id so the placeholdered profile keeps growing
+   instead of forking per session.
+2. Read `cline-playbooks/annotation-schema.md` so you know the schema.
+3. For each annotated doc:
    - Validate the annotation file per the schema.
    - Open the source doc (`extract` stage IR if available; else read raw).
    - For each annotation, locate the region in the doc's IR.
    - **Read the verbatim text at the region locally** to use for rule derivation. Verbatim
      text NEVER leaves Cline — it's only used to derive the abstract rule.
-3. Group annotations by `kind` across all docs.
-4. For each kind:
+4. Group annotations by `kind` across all docs.
+5. For each kind:
    - **Derive a rule** that matches all annotated examples (the union of regions across docs).
    - **Compute self-coverage**: TP = annotations the rule matches when re-run on the source.
    - Note: there are no negative annotations, so FP rate isn't measurable from annotations
      alone — that's caught by the feedback loop later.
-5. For reference kinds: derive separate detection rules for each of the 5 reference kinds (`reference_intra_doc`, `reference_cross_doc`, `reference_spec` with `style=direct` and `style=indirect` as separate sub-rules, `reference_list` section pattern, `reference_list_entry` per-entry pattern). Indirect spec citations have a two-step pipeline path: parser detects `[N]` at source → looks up entry N in the doc's `reference_list_map` → resolver hits the standards graph. The `target` dict on annotations is **ignored for rule derivation** — it's reserved for resolver-eval ground truth.
-6. Apply mapping forward-redaction to all output values (per `02-content-safety.md`).
+6. For reference kinds: derive separate detection rules for each of the 5 reference kinds (`reference_intra_doc`, `reference_cross_doc`, `reference_spec` with `style=direct` and `style=indirect` as separate sub-rules, `reference_list` section pattern, `reference_list_entry` per-entry pattern). Indirect spec citations have a two-step pipeline path: parser detects `[N]` at source → looks up entry N in the doc's `reference_list_map` → resolver hits the standards graph. The `target` dict on annotations is **ignored for rule derivation** — it's reserved for resolver-eval ground truth.
+7. Apply mapping forward-redaction to all output values (per `02-content-safety.md`).
+8. **Mapping snapshot** [D-062]. After deriving rules, write a per-bootstrap
+   mapping snapshot to `customizations/mappings/<bootstrap_id>.json` so the
+   pipeline's substitution layer can resolve placeholders at parse time:
+   ```json
+   {
+     "version": 1,
+     "bootstrap_id": "<bootstrap_id>",
+     "mappings": {
+       "MNO0": "<real value>",
+       "MNO0_ALIAS": "<real value>",
+       "MNO0_NAME": "<real value>",
+       "PLAN0": "<real value>",
+       "PLAN1": "<real value>",
+       "REL0": "<real value>"
+     }
+   }
+   ```
+   Top-level `mappings` keys are placeholder names **without** angle brackets.
+   Source the values from `<env_dir>/state/cline-mapping.json` — include only
+   the entries this bootstrap's annotations reference (typically the MNO
+   short / alias / name set, every PLAN seen, every REL seen). Skip per-`REQID-N`
+   entries; the profile uses the generic `<DIGITS>` placeholder for numeric
+   suffixes, not specific req IDs. The directory is gitignored end-to-end and
+   never reaches the public mirror.
 
 ## Output: `BOOTSTRAP` report shape (apply mapping; max 25 lines)
 
 ```
 BOOTSTRAP v=1 docs=<N> kinds=<M> annotations=<total>
+bootstrap_id: bs_<id>                ← placeholdered profile filename
 prov: <PLAN0>, <PLAN1>, <PLAN2>      ← which plans contributed annotations
 mapping: v=<N> entries=<N>
 
@@ -105,21 +140,33 @@ if more. Cline writes the full error log on-prem.
 
 ## Constraints
 
-- **Maximum 25 lines** in the output report.
-- Do NOT write to `customizations/profiles/<plan>/profile.json` — Teacher LLM does that.
-  You ONLY emit the report.
+- **Maximum 25 lines** in the output report (excluding the `bootstrap_id` line, which is mandatory).
+- Do NOT write to `customizations/profiles/bs_<id>.json` — Teacher LLM does that.
+  You DO write `customizations/mappings/bs_<id>.json` (gitignored, owned by Cline) per Step 8.
 - Do NOT commit anything to git. Stage 0 of the loop ends with the user typing the
   BOOTSTRAP report into Teacher LLM.
-- Apply mapping forward-redaction to every output token.
+- Apply mapping forward-redaction to every output token. Derived regex strings use
+  placeholders directly: specific (`<MNO0>`, `<PLAN0>`, `<REL0>`) for known-fixed
+  values, generic (`<MNO>`, `<PLAN>`, `<REL>`, `<DIGITS>`) for wildcards. Examples:
+  - `req_id` regex: `<MNO0>_REQ_<PLAN>_<DIGITS>` (anchored on the MNO short prefix
+    you've seen in this corpus, generic over plans + digit count). The pipeline's
+    substitution layer turns `<MNO0>` into `re.escape(VZ)` and `<PLAN>` into
+    `[A-Z0-9_]+` at parse time.
+  - `reference_list_section_pattern`: `(?i)^references$|^bibliography$` (text isn't
+    proprietary; no placeholders needed).
 
 ## What Teacher LLM does next
 
-After reading the BOOTSTRAP report, Teacher LLM:
-1. Generates the initial `customizations/profiles/<plan>/profile.json` (or updates the
-   existing one) with the derived patterns.
+After reading the BOOTSTRAP report (which includes `bootstrap_id: bs_<id>`), Teacher LLM:
+1. Generates the **placeholdered** profile at `customizations/profiles/<bootstrap_id>.json`
+   (or updates an existing one keyed to that id) using the derived patterns. Profile
+   regex strings carry placeholders verbatim; the public mirror sees no proprietary
+   names.
 2. Generates parser code for any new `kinds` (e.g., `references_*` if not previously
    handled).
-3. Commits to git.
+3. Commits + pushes to public github (Teacher LLM's normal flow).
 
-You then `git pull`, run the parser, and proceed to Phase 4 (humans review via the Parse
-Review web page) → `feedback-loop.md`.
+You then `git pull` on the work PC. The substitution layer reads
+`customizations/mappings/<bootstrap_id>.json` (which **you** wrote in Step 8 of this
+playbook) and resolves placeholders to real values at parse time. Run the parser,
+proceed to Phase 4 (humans review via the Parse Review web page) → `feedback-loop.md`.

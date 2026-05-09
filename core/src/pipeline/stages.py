@@ -172,6 +172,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     try:
         from core.src.models.document import DocumentIR
         from core.src.profiler.profile_schema import DocumentProfile
+        from core.src.profiler.profile_substitute import load_substituted_profile
         from core.src.parser.structural_parser import GenericStructuralParser
         from core.src.parser.user_annotations import apply_user_annotations
     except ImportError as e:
@@ -181,7 +182,16 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     if not Path(profile_path).exists():
         return _fail(stage, "PIP-E002", f"Profile not found: {profile_path}", time.time() - t0)
 
-    profile = DocumentProfile.load_json(Path(profile_path))
+    # D-062: profiles for proprietary corpora carry placeholders in
+    # their regex strings (e.g. `<MNO0>_REQ_<PLAN>_\d+`); the matching
+    # mapping (placeholder → real value) lives outside the public repo
+    # — at customizations/mappings/<id>.json or, fallback,
+    # <env_dir>/state/cline-mapping.json. `load_substituted_profile`
+    # finds the mapping if one exists and applies it; profiles that
+    # already carry real values (e.g. vzw_oa_profile.json for the
+    # public corpus) are returned unchanged.
+    _env_dir = ctx.stage_output("parse").parent.parent
+    profile = load_substituted_profile(Path(profile_path), env_dir=_env_dir)
     parser = GenericStructuralParser(profile)
 
     extract_dir = ctx.stage_output("extract")

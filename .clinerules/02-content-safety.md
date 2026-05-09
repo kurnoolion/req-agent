@@ -77,3 +77,29 @@ A passing observer of the user's hand-typed reports — and Teacher LLM itself, 
 conversations — never sees any string that uniquely identifies a customer, document,
 release, or specific requirement. Patterns and counts are sufficient for Teacher LLM to
 update code; concrete values stay on-prem.
+
+## Mapping snapshot location [D-062]
+
+Beyond the live `<env_dir>/state/cline-mapping.json` (forward redaction for outgoing
+reports), Cline also maintains a **per-bootstrap mapping snapshot** at:
+
+```
+customizations/mappings/<bootstrap_id>.json
+```
+
+This snapshot pairs with the placeholdered profile at
+`customizations/profiles/<bootstrap_id>.json` (which Teacher LLM commits to public
+github). At parse time, NORA's runtime substitution layer reads the snapshot and
+resolves placeholders in the profile's regex strings to real values.
+
+**The `customizations/mappings/` directory is gitignored end-to-end** (see the repo
+`.gitignore`). It is never pushed to public github. The work-PC pre-push hook
+(installed by `~/work/utils/git-sync/sync-work.sh`) provides a second layer of
+protection: any `git push` whose remote URL is `github.com` is rejected by the hook
+unless `NORA_ALLOW_PUBLIC_PUSH=1` is set explicitly.
+
+You own this directory. `cline-playbooks/bootstrap.md` Step 8 specifies the write
+operation; `cline-playbooks/mapping.md` documents the on-disk shape and the live-vs-
+snapshot distinction. Never check these files into git, even on the company-internal
+remote — sharing across team members happens out of band (file sync, separate
+internal-only repo, or each team member regenerates locally via the bootstrap loop).
