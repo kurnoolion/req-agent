@@ -177,6 +177,24 @@ class TestSchemaValidation:
                  "target": ["not", "a", "dict"]},
             ]))
 
+    def test_remove_kind_minimal(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "remove",
+             "region": {"block_indices": [42]}},
+        ]))
+        assert out["annotations"][0]["kind"] == "remove"
+        assert out["annotations"][0]["region"] == {"block_indices": [42]}
+
+    def test_remove_kind_with_row_range_and_notes(self):
+        out = validate_annotation_file(self._payload(annotations=[
+            {"id": "ann_001", "kind": "remove",
+             "region": {"block_index": 42, "row_range": [3, 5]},
+             "notes": "test plan refs deferred"},
+        ]))
+        ann = out["annotations"][0]
+        assert ann["region"] == {"block_index": 42, "row_range": [3, 5]}
+        assert ann["notes"] == "test plan refs deferred"
+
     def test_block_indices_must_be_non_negative_ints(self):
         with pytest.raises(AnnotationValidationError):
             validate_annotation_file(self._payload(annotations=[

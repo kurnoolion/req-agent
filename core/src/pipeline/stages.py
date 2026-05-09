@@ -173,6 +173,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
         from core.src.models.document import DocumentIR
         from core.src.profiler.profile_schema import DocumentProfile
         from core.src.parser.structural_parser import GenericStructuralParser
+        from core.src.parser.user_annotations import apply_user_annotations
     except ImportError as e:
         return _fail(stage, "PRS-E001", f"Import error: {e}", time.time() - t0)
 
@@ -188,17 +189,27 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     if not ir_files:
         return _fail(stage, "PIP-E002", f"No IR files in {extract_dir}", time.time() - t0)
 
-    stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0}
+    stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0}
     tree_paths: list[str] = []
     warnings: list[str] = []
     # Derive env_dir from stage layout (works in both from_env and standalone mode).
     # ctx.stage_output("parse") == <env_dir>/out/parse → parent.parent == <env_dir>
     _env_dir = ctx.stage_output("parse").parent.parent
     log_dir = _env_dir / "reports" / "parse_log"
+    annotations_dir = _env_dir / "annotations"
 
     for f in ir_files:
         try:
             doc = DocumentIR.load_json(f)
+            # D-061: apply user-driven `remove` annotations to the IR
+            # before parse. The remove machinery rides on D-060 strike
+            # rails — annotations get translated into in-IR strike marks
+            # so the parser's existing FR-33 cascade drops the content.
+            doc_id = Path(doc.source_file).stem
+            ann_path = annotations_dir / f"{doc_id}_annotations.json"
+            n_removes = apply_user_annotations(doc, ann_path)
+            if n_removes:
+                stats["user_removes"] += n_removes
             tree = parser.parse(doc)
             out_name = f.stem.replace("_ir", "_tree") + ".json"
             out_path = out_dir / out_name

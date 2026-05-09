@@ -822,6 +822,101 @@ non-3GPP spec.
 
 ---
 
+# User-override kinds
+
+A different category from the structural and reference kinds above: these
+annotations record an explicit human decision that affects how the
+pipeline processes the document, not what the document structurally
+contains.
+
+## `remove` [D-061]
+
+**Definition.** Mark a region the user wants **excluded from downstream
+pipeline ingestion**. Use cases: defer a section until prerequisite data
+is ingested ("test plan mapping section — skip until test plans land");
+exclude a known-bad table; prune a single retired row that the source
+didn't strike out.
+
+**Pipeline path.** Conceptually identical to strikethrough:
+
+```
+ANNOTATE     → user marks region with kind=remove on disk
+PARSE pre-pass → apply_user_annotations() reads the annotation file and
+                 mutates the IR — sets struck=True on every TextRun in
+                 the region; sets font_info.strikethrough=True on the
+                 block. (Mutation is in-memory only; the on-disk IR
+                 file is not touched.)
+PARSE        → existing FR-33 cascade drops the marked content. For a
+                 marked section heading, the cascade auto-extends
+                 through subsequent body until the next sibling /
+                 parent heading.
+```
+
+The remove machinery rides on the D-060 strike rails — no new drop
+path, no new cascade logic, no new visual styling. The Bootstrap UI
+renders removed regions with the same `docx-struck` line-through
+styling that struck content uses.
+
+**Reversible.** Delete the annotation file entry, re-run parse — the
+content comes back live. Nothing is lost from the IR.
+
+**What to mark.**
+
+- A whole section (heading + body): mark just the heading block with a
+  single-block region. The cascade extends automatically.
+- A standalone paragraph: mark the paragraph's block index.
+- A specific table row or row-range: mark the table block index +
+  `row_range`.
+- A multi-block range that doesn't follow heading boundaries: list the
+  exact block indices via `block_indices` (no auto-cascade — explicit).
+
+**Optional fields.** None required. Use the standard `notes` field
+(≤30 chars, structural-only) to record the human reason.
+
+**Examples.**
+
+Remove a whole section by marking its heading:
+
+```json
+{ "id": "ann_900", "kind": "remove",
+  "region": {"block_indices": [42]},
+  "notes": "test plan refs deferred" }
+```
+
+(Block 42 is the section heading. Parser cascade-drops the section's body.)
+
+Remove a single paragraph (not a heading — no cascade):
+
+```json
+{ "id": "ann_901", "kind": "remove",
+  "region": {"block_indices": [156]},
+  "notes": "duplicate, see §3.4" }
+```
+
+Remove a specific row range from a table:
+
+```json
+{ "id": "ann_902", "kind": "remove",
+  "region": {"block_index": 200, "row_range": [3, 7]},
+  "notes": "rows refer to retired plans" }
+```
+
+Remove a non-contiguous set of blocks:
+
+```json
+{ "id": "ann_903", "kind": "remove",
+  "region": {"block_indices": [88, 92, 95]},
+  "notes": "broken cross-refs" }
+```
+
+**Difference from `strikethrough`.** `strikethrough` documents what the
+*source author* marked deleted; `remove` documents what the *human
+annotator* decides to exclude. Both end up dropped at parse time with
+identical mechanics. If the source already strikes a region, you don't
+need a `remove` annotation on top — the extractor already detects it.
+
+---
+
 # Annotation budget per doc — a worked example
 
 For one Verizon-OA-style DOCX, a reasonable starting set:

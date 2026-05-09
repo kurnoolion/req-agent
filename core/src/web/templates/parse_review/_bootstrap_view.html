@@ -9,6 +9,10 @@
     <span class="badge bg-secondary">{{ block_count }} blocks</span>
     <span id="bs-ann-count" class="badge bg-primary">{{ annotations | length }} annotations</span>
     <span class="text-muted small ms-2">click <code>+</code> on a block to annotate · shift-click second block to extend a range</span>
+    <div class="form-check form-switch mb-0 ms-2">
+        <input class="form-check-input" type="checkbox" id="bs-sync-scroll-toggle">
+        <label class="form-check-label small" for="bs-sync-scroll-toggle">Sync scroll</label>
+    </div>
     <button class="btn btn-sm btn-primary ms-auto" id="bs-save-btn">
         <i class="bi bi-save me-1"></i>Save
     </button>
@@ -123,6 +127,9 @@
     <div class="ctx-menu-item" data-kind="reference_spec"><i class="bi bi-journal-bookmark"></i>reference_spec</div>
     <div class="ctx-menu-item" data-kind="reference_list"><i class="bi bi-list-columns"></i>reference_list</div>
     <div class="ctx-menu-item" data-kind="reference_list_entry"><i class="bi bi-card-list"></i>reference_list_entry</div>
+    <div class="ctx-menu-divider"></div>
+    <div class="ctx-menu-hdr">User overrides</div>
+    <div class="ctx-menu-item" data-kind="remove"><i class="bi bi-trash text-danger"></i>remove (drop from pipeline)</div>
     <div class="ctx-menu-divider"></div>
     <div class="ctx-menu-item" data-kind="__cancel"><i class="bi bi-x"></i>Cancel</div>
 </div>

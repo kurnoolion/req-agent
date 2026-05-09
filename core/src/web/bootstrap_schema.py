@@ -48,6 +48,14 @@ KINDS: tuple[str, ...] = (
     "reference_spec",
     "reference_list",
     "reference_list_entry",
+    # User-driven removal [D-061]: marks blocks/rows the user wants
+    # excluded from downstream pipeline ingestion. Rides on the D-060
+    # strike rails — the parser pre-pass converts these annotations
+    # into in-IR strike marks, then the existing FR-33 cascade drops
+    # them. Use cases: defer ingestion of a section (test-plan-mapping
+    # without the test plans), exclude a known-bad table, prune a
+    # single retired row.
+    "remove",
 )
 
 SPEC_REFERENCE_STYLES: tuple[str, ...] = ("direct", "indirect")

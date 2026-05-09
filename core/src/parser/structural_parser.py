@@ -534,6 +534,13 @@ class GenericStructuralParser:
             AND ensures cascade arming on EXACTLY the headings that
             would otherwise enter the tree.
             """
+            # DOCX-style HEADING blocks carry their depth explicitly via
+            # block.level (1-9 from Word's Heading styles). Use it directly
+            # so the strikethrough cascade arms on struck DOCX headings —
+            # latent bug pre-D-061 since `_classify_heading` only matches
+            # PARAGRAPH-typed blocks via numbering pattern (PDF convention).
+            if block.type == BlockType.HEADING and block.level is not None:
+                return block.level
             if block.type != BlockType.PARAGRAPH or not block.text:
                 return None
             section_num, _ = self._classify_heading(block)

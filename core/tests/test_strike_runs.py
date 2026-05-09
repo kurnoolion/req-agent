@@ -314,6 +314,54 @@ class TestParserPartialStrike:
         # Parser mutates rows in place: struck row dropped
         assert ir.content_blocks[0].rows == [["22", "exponential"]]
 
+    def test_docx_heading_cascade_arms_on_struck_block_level(self):
+        """D-061: _heading_depth honors BlockType.HEADING with block.level
+        (DOCX-style headings) so the FR-33 cascade arms when a struck
+        DOCX heading appears. Pre-D-061 it only fired for PARAGRAPH-typed
+        headings (PDF convention) — silently broken for DOCX.
+        """
+        ir = DocumentIR(
+            source_file="t.docx",
+            source_format="docx",
+            content_blocks=[
+                ContentBlock(
+                    type=BlockType.HEADING,
+                    position=Position(page=1, index=0),
+                    text="Withdrawn Section",
+                    level=1,
+                    runs=[TextRun("Withdrawn Section", struck=True)],
+                    font_info=FontInfo(size=18.0, strikethrough=True),
+                ),
+                # Body paragraph that should cascade-drop
+                ContentBlock(
+                    type=BlockType.PARAGRAPH,
+                    position=Position(page=1, index=1),
+                    text="Body under withdrawn section.",
+                    runs=[TextRun("Body under withdrawn section.")],
+                    font_info=FontInfo(size=11.0, strikethrough=False),
+                ),
+                # Sibling depth-1 heading should NOT be cascaded
+                ContentBlock(
+                    type=BlockType.HEADING,
+                    position=Position(page=1, index=2),
+                    text="Live Section",
+                    level=1,
+                    runs=[TextRun("Live Section")],
+                    font_info=FontInfo(size=18.0, strikethrough=False),
+                ),
+                ContentBlock(
+                    type=BlockType.PARAGRAPH,
+                    position=Position(page=1, index=3),
+                    text="Live body content.",
+                    runs=[TextRun("Live body content.")],
+                    font_info=FontInfo(size=11.0, strikethrough=False),
+                ),
+            ],
+        )
+        tree = self._parse(ir)
+        # Cascade fired: parse_stats.cascade_blocks_dropped > 0
+        assert tree.parse_stats.cascade_blocks_dropped >= 1
+
     def test_struck_req_id_in_partial_span_removed_from_block_text(self):
         # Observable effect of the partial-strike normalization: the
         # struck req_id token is removed from block.text. The internal

@@ -61,6 +61,10 @@
             { key: 'target.spec', label: 'target.spec', type: 'string', placeholder: '3GPP TS 24.301' },
             { key: 'target.section', label: 'target.section', type: 'string' },
         ],
+        // D-061: explicit user-driven removal — drops the marked region
+        // from the parsed pipeline output. `notes` carries the human
+        // reason (e.g., "test plan refs deferred").
+        remove: [],
     };
 
     const KIND_ORDER = [
@@ -68,6 +72,7 @@
         'definitions', 'applicability', 'priority',
         'reference_intra_doc', 'reference_cross_doc', 'reference_spec',
         'reference_list', 'reference_list_entry',
+        'remove',
     ];
 
     let ROOT = '';
@@ -187,12 +192,10 @@
 
         document.getElementById('bs-save-btn').addEventListener('click', saveAll);
 
-        // Sync-scroll IR ↔ DOCX (best-effort: matched by data-block-idx)
-        const ir = document.getElementById('bs-ir-body');
-        const docx = document.getElementById('bs-docx-body');
-        if (ir && docx) {
-            ir.addEventListener('scroll', () => syncScroll(ir, docx, '.bs-block', '[data-block-idx]'));
-        }
+        // Sync-scroll IR ↔ DOCX — bidirectional, toggle-gated, persisted.
+        // Both panes match by data-block-idx (IR pane uses data-idx; DOCX
+        // preview pane uses data-block-idx — same integer per block).
+        wireSyncScroll();
 
         // Kind menu
         const menu = document.getElementById('bs-kind-menu');
@@ -601,32 +604,85 @@
     }
 
     // -----------------------------------------------------------------
-    // Sync-scroll
+    // Sync-scroll — bidirectional, toggle-gated, preference persisted.
     // -----------------------------------------------------------------
 
-    let _syncing = false;
-    function syncScroll(src, dst, srcSel, dstSel) {
+    const SYNC_LS_KEY = 'bs.syncScroll';
+    let _syncing = false;       // re-entrancy guard
+    let _syncEnabled = false;   // mirror of toggle state
+
+    function wireSyncScroll() {
+        const ir = document.getElementById('bs-ir-body');
+        const docx = document.getElementById('bs-docx-body');
+        const toggle = document.getElementById('bs-sync-scroll-toggle');
+        if (!ir || !docx || !toggle) return;
+
+        // Restore persisted preference (default off — sync feels intrusive
+        // until the user opts in).
+        try {
+            _syncEnabled = localStorage.getItem(SYNC_LS_KEY) === '1';
+        } catch (e) {
+            _syncEnabled = false;
+        }
+        toggle.checked = _syncEnabled;
+
+        toggle.addEventListener('change', () => {
+            _syncEnabled = toggle.checked;
+            try { localStorage.setItem(SYNC_LS_KEY, _syncEnabled ? '1' : '0'); } catch (e) {}
+            // Snap the inactive pane to the active one's position
+            // immediately so toggling on doesn't leave them mismatched.
+            if (_syncEnabled) syncFrom(ir, docx);
+        });
+
+        // Bidirectional listeners — both panes are sources. The
+        // re-entrancy guard prevents the programmatic scroll from
+        // re-firing the opposite handler.
+        ir.addEventListener('scroll', () => {
+            if (!_syncEnabled) return;
+            syncFrom(ir, docx);
+        });
+        docx.addEventListener('scroll', () => {
+            if (!_syncEnabled) return;
+            syncFrom(docx, ir);
+        });
+    }
+
+    function syncFrom(src, dst) {
         if (_syncing) return;
         _syncing = true;
         try {
+            // Find the block closest to the source pane's vertical
+            // midline; align dst to put the same block on its midline.
             const srcRect = src.getBoundingClientRect();
             const midY = srcRect.top + srcRect.height / 2;
-            const els = src.querySelectorAll(srcSel);
+            const blocks = src.querySelectorAll('[data-block-idx], [data-idx]');
             let bestIdx = null, bestDist = Infinity;
-            els.forEach(el => {
+            blocks.forEach(el => {
                 const r = el.getBoundingClientRect();
                 const d = Math.abs((r.top + r.bottom) / 2 - midY);
-                if (d < bestDist) { bestDist = d; bestIdx = el.dataset.idx; }
+                if (d < bestDist) {
+                    bestDist = d;
+                    // Both panes use a numeric index — IR pane on
+                    // data-idx, DOCX preview on data-block-idx. Read
+                    // whichever's set.
+                    bestIdx = el.dataset.blockIdx != null
+                        ? el.dataset.blockIdx
+                        : el.dataset.idx;
+                }
             });
             if (bestIdx == null) return;
-            const target = dst.querySelector(`${dstSel}[data-block-idx="${bestIdx}"]`);
-            if (target) {
-                const dstRect = dst.getBoundingClientRect();
-                const tRect = target.getBoundingClientRect();
-                dst.scrollTop += (tRect.top + tRect.height / 2) - (dstRect.top + dstRect.height / 2);
-            }
+            const target = dst.querySelector(
+                `[data-block-idx="${bestIdx}"], [data-idx="${bestIdx}"]`
+            );
+            if (!target) return;
+            const dstRect = dst.getBoundingClientRect();
+            const tRect = target.getBoundingClientRect();
+            dst.scrollTop += (tRect.top + tRect.height / 2) - (dstRect.top + dstRect.height / 2);
         } finally {
-            setTimeout(() => { _syncing = false; }, 50);
+            // Release on the next animation frame — long enough for
+            // the programmatic scroll's event to fire and be ignored,
+            // short enough that real user scrolls don't get suppressed.
+            setTimeout(() => { _syncing = false; }, 60);
         }
     }
 
