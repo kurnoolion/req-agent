@@ -60,6 +60,8 @@ class ResolvedStandardsRef:
     source_section: str
     spec: str
     section: str = ""
+    annex: str = ""
+    table: str = ""
     release: str = ""
     release_source: str = ""  # "inline" (from text) or "doc_level" (from mapping)
     status: RefStatus = RefStatus.RESOLVED
@@ -246,6 +248,8 @@ class CrossReferenceResolver:
             source_section=source.section_number,
             spec=std_ref.spec,
             section=std_ref.section,
+            annex=std_ref.annex,
+            table=std_ref.table,
             release=release,
             release_source=release_source,
             status=status,
