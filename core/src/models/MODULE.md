@@ -6,8 +6,9 @@ Shared document intermediate representation. Defines the normalized `DocumentIR`
 **Public surface**
 - `BlockType` — `heading | paragraph | table | image | embedded_object`
 - `Position` — `(page, index, bbox?)` for every block
-- `FontInfo` — font attrs (size, bold, italic, name, all_caps, color, strikethrough); feeds profiler heading clustering and the parser's strikeout-drop pass [D-031]
-- `ContentBlock` — single block with type-specific fields (text/level, headers+rows, image_path, object_type+extracted_content)
+- `FontInfo` — font attrs (size, bold, italic, name, all_caps, color, strikethrough); feeds profiler heading clustering. `strikethrough` is now a **derived** signal — True iff every textful run on the block is struck (D-031, D-060). Used by the parser's FR-33 cascade for fully-struck blocks.
+- `TextRun` — `(text, struck)` per-run formatting span [D-060]. Captured by extractors that have access to per-run formatting (DOCX natively; PDF/XLSX coarse — one run per cell with the cell's strike state).
+- `ContentBlock` — single block with type-specific fields (text/level, headers+rows, image_path, object_type+extracted_content) plus per-run formatting: `runs: list[TextRun]` (paragraphs/headings); `header_runs: list[list[TextRun]]` and `row_runs: list[list[list[TextRun]]]` (tables). Helpers: `live_text()` (concat unstruck runs); `row_all_struck(i)`, `header_all_struck()`, `cell_live_text(r, c)`, `header_live_text(c)` for tables.
 - `DocumentIR` — document container: source_file, source_format, mno, release, doc_type, content_blocks, extraction_metadata; exposes `page_count`, `block_count`, `blocks_by_type()`, `to_dict()`, `save_json()`, `load_json()`
 
 **Invariants**
@@ -15,12 +16,14 @@ Shared document intermediate representation. Defines the normalized `DocumentIR`
 - Every `ContentBlock` carries a `Position` with a sequential `index` unique within the document — preserves reading order after round-trip serialization.
 - Schema is JSON-serializable via dataclass `asdict`; `load_json` reconstructs a value-equivalent instance.
 - `FontInfo.strikethrough` defaults to `False`; extractors that cannot determine it leave it `False` (never `None`) — consumers do not handle a tri-state.
+- **Strike model is uniform across formats** [D-060]: extractors mark via `runs` / `row_runs` / `header_runs` and `font_info.strikethrough`; **no row content is dropped at extract time**. Downstream consumers (parser, UI) decide what to do. `live_text()` / `cell_live_text()` rebuild "live" content with struck runs filtered out. Legacy IRs without runs fall back to `text` + `font_info.strikethrough` cleanly — backward-compatible.
 - No LLM, no I/O beyond `save_json` / `load_json`, no dependencies on any other `src/` module.
 
 **Key choices**
 - Plain dataclasses (not Pydantic) — zero runtime dependency, cheap (de)serialization, adequate for the closed producer/consumer set.
 - `BlockType` as `str, Enum` so JSON round-trips without custom encoders.
 - `font_info` kept on `ContentBlock` (not a separate text-run model) because the profiler only needs the dominant font per block; finer-grained runs would balloon IR size without improving profiling.
+- **`runs` added alongside `text` (not replacing it)** [D-060]: keeping the merged-string `text` + `headers` + `rows` fields preserves backward compatibility with every downstream consumer; new code uses runs / `live_text()` for partial-strike awareness. Empty default lists make the addition zero-cost for blocks whose extractor doesn't preserve runs (PDF beyond per-cell, XLSX rich-text variations).
 
 **Non-goals**
 - No parsing, profiling, or semantic interpretation — strictly a data container.

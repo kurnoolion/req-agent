@@ -572,6 +572,50 @@ class GenericStructuralParser:
                 )
                 continue
 
+            # D-060 — Partial strike: this block survived the FR-33
+            # cascade (it isn't fully struck), but it may carry struck
+            # spans (some runs / some cells). Normalize block.text /
+            # block.rows / block.headers to their "live" versions so
+            # downstream code sees only the unstruck content. Mine any
+            # req_ids that appear in struck spans first — those ids are
+            # "deleted" and must not surface as cross-reference targets,
+            # mirroring the fully-struck cascade's behavior above.
+            if self.profile.ignore_strikeout:
+                if block.runs and self._req_id_re:
+                    struck_span_text = "".join(
+                        r.text for r in block.runs if r.struck
+                    )
+                    if struck_span_text:
+                        for sid in self._find_req_ids(struck_span_text):
+                            struck_req_ids.add(sid)
+                if block.runs:
+                    block.text = block.live_text()
+                if block.row_runs:
+                    new_rows: list[list[str]] = []
+                    for r_idx in range(len(block.row_runs)):
+                        if block.row_all_struck(r_idx):
+                            # Mine struck req_ids before dropping the row
+                            if self._req_id_re:
+                                for cell_runs in block.row_runs[r_idx]:
+                                    rt = "".join(
+                                        rr.text for rr in cell_runs if rr.struck
+                                    )
+                                    if rt:
+                                        for sid in self._find_req_ids(rt):
+                                            struck_req_ids.add(sid)
+                            self._parse_stats.struck_blocks_dropped += 1
+                            continue
+                        new_rows.append([
+                            block.cell_live_text(r_idx, c_idx)
+                            for c_idx in range(len(block.row_runs[r_idx]))
+                        ])
+                    block.rows = new_rows
+                if block.header_runs:
+                    block.headers = [
+                        block.header_live_text(c)
+                        for c in range(len(block.header_runs))
+                    ]
+
             # FR-33 cascade: a struck section heading deletes the whole
             # section. Drop every subsequent block until we hit a new
             # heading at depth <= cascade_depth (a sibling or shallower

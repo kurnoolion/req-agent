@@ -22,12 +22,12 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 - Tables extracted by pdfplumber are de-duplicated against text blocks they overlap with (PDF text extractors surface table cells as text too) — no block should appear twice in the IR.
 - Header/footer content (matched by margin thresholds + always-header regex patterns) is dropped, not emitted as paragraphs.
 - Format-specific libraries (fitz, pdfplumber, python-docx, openpyxl) are imported **only** inside this module — no other `core/src/` module pulls them in.
-- Strikethrough block-level signal differs per format AND block type [D-031, D-036]:
-  - **PDF paragraph** — majority-of-characters across mixed-strike spans (50% defaults to `False`).
+- Strike model is uniform across formats [D-031, D-036, D-060]: extractors **mark** strike state via per-run / per-cell flags; **no row content is dropped at extract time**. Detection is per-format; consequence is uniform.
+  - **DOCX** — every paragraph / heading / table cell run carries `TextRun.struck` from `run.font.strike`. Block-level `font_info.strikethrough` = True iff every textful run in the block is struck (replaces D-031's "any-run-struck" coarse heuristic). Tables: `header_runs` and `row_runs` populated.
+  - **PDF paragraph** — majority-of-characters across mixed-strike spans (50% defaults to `False`); single-run TextRun on the block reflecting block-level strike (per-character partial-strike on PDF deferred to a future ADR).
   - **PDF table (whole-table strike)** — `_table_is_struck` counts horizontal strike lines crossing ≥50% of the table width AND not aligned with a `Table.rows[*].bbox` edge (within `edge_tol=1.5pt`). Row-edge filter is critical: pdfplumber draws each row boundary as a full-width horizontal line which the unfiltered heuristic counted as a strike (D-036, addresses 93% false-positive rate observed pre-filter).
-  - **PDF table (per-row cell strike)** — `_detect_struck_rows` flags rows whose interior (`y_top + 1.5 < y < y_bot - 1.5`) contains ≥1 horizontal strike line. Header row (index 0) is never marked struck — telecom tables retain their header even when all data rows are deleted.
-  - **DOCX** — `any` run struck → whole paragraph struck.
-  - **XLSX** — row carries strikethrough only when **all** non-empty cells are struck.
+  - **PDF table (per-row cell strike)** — `_detect_struck_rows` flags rows whose interior (`y_top + 1.5 < y < y_bot - 1.5`) contains ≥1 horizontal strike line. Header row (index 0) is never marked struck — telecom tables retain their header even when all data rows are deleted. Per D-060: rows are **kept** in `block.rows`; `row_runs[i]` carries the strike flag.
+  - **XLSX** — per-cell `cell.font.strike` becomes `TextRun.struck`. A row is "fully struck" when all non-empty cells are struck — used for the whole-table cascade signal but per D-060 the rows are kept.
 
 **Key choices**
 - PDF: pymupdf (fitz) for text + font metadata, pdfplumber for tables — neither alone covers both well. Pay the double-parse cost per file; cache is the IR JSON on disk.

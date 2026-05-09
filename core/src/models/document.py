@@ -43,12 +43,28 @@ class FontInfo:
     font_name: str = ""
     all_caps: bool = False
     color: int = 0  # RGB as integer
-    # FR-33: True if the block's content is struck through in the source
-    # document. Default False; extractors that cannot determine the signal
-    # leave it False (never None — consumers do not handle a tri-state).
-    # The parser drops blocks where strikethrough=True when
-    # `profile.ignore_strikeout` is True (default).
+    # FR-33 [D-031, D-060]: True if every textful run in the block is struck.
+    # Derived; not the only strike signal. Per-run strike is captured on
+    # ContentBlock.runs (paragraphs / headings) and ContentBlock.row_runs
+    # / header_runs (tables). The parser uses font_info.strikethrough for
+    # block-level cascade (drop block + cascade for struck section
+    # headings) and uses runs / row_runs for partial-text strike (drop
+    # struck spans, keep the rest).
     strikethrough: bool = False
+
+
+@dataclass
+class TextRun:
+    """A contiguous span of text within a block with shared formatting [D-060].
+
+    Captured by extractors that have access to per-run formatting (DOCX
+    natively; XLSX per cell; PDF coarse — one run per cell/block with the
+    block's strike state). Consumers reconstruct "live" text by
+    concatenating runs where ``struck=False`` — that's the parser's
+    partial-strike path.
+    """
+    text: str
+    struck: bool = False
 
 
 @dataclass
@@ -63,9 +79,22 @@ class ContentBlock:
     font_info: FontInfo | None = None  # primary font of the block (PDF extraction)
     style: str = ""  # DOCX style name if available
 
+    # Per-run formatting for paragraphs/headings [D-060]. Empty for
+    # legacy IRs and for blocks whose extractor does not provide run-level
+    # data — consumers fall back to ``text`` + ``font_info.strikethrough``
+    # in that case.
+    runs: list[TextRun] = field(default_factory=list)
+
     # Table content
     headers: list[str] = field(default_factory=list)
     rows: list[list[str]] = field(default_factory=list)
+
+    # Per-cell run lists for tables [D-060]. Parallel to ``headers`` /
+    # ``rows`` — ``header_runs[c]`` are the runs for header cell c;
+    # ``row_runs[r][c]`` are the runs for body cell (r, c). Empty for
+    # legacy IRs; consumers fall back to the merged string forms.
+    header_runs: list[list[TextRun]] = field(default_factory=list)
+    row_runs: list[list[list[TextRun]]] = field(default_factory=list)
 
     # Image content
     image_path: str = ""
@@ -78,6 +107,73 @@ class ContentBlock:
 
     # Metadata hints for downstream processing
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    # ------------------------------------------------------------------
+    # Strike helpers (D-060)
+    # ------------------------------------------------------------------
+
+    def live_text(self) -> str:
+        """Return the block's text with struck runs removed.
+
+        For paragraphs / headings. When ``runs`` is empty, falls back to
+        ``""`` if the whole block is struck, else ``text`` unchanged.
+        """
+        if self.runs:
+            return "".join(r.text for r in self.runs if not r.struck)
+        if self.font_info is not None and self.font_info.strikethrough:
+            return ""
+        return self.text
+
+    def header_all_struck(self) -> bool:
+        """True iff every textful header cell has all its textful runs struck."""
+        if not self.header_runs:
+            return False
+        return _cells_all_struck(self.header_runs)
+
+    def row_all_struck(self, row_index: int) -> bool:
+        """True iff every textful cell in the row is fully struck."""
+        if not (0 <= row_index < len(self.row_runs)):
+            return False
+        return _cells_all_struck(self.row_runs[row_index])
+
+    def cell_live_text(self, row_index: int, col_index: int) -> str:
+        """Return the body cell's text with struck runs removed."""
+        if 0 <= row_index < len(self.row_runs):
+            cell = self.row_runs[row_index]
+            if 0 <= col_index < len(cell):
+                runs = cell[col_index]
+                return "".join(r.text for r in runs if not r.struck)
+        # Fallback to the merged-string row matrix
+        if 0 <= row_index < len(self.rows):
+            row = self.rows[row_index]
+            if 0 <= col_index < len(row):
+                return row[col_index]
+        return ""
+
+    def header_live_text(self, col_index: int) -> str:
+        """Return the header cell's text with struck runs removed."""
+        if 0 <= col_index < len(self.header_runs):
+            return "".join(r.text for r in self.header_runs[col_index] if not r.struck)
+        if 0 <= col_index < len(self.headers):
+            return self.headers[col_index]
+        return ""
+
+
+def _cells_all_struck(cells: list[list[TextRun]]) -> bool:
+    """True iff every cell with textful content has every textful run struck.
+
+    Empty cells (no textful runs) are ignored — they can't be "struck" or
+    "unstruck"; they just don't contribute to the decision.
+    """
+    saw_textful_cell = False
+    for cell_runs in cells:
+        textful = [r for r in cell_runs if r.text and r.text.strip()]
+        if not textful:
+            continue
+        saw_textful_cell = True
+        if not all(r.struck for r in textful):
+            return False
+    return saw_textful_cell
 
 
 @dataclass
@@ -133,6 +229,14 @@ class DocumentIR:
                 bbox=tuple(bbox_raw) if bbox_raw is not None else None,
             )
             font = FontInfo(**b["font_info"]) if b.get("font_info") else None
+            runs = [TextRun(**r) for r in b.get("runs", [])]
+            header_runs = [
+                [TextRun(**r) for r in cell] for cell in b.get("header_runs", [])
+            ]
+            row_runs = [
+                [[TextRun(**r) for r in cell] for cell in row]
+                for row in b.get("row_runs", [])
+            ]
             blocks.append(ContentBlock(
                 type=BlockType(b["type"]),
                 position=pos,
@@ -140,8 +244,11 @@ class DocumentIR:
                 level=b.get("level"),
                 font_info=font,
                 style=b.get("style", ""),
+                runs=runs,
                 headers=b.get("headers", []),
                 rows=b.get("rows", []),
+                header_runs=header_runs,
+                row_runs=row_runs,
                 image_path=b.get("image_path", ""),
                 surrounding_text=b.get("surrounding_text", ""),
                 object_type=b.get("object_type", ""),

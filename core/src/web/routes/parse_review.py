@@ -185,9 +185,35 @@ def _build_annotated_blocks(
             b["all_caps"] = fi.all_caps if fi else False
             b["strikethrough"] = fi.strikethrough if fi else False
             b["font_size"] = fi.size if fi else None
+            # D-060: per-run strike state for span-level rendering. Empty
+            # for legacy IRs; template falls back to whole-block strike.
+            b["runs"] = [
+                {"text": r.text, "struck": r.struck} for r in blk.runs
+            ]
         elif blk.type == BlockType.TABLE:
             b["headers"] = blk.headers or []
             b["rows"] = blk.rows or []
+            # D-060: per-cell run lists for table strike rendering. Each
+            # cell is a list of {text, struck} dicts. row_struck[i] tells
+            # the template which whole rows are struck so they can be
+            # styled accordingly.
+            b["header_runs"] = [
+                [{"text": r.text, "struck": r.struck} for r in cell]
+                for cell in blk.header_runs
+            ]
+            b["row_runs"] = [
+                [
+                    [{"text": r.text, "struck": r.struck} for r in cell]
+                    for cell in row
+                ]
+                for row in blk.row_runs
+            ]
+            b["row_struck"] = [
+                blk.row_all_struck(i) for i in range(len(blk.row_runs))
+            ]
+            b["header_struck"] = blk.header_all_struck()
+            fi = blk.font_info
+            b["table_struck"] = fi.strikethrough if fi else False
         elif blk.type == BlockType.IMAGE:
             b["image_path"] = blk.image_path or ""
             b["surrounding_text"] = blk.surrounding_text or ""

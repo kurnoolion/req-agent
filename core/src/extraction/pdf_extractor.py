@@ -30,6 +30,7 @@ from core.src.models.document import (
     DocumentIR,
     FontInfo,
     Position,
+    TextRun,
 )
 
 logger = logging.getLogger(__name__)
@@ -164,25 +165,39 @@ class PDFExtractor(BaseExtractor):
                 struck_row_indices = self._detect_struck_rows(
                     table_obj, strike_lines
                 )
-                if struck_row_indices:
-                    rows = [
-                        r for i, r in enumerate(rows)
-                        if i not in struck_row_indices
-                    ]
+                # D-060: do NOT filter struck rows out of `rows`. Keep
+                # them, mark per-row strike via row_runs so downstream
+                # consumers (parser, UI) can decide what to do. The
+                # parser still drops struck rows by default
+                # (profile.ignore_strikeout); the data stays in the IR
+                # for audit and partial-strike rendering.
                 strike_min = 1 if len(rows) <= 1 else 2
-                # If row-level drops emptied the table, mark the whole
-                # block struck so the parser drops the now-headers-only
-                # remnant via the existing FR-33 path. Otherwise apply
-                # the table-level check on what's left.
-                if not rows and struck_row_indices:
+                table_struck = self._table_is_struck(
+                    bbox,
+                    strike_lines,
+                    min_lines=strike_min,
+                    row_edge_ys=row_edge_ys,
+                )
+                # If every body row is struck (per-row detection caught
+                # them all) and no header is detected, treat as
+                # whole-table strike — gives the parser the same cascade
+                # behavior the previous "drop emptied-table" path had.
+                if (
+                    rows
+                    and len(struck_row_indices) == len(rows)
+                    and not table_struck
+                ):
                     table_struck = True
-                else:
-                    table_struck = self._table_is_struck(
-                        bbox,
-                        strike_lines,
-                        min_lines=strike_min,
-                        row_edge_ys=row_edge_ys,
-                    )
+                # Build header_runs / row_runs (single-run cells; PDF is
+                # character-level, no per-run preservation).
+                header_runs = [[TextRun(text=h, struck=False)] for h in headers]
+                row_runs = [
+                    [
+                        [TextRun(text=cell, struck=(i in struck_row_indices))]
+                        for cell in row
+                    ]
+                    for i, row in enumerate(rows)
+                ]
                 all_blocks.append(
                     ContentBlock(
                         type=BlockType.TABLE,
@@ -193,6 +208,8 @@ class PDFExtractor(BaseExtractor):
                         ),
                         headers=headers,
                         rows=rows,
+                        header_runs=header_runs,
+                        row_runs=row_runs,
                         font_info=FontInfo(
                             size=12.0,
                             strikethrough=table_struck,
@@ -246,6 +263,11 @@ class PDFExtractor(BaseExtractor):
                     if not text:
                         continue
                     font = group["font_info"]
+                    # D-060: PDF paragraph runs are coarse — one TextRun
+                    # per block, struck=block-level strike. Per-character
+                    # partial-strike on PDF would require per-span line
+                    # geometry testing (future ADR).
+                    runs = [TextRun(text=text, struck=bool(font.strikethrough))]
 
                     all_blocks.append(
                         ContentBlock(
@@ -257,6 +279,7 @@ class PDFExtractor(BaseExtractor):
                             ),
                             text=text,
                             font_info=font,
+                            runs=runs,
                         )
                     )
 

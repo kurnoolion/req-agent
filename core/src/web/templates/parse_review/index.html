@@ -53,9 +53,11 @@
 .bs-block:hover .bs-block-actions { display: flex; }
 .bs-idx { font-family: monospace; font-size: .65rem; color: #94a3b8; margin-right: 4px; }
 .bs-row-pick { cursor: pointer; }
-.bs-row-pick:hover { background: #f0f9ff; }
-.bs-row-pick.bs-row-selected { background: #dbeafe; }
-.bs-row-pick.bs-row-anchor { background: #2563eb; color: #fff; }
+/* Bootstrap 5 paints the cell background via --bs-table-bg-state on td/th,
+   so a `tr { background: ... }` rule never shows. Override that variable. */
+.bs-row-pick:hover            { --bs-table-bg-state: #f0f9ff; }
+.bs-row-pick.bs-row-selected  { --bs-table-bg-state: #dbeafe; }
+.bs-row-pick.bs-row-anchor    { --bs-table-bg-state: #2563eb; color: #fff; }
 .bs-anns-list { font-size: .78rem; }
 .bs-ann-item { padding: 4px 6px; border-bottom: 1px solid #f1f5f9; cursor: pointer; display: flex; gap: 4px; align-items: start; }
 .bs-ann-item:hover { background: #f8fafc; }
@@ -161,7 +163,7 @@
 
 {% block extra_scripts %}
 <script src="{{ root_path }}/static/js/parse_review.js"></script>
-<script src="{{ root_path }}/static/js/parse_bootstrap.js?v=20260509b"></script>
+<script src="{{ root_path }}/static/js/parse_bootstrap.js?v=20260509c"></script>
 <script>
 (function () {
     const ROOT = document.body.dataset.rootPath || '';

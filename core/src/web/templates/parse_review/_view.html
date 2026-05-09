@@ -4,14 +4,40 @@
 {% macro block_text(block) %}
   {%- if block.type in ('heading', 'paragraph') -%}
     <p class="mb-0 {% if block.bold %}fw-bold{% endif %}{% if block.italic %} fst-italic{% endif %}{% if block.strikethrough %} text-decoration-line-through text-muted{% endif %}">
-      {{- block.text | e -}}
+      {%- if block.runs -%}
+        {%- for run in block.runs -%}{%- if run.struck -%}<span class="docx-struck">{{ run.text | e }}</span>{%- else -%}{{ run.text | e }}{%- endif -%}{%- endfor -%}
+      {%- else -%}
+        {{- block.text | e -}}
+      {%- endif -%}
     </p>
   {%- elif block.type == 'table' -%}
-    <div class="table-responsive" style="max-height:160px;overflow:auto;">
+    <div class="table-responsive {% if block.table_struck %}docx-struck{% endif %}" style="max-height:160px;overflow:auto;">
       <table class="table table-bordered table-sm mb-0" style="font-size:.7rem;">
-        {% if block.headers %}<thead class="table-light"><tr>{% for h in block.headers %}<th>{{ h | e }}</th>{% endfor %}</tr></thead>{% endif %}
+        {% if block.headers %}
+        <thead class="table-light"><tr>
+          {% for h in block.headers %}
+            <th>
+              {%- if block.header_runs and block.header_runs[loop.index0] -%}
+                {%- for run in block.header_runs[loop.index0] -%}{%- if run.struck -%}<span class="docx-struck">{{ run.text | e }}</span>{%- else -%}{{ run.text | e }}{%- endif -%}{%- endfor -%}
+              {%- else -%}{{ h | e }}{%- endif -%}
+            </th>
+          {% endfor %}
+        </tr></thead>
+        {% endif %}
         <tbody>
-          {% for row in block.rows[:6] %}<tr>{% for cell in row %}<td>{{ cell | e }}</td>{% endfor %}</tr>{% endfor %}
+          {% for row in block.rows[:6] %}
+          {% set ridx = loop.index0 %}
+          <tr class="{% if block.row_struck and block.row_struck[ridx] %}docx-struck{% endif %}">
+            {% for cell in row %}
+              {% set cidx = loop.index0 %}
+              <td>
+                {%- if block.row_runs and block.row_runs[ridx] and block.row_runs[ridx][cidx] -%}
+                  {%- for run in block.row_runs[ridx][cidx] -%}{%- if run.struck -%}<span class="docx-struck">{{ run.text | e }}</span>{%- else -%}{{ run.text | e }}{%- endif -%}{%- endfor -%}
+                {%- else -%}{{ cell | e }}{%- endif -%}
+              </td>
+            {% endfor %}
+          </tr>
+          {% endfor %}
           {% if block.rows | length > 6 %}<tr><td colspan="{{ (block.headers | length) or 1 }}" class="text-center text-muted small">… {{ block.rows | length - 6 }} more rows</td></tr>{% endif %}
         </tbody>
       </table>

@@ -234,14 +234,31 @@ TABLE OF CONTENTS
 strike to show "this used to be a requirement; it's been removed for this
 release." The parser drops these so retired requirements don't pollute downstream.
 
-**Pipeline path.** Extractor sets `FontInfo.strikethrough` per block (DOCX from
-font flag; PDF via geometric strike-line detection). Profiler derives any
-corpus-specific override behavior. Parser drops `strikethrough=True` blocks
-before heading classification, with section-heading cascade for whole-section
-strikes.
+**Pipeline path** [D-060]. Extraction is **uniform across formats now**: the
+extractor populates per-run strike state on `ContentBlock.runs` (paragraphs /
+headings) and per-cell on `ContentBlock.header_runs` / `row_runs` (tables).
+Nothing is dropped at extract time. The IR keeps every span — struck or not —
+and downstream consumers decide:
 
-**What to mark.** Three or four examples covering the variety you see —
-especially mixed cases (a partially-struck table, a fully-struck section).
+- **Parser** (`profile.ignore_strikeout=True`, default): for each block,
+  rebuild text from non-struck runs (`live_text()`); for tables, drop fully
+  struck rows and rebuild partial-struck cells from non-struck runs.
+  Fully-struck section headings cascade-drop their section (FR-33 unchanged).
+- **UI** (Bootstrap IR pane + Parse Review + DOCX preview): renders struck
+  spans with `text-decoration: line-through`. Whole-row / whole-table strike
+  styles apply at the `<tr>` / `<table>` level.
+
+This means **table-row and partial-text strike are auto-detected** for DOCX,
+PDF, and XLSX — you don't need explicit `strikethrough` annotations to make
+them work. The annotation kind is still useful for **ground-truth confirmation**
+("yes, the extractor was right to mark this as struck") and for **rule-derivation
+hints** when the extractor's heuristic needs tuning for a corpus quirk.
+
+**What to mark.** Optional. Three or four examples covering the variety you
+see — especially edge cases (a partially-struck table, a fully-struck section,
+a struck row inside an otherwise-live table). Day-0 bootstrap can skip this
+kind entirely; come back to it during Parse Review if the extractor mis-flags
+something.
 
 **Optional fields:**
 

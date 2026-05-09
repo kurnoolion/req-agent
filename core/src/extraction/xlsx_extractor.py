@@ -23,6 +23,7 @@ from core.src.models.document import (
     DocumentIR,
     FontInfo,
     Position,
+    TextRun,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,21 @@ def _cell_text(value) -> str:
     if isinstance(value, str):
         return value.strip()
     return str(value)
+
+
+def _cell_to_runs(c) -> list[TextRun]:
+    """Build a single-run TextRun list for an XLSX cell [D-060].
+
+    XLSX rich-text-with-mixed-strike inside a single cell is rare and
+    not exercised by current corpora — capture the cell as one run with
+    the cell's font.strike state.
+    """
+    text = _cell_text(c.value)
+    if not text:
+        return []
+    font = getattr(c, "font", None)
+    struck = bool(font is not None and getattr(font, "strike", False))
+    return [TextRun(text=text, struck=struck)]
 
 
 def _row_all_struck(cells) -> bool:
@@ -66,14 +82,15 @@ def _row_all_struck(cells) -> bool:
 class XLSXExtractor(BaseExtractor):
     """Extract worksheets and tables from XLSX files (FR-1).
 
-    FR-33 [D-031]: cells with `cell.font.strike` are honored. A row is
-    omitted from the table body when all its non-empty cells are struck.
-    Partial strike within a row is treated as in-cell editing and the
-    row is kept as-is. The IR's table block does not carry per-row strike
-    granularity, so the row drop happens at extraction time — a deliberate
-    deviation from the "drop at parser" architecture forced by the IR
-    block-level schema. The `extraction_metadata.struck_xlsx_rows_dropped`
-    counter surfaces the count for diagnostics.
+    FR-33 [D-031, D-060]: cells with `cell.font.strike` are honored.
+    Per-row strike state is captured in `row_runs` (every cell's runs
+    carry a `struck` flag); whole-row strike is computed by the parser
+    via ``ContentBlock.row_all_struck(i)``. Header strike is captured in
+    ``header_runs``. Whole-table strike (header + every body row struck)
+    is signalled via ``font_info.strikethrough`` so the parser's
+    existing FR-33 cascade drops the block. **No row content is
+    dropped at extract time** [D-060] — the IR keeps everything;
+    parser/UI decide what to do.
     """
 
     def extract(
@@ -118,31 +135,48 @@ class XLSXExtractor(BaseExtractor):
             all_blocks.append(heading)
             block_index += 1
 
-            # First row = headers (if all-struck, drop the whole sheet later
-            # by marking the table block strikethrough=True).
+            # First row = headers. D-060: keep the row in the IR; record
+            # per-cell strike via `header_runs`. The header row's overall
+            # strike state participates in whole-table strike below.
             header_cells = non_empty[0]
             headers = [_cell_text(c.value) for c in header_cells]
+            header_runs = [_cell_to_runs(c) for c in header_cells]
             header_struck = _row_all_struck(header_cells)
 
-            # Body rows: drop those whose non-empty cells are all struck.
+            # Body rows: D-060: keep all rows in the IR; mark per-cell
+            # strike via `row_runs`. The parser drops fully-struck rows
+            # at parse time when `profile.ignore_strikeout` is True
+            # (default), via ``ContentBlock.row_all_struck(i)``.
             body: list[list[str]] = []
+            row_runs: list[list[list[TextRun]]] = []
             sheet_struck_rows = 0
             for row_cells in non_empty[1:]:
+                body.append([_cell_text(c.value) for c in row_cells])
+                row_runs.append([_cell_to_runs(c) for c in row_cells])
                 if _row_all_struck(row_cells):
                     sheet_struck_rows += 1
-                    continue
-                body.append([_cell_text(c.value) for c in row_cells])
             total_struck_rows += sheet_struck_rows
 
-            # Edge case: header row struck → mark whole table block as
-            # strikethrough so the parser drops it via the regular path.
-            table_struck = header_struck
+            # Whole-table strike: header AND every body row struck →
+            # font_info.strikethrough so the parser cascades. Header
+            # alone → also whole-table struck (mirrors prior behavior).
+            all_body_struck = bool(body) and all(
+                _row_all_struck(rc) for rc in non_empty[1:]
+            )
+            table_struck = header_struck and (not body or all_body_struck)
+            # Backward-compat: previously a struck header alone marked
+            # the table struck. Preserve that — a struck header ⇒
+            # cascade-drop the table.
+            if header_struck:
+                table_struck = True
 
             table = ContentBlock(
                 type=BlockType.TABLE,
                 position=Position(page=page_num, index=block_index),
                 headers=headers,
                 rows=body,
+                header_runs=header_runs,
+                row_runs=row_runs,
                 font_info=FontInfo(
                     size=_BODY_FONT_SIZE,
                     strikethrough=table_struck,
@@ -150,7 +184,10 @@ class XLSXExtractor(BaseExtractor):
                 metadata={
                     "sheet_name": ws.title,
                     "row_count": len(body),
-                    "struck_rows_dropped": sheet_struck_rows,
+                    # Diagnostic counter — rows are no longer dropped at
+                    # extract time (D-060), but the count of *fully
+                    # struck* rows is still useful for the compact RPT.
+                    "struck_rows_marked": sheet_struck_rows,
                 },
             )
             all_blocks.append(table)
@@ -167,6 +204,6 @@ class XLSXExtractor(BaseExtractor):
             content_blocks=all_blocks,
             extraction_metadata={
                 "sheet_count": sheet_count,
-                "struck_xlsx_rows_dropped": total_struck_rows,
+                "struck_xlsx_rows_marked": total_struck_rows,
             },
         )

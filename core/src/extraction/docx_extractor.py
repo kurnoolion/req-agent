@@ -25,6 +25,7 @@ from core.src.models.document import (
     DocumentIR,
     FontInfo,
     Position,
+    TextRun,
 )
 
 logger = logging.getLogger(__name__)
@@ -143,6 +144,15 @@ class DOCXExtractor(BaseExtractor):
         level = self._heading_level(style_name)
         block_type = BlockType.HEADING if level is not None else BlockType.PARAGRAPH
         font = self._paragraph_font(para, level)
+        runs = self._paragraph_runs(para)
+        # Whole-block strike [D-060]: True iff every textful run is struck.
+        # When at least one textful run is non-struck (partial strike), the
+        # font_info flag is False — the parser uses `runs` for the
+        # span-level drop instead. Override unconditionally so we replace
+        # `_paragraph_font`'s legacy "any-run-struck" coarse heuristic.
+        if runs:
+            textful = [r for r in runs if r.text and r.text.strip()]
+            font.strikethrough = bool(textful) and all(r.struck for r in textful)
 
         return ContentBlock(
             type=block_type,
@@ -151,7 +161,29 @@ class DOCXExtractor(BaseExtractor):
             level=level,
             style=style_name,
             font_info=font,
+            runs=runs,
         )
+
+    @staticmethod
+    def _paragraph_runs(para: DocxParagraph) -> list[TextRun]:
+        """Build a TextRun list preserving per-run strike state [D-060].
+
+        Inter-run whitespace (e.g. between two consecutive runs that
+        python-docx reports as separate run elements with text "foo" and
+        "bar") is preserved verbatim — the joined text matches
+        ``para.text``. Empty-text runs are dropped.
+        """
+        runs: list[TextRun] = []
+        for run in para.runs:
+            t = run.text or ""
+            if not t:
+                continue
+            font = run.font
+            struck = bool(
+                getattr(font, "strike", None) or getattr(font, "double_strike", None)
+            )
+            runs.append(TextRun(text=t, struck=struck))
+        return runs
 
     @staticmethod
     def _heading_level(style_name: str) -> int | None:
@@ -258,15 +290,23 @@ class DOCXExtractor(BaseExtractor):
 
     def _table_block(self, tbl: DocxTable, page: int) -> ContentBlock | None:
         rows_text: list[list[str]] = []
+        rows_runs: list[list[list[TextRun]]] = []
         for row in tbl.rows:
-            cells = [(c.text or "").strip() for c in row.cells]
-            rows_text.append(cells)
+            cells_text: list[str] = []
+            cells_runs: list[list[TextRun]] = []
+            for c in row.cells:
+                cells_text.append((c.text or "").strip())
+                cells_runs.append(self._cell_runs(c))
+            rows_text.append(cells_text)
+            rows_runs.append(cells_runs)
 
         if not rows_text:
             return None
 
         headers = rows_text[0]
         body_rows = rows_text[1:]
+        header_runs = rows_runs[0]
+        body_row_runs = rows_runs[1:]
 
         # Skip degenerate tables — single empty column
         non_empty_headers = [h for h in headers if h]
@@ -274,12 +314,47 @@ class DOCXExtractor(BaseExtractor):
         if len(non_empty_headers) <= 1 and total_cells == 0:
             return None
 
-        return ContentBlock(
+        block = ContentBlock(
             type=BlockType.TABLE,
             position=Position(page=page, index=0, bbox=None),
             headers=headers,
             rows=body_rows,
+            header_runs=header_runs,
+            row_runs=body_row_runs,
         )
+
+        # Whole-table strike [D-060]: header AND every body row fully
+        # struck → mark the block so the parser's existing cascade
+        # (font_info.strikethrough check) drops the table.
+        whole_struck = (
+            block.header_all_struck()
+            and bool(body_row_runs)
+            and all(block.row_all_struck(i) for i in range(len(body_row_runs)))
+        )
+        if whole_struck:
+            block.font_info = FontInfo(size=0.0, strikethrough=True)
+        return block
+
+    @staticmethod
+    def _cell_runs(cell) -> list[TextRun]:
+        """Flatten every paragraph's runs in a table cell into a single run list.
+
+        Paragraph boundaries inside the cell are preserved as inter-run
+        whitespace where the source had it; empty-text runs are dropped.
+        Same per-run strike rule as paragraph runs (D-060).
+        """
+        runs: list[TextRun] = []
+        for para in cell.paragraphs:
+            for run in para.runs:
+                t = run.text or ""
+                if not t:
+                    continue
+                font = run.font
+                struck = bool(
+                    getattr(font, "strike", None) or getattr(font, "double_strike", None)
+                )
+                runs.append(TextRun(text=t, struck=struck))
+        return runs
 
     # ------------------------------------------------------------------
     # Image handling
