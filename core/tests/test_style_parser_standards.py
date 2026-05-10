@@ -323,6 +323,41 @@ class TestDeduplication:
 # ── No false positives ────────────────────────────────────────────────────────
 
 
+class TestEtsiNormalisation:
+    def test_etsi_ts_prefix_normalises_to_etsi(self):
+        text = "per ETSI TS 102.221 section 4.1"
+        refs = _extract_standards_refs(text)
+        r = _find(refs, "102.221")
+        assert r is not None
+        assert r.spec == "ETSI TS 102.221"
+        assert r.spec.startswith("ETSI")
+
+    def test_3gpp_ts_high_series_normalises_to_etsi(self):
+        """3GPP TS 102.221 in source text is actually ETSI — correct it."""
+        text = "3GPP TS 102.221"
+        refs = _extract_standards_refs(text)
+        assert refs[0].spec == "ETSI TS 102.221"
+
+    def test_bare_ts_high_series_normalises_to_etsi(self):
+        text = "TS 131.102 section 5.1"
+        refs = _extract_standards_refs(text)
+        r = _find(refs, "131.102")
+        assert r is not None
+        assert r.spec == "ETSI TS 131.102"
+
+    def test_low_series_still_3gpp(self):
+        text = "3GPP TS 38.321"
+        refs = _extract_standards_refs(text)
+        assert refs[0].spec == "3GPP TS 38.321"
+
+    def test_etsi_en_prefix(self):
+        text = "ETSI EN 303.413"
+        refs = _extract_standards_refs(text)
+        r = _find(refs, "303.413")
+        assert r is not None
+        assert r.spec == "ETSI TS 303.413"
+
+
 class TestNoFalsePositives:
     def test_plain_numbers_not_matched(self):
         text = "the device shall support 802.11ac and 802.11n"

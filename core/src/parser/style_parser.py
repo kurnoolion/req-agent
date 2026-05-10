@@ -44,9 +44,9 @@ _META_PATTERNS: list[tuple[str, re.Pattern]] = [
 # Spec number: allows internal spaces ("38. 322") and hyphen suffix ("38.101-1")
 _SPEC_NUM = r"\d+\.\s*\d+(?:\s*-\s*\d+)?"
 
-# Spec prefix variants — all normalised to "3GPP TS" in output
-# Order: longest match first so "3GPP TS/TR" beats bare "3GPP" in alternation
-_SPEC_PFX = r"(?:3GPP\s+(?:TS|TR)|3GPP|TS|TR)"
+# Spec prefix variants — normalised to "3GPP TS" or "ETSI TS" based on series number
+# Order: longest/most-specific first so "ETSI TS" beats bare "ETSI", "3GPP TS" beats bare "3GPP"
+_SPEC_PFX = r"(?:ETSI\s+(?:TS|TR|EN|ES)|3GPP\s+(?:TS|TR)|ETSI|3GPP|TS|TR)"
 
 # Section number: multi-level dotted (e.g. 5.1.1, 4.2.7.10)
 _SEC_NUM = r"\d+(?:\.\d+)+"
@@ -299,8 +299,19 @@ _WHITESPACE_RE = re.compile(r"\s+")
 
 
 def _norm_spec(num_raw: str) -> str:
-    """Normalise a raw spec number to canonical '3GPP TS X.Y[-Z]' form."""
-    return "3GPP TS " + _WHITESPACE_RE.sub("", num_raw)
+    """Normalise a raw spec number to canonical form.
+
+    Discriminates by series number — no overlap between standards bodies:
+      series < 100  (e.g. 38, 24, 36)  → '3GPP TS X.Y'
+      series >= 100 (e.g. 102, 119)     → 'ETSI TS X.Y'
+    """
+    clean = _WHITESPACE_RE.sub("", num_raw)
+    try:
+        series = int(clean.split(".")[0])
+        org = "ETSI TS" if series >= 100 else "3GPP TS"
+    except (ValueError, IndexError):
+        org = "3GPP TS"
+    return f"{org} {clean}"
 
 
 def _parse_secs(raw: str) -> list[str]:
