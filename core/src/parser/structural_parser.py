@@ -2103,23 +2103,45 @@ class GenericStructuralParser:
             return rid.upper() if normalize == "upper" else rid
 
         if anchor == "last_run":
-            if not block.runs:
-                # Empty-runs fallback (formatting error in source doc).
-                # Pair-by-req_id still works; we log the format error so
-                # the architect can find and fix the source.
-                if block.text:
-                    ids = self._req_id_re.findall(block.text)
-                    if ids:
-                        self._log_format_error(
-                            "empty_runs_heading", block,
-                            note="req_id extracted from text fallback (runs=[])",
-                            text_excerpt=block.text,
-                        )
-                        return _normalize(ids[-1])
-                return ""
-            last = block.runs[-1].text
-            if self._req_id_anchored_re and self._req_id_anchored_re.match(last):
-                return _normalize(last.strip())
+            # Primary path: trailing run solo-matches the req_id pattern
+            # (the clean two-or-more-run heading shape).
+            if block.runs:
+                last = block.runs[-1].text
+                if (
+                    self._req_id_anchored_re
+                    and self._req_id_anchored_re.match(last)
+                ):
+                    return _normalize(last.strip())
+            # Fallback: search ``block.text`` (trailing match wins) for
+            # the two source-doc formatting errors observed on the
+            # work-PC corpus:
+            #   * ``runs=[]`` — DOCX run-splitter produced no runs.
+            #   * single-run heading whose text contains both title and
+            #     req_id concatenated (run wasn't split).
+            # Both gracefully recover the req_id from text so TOC
+            # pair-by-req_id can succeed; the format deviation is
+            # logged for the architect to find + fix the source.
+            #
+            # Multi-run headings (``len(runs) > 1``) where the last run
+            # doesn't anchor are NOT promoted — that's the explicit
+            # no-promotion semantic from Phase 2 (inline req_id
+            # citations in non-trailing runs are not the section's
+            # anchor).
+            if block.text and len(block.runs) <= 1:
+                ids = self._req_id_re.findall(block.text)
+                if ids:
+                    kind = (
+                        "empty_runs_heading"
+                        if not block.runs
+                        else "concatenated_run_heading"
+                    )
+                    self._log_format_error(
+                        kind, block,
+                        note="last_run anchor missed; trailing req_id extracted from text",
+                        runs_count=len(block.runs),
+                        text_excerpt=block.text,
+                    )
+                    return _normalize(ids[-1])
             return ""
 
         if anchor == "leading_text":
@@ -2265,11 +2287,15 @@ class GenericStructuralParser:
 
         text = block.live_text().strip()
 
-        # Empty-runs path: strip a trailing req_id from text so the TOC
-        # pair-by-title fallback can match against TOC's clean title.
+        # Last-run anchor missed (runs empty OR single-run with
+        # everything concatenated): strip a trailing req_id from
+        # text so the TOC pair-by-title fallback can match against
+        # TOC's clean title. Mirrors the ``len(runs) <= 1`` gate in
+        # ``_heading_req_id`` — multi-run headings with an inline
+        # req_id mention keep their full title.
         if (
             self.profile.requirement_id.anchor == "last_run"
-            and not block.runs
+            and len(block.runs) <= 1
             and self._req_id_re
             and text
         ):

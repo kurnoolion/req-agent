@@ -291,6 +291,44 @@ class TestDocxStylesClassification:
         # Title should be the runs[:-1] joined, not the full text.
         assert tree.requirements[0].title.strip() == "Foo Title"
 
+    def test_concatenated_single_run_falls_back_to_text(self, caplog):
+        """Mirror of the work-PC malformed body heading: ``runs`` has
+        one TextRun whose text holds both the title and the req_id
+        concatenated (DOCX run-splitter didn't fire — typically a
+        copy-paste artifact). The last_run anchor fails because the
+        run text doesn't solo-match the req_id pattern. Parser must
+        fall back to text-search and log under
+        ``parser.format_error: kind=concatenated_run_heading``."""
+        bad_heading = ContentBlock(
+            type=BlockType.HEADING,
+            position=Position(page=5, index=1),
+            text="1.1.1.Some Title VZ_REQ_FOO_42",
+            level=3,
+            style="Heading 3",
+            font_info=FontInfo(size=14.0, bold=True),
+            runs=[
+                TextRun(text="1.1.1.Some Title VZ_REQ_FOO_42", struck=False),
+            ],
+        )
+        blocks = [
+            _toc_para(0, "4.1.1\t1.1.1.Some Title VZ_REQ_FOO_42\t13", depth=3),
+            bad_heading,
+            _para(2, "body content"),
+        ]
+        import logging
+        with caplog.at_level(logging.WARNING):
+            tree = _parse(blocks)
+        assert len(tree.requirements) == 1
+        r = tree.requirements[0]
+        assert r.req_id == "VZ_REQ_FOO_42"
+        assert r.section_number == "4.1.1"
+        assert tree.parse_stats.toc_pair_misses == 0
+        format_errors = [
+            r for r in caplog.records
+            if r.message.startswith("parser.format_error: kind=concatenated_run_heading")
+        ]
+        assert len(format_errors) >= 1
+
     def test_empty_runs_falls_back_to_text_for_req_id_and_title(self, caplog):
         """When body heading has ``runs=[]`` (DOCX formatting error
         in source), the parser falls back to ``block.text`` for both
