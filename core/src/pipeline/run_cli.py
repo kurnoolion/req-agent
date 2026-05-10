@@ -159,6 +159,21 @@ def main() -> None:
              "skipping the LLM-derived feature taxonomy and the unified "
              "knowledge graph. Query path operates in pure-RAG mode.",
     )
+    parser.add_argument(
+        "--skip-resolve", action="store_true", default=None,
+        help="Skip the cross-reference resolve stage. Downstream graph + "
+             "vectorstore tolerate missing xref manifests (no resolved "
+             "internal / standards edges). Implies --skip-standards (the "
+             "standards stage reads resolve's manifests). Overrides "
+             "$NORA_SKIP_RESOLVE / config/llm.json:skip_resolve.",
+    )
+    parser.add_argument(
+        "--skip-standards", action="store_true", default=None,
+        help="Skip the 3GPP / GSMA spec download + extract stage. No "
+             "spec-section nodes / chunks reach the graph or vectorstore. "
+             "Useful when offline or when standards content isn't needed. "
+             "Overrides $NORA_SKIP_STANDARDS / config/llm.json:skip_standards.",
+    )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
 
     args = parser.parse_args()
@@ -285,13 +300,20 @@ def main() -> None:
     # list. Graph and vectorstore stages already tolerate a missing
     # taxonomy.json. The query path tolerates a missing graph by
     # building a stub from vectorstore metadata at query time.
-    from core.src.env.config import resolve_skip_taxonomy, resolve_skip_graph
+    from core.src.env.config import (
+        resolve_skip_taxonomy,
+        resolve_skip_graph,
+        resolve_skip_resolve,
+        resolve_skip_standards,
+    )
 
-    # --rag-only is a convenience that implies both flags. It only
-    # forces them ON; it doesn't override an explicit --skip-X=False.
+    # --rag-only is a convenience that implies skip_taxonomy + skip_graph.
+    # It only forces them ON; it doesn't override an explicit --skip-X=False.
     rag_only_cli = bool(args.rag_only)
     cli_skip_tax = True if (args.skip_taxonomy is True or rag_only_cli) else None
     cli_skip_graph = True if (args.skip_graph is True or rag_only_cli) else None
+    cli_skip_resolve = True if (args.skip_resolve is True) else None
+    cli_skip_standards = True if (args.skip_standards is True) else None
 
     env_skip_tax = (
         bool(getattr(env, "skip_taxonomy", False))
@@ -301,6 +323,14 @@ def main() -> None:
         bool(getattr(env, "skip_graph", False))
         if args.env else None
     )
+    env_skip_resolve = (
+        bool(getattr(env, "skip_resolve", False))
+        if args.env else None
+    )
+    env_skip_standards = (
+        bool(getattr(env, "skip_standards", False))
+        if args.env else None
+    )
 
     skip_taxonomy = resolve_skip_taxonomy(
         cli_value=cli_skip_tax, env_config_value=env_skip_tax,
@@ -308,6 +338,17 @@ def main() -> None:
     skip_graph = resolve_skip_graph(
         cli_value=cli_skip_graph, env_config_value=env_skip_graph,
     )
+    skip_resolve = resolve_skip_resolve(
+        cli_value=cli_skip_resolve, env_config_value=env_skip_resolve,
+    )
+    skip_standards = resolve_skip_standards(
+        cli_value=cli_skip_standards, env_config_value=env_skip_standards,
+    )
+    # skip_resolve implies skip_standards (the standards stage requires
+    # resolve's manifest_dir as input). Cascade is one-way: explicit
+    # --skip-standards alone does not force skip_resolve.
+    if skip_resolve and not skip_standards:
+        skip_standards = True
 
     notes: list[str] = []
     if skip_taxonomy and "taxonomy" in stages:
@@ -316,6 +357,12 @@ def main() -> None:
     if skip_graph and "graph" in stages:
         stages = [s for s in stages if s != "graph"]
         notes.append("graph stage skipped (RAG-only mode)")
+    if skip_resolve and "resolve" in stages:
+        stages = [s for s in stages if s != "resolve"]
+        notes.append("resolve stage skipped")
+    if skip_standards and "standards" in stages:
+        stages = [s for s in stages if s != "standards"]
+        notes.append("standards stage skipped")
     if notes:
         print("Note: " + "; ".join(notes))
 

@@ -68,6 +68,8 @@ class LLMConfigFile:
     ollama_timeout_s: int = 0  # 0 = unset / fall through
     skip_taxonomy: bool = False
     skip_graph: bool = False
+    skip_resolve: bool = False
+    skip_standards: bool = False
 
     @classmethod
     def load(cls, path: Path | None = None) -> LLMConfigFile:
@@ -93,6 +95,8 @@ class LLMConfigFile:
             ollama_timeout_s=int(data.get("ollama_timeout_s", 0) or 0),
             skip_taxonomy=bool(data.get("skip_taxonomy", False)),
             skip_graph=bool(data.get("skip_graph", False)),
+            skip_resolve=bool(data.get("skip_resolve", False)),
+            skip_standards=bool(data.get("skip_standards", False)),
         )
 
 
@@ -501,6 +505,8 @@ def resolve_embedding_model(
 
 SKIP_TAXONOMY_ENV_VAR: str = "NORA_SKIP_TAXONOMY"
 SKIP_GRAPH_ENV_VAR: str = "NORA_SKIP_GRAPH"
+SKIP_RESOLVE_ENV_VAR: str = "NORA_SKIP_RESOLVE"
+SKIP_STANDARDS_ENV_VAR: str = "NORA_SKIP_STANDARDS"
 RAG_ONLY_ENV_VAR: str = "NORA_RAG_ONLY"
 
 
@@ -556,6 +562,57 @@ def resolve_skip_graph(
         return True
     cfg = _llm_config()
     if cfg.skip_graph:
+        return True
+    if env_config_value is not None:
+        return env_config_value
+    return False
+
+
+def resolve_skip_resolve(
+    cli_value: bool | None = None,
+    env_config_value: bool | None = None,
+) -> bool:
+    """Resolve whether to skip the cross-reference resolve stage.
+
+    Precedence: --skip-resolve CLI flag > NORA_SKIP_RESOLVE env var >
+    config/llm.json `skip_resolve` > env config `skip_resolve` >
+    default (False).
+
+    Implies `skip_standards` semantically — the standards stage reads
+    resolve's manifests as input, so skipping resolve forces standards
+    off too. Callers should pair the two skips when invoking the
+    pipeline; the run_cli applies the cascade automatically."""
+    if cli_value is not None:
+        return cli_value
+    if _truthy(os.environ.get(SKIP_RESOLVE_ENV_VAR)):
+        return True
+    cfg = _llm_config()
+    if cfg.skip_resolve:
+        return True
+    if env_config_value is not None:
+        return env_config_value
+    return False
+
+
+def resolve_skip_standards(
+    cli_value: bool | None = None,
+    env_config_value: bool | None = None,
+) -> bool:
+    """Resolve whether to skip the standards (3GPP spec download) stage.
+
+    Precedence: --skip-standards CLI flag > NORA_SKIP_STANDARDS env
+    var > config/llm.json `skip_standards` > env config
+    `skip_standards` > default (False).
+
+    Skipping standards omits the 3GPP / GSMA spec download + extract
+    pass. Graph and vectorstore tolerate missing standards artifacts
+    (no spec-section nodes / chunks)."""
+    if cli_value is not None:
+        return cli_value
+    if _truthy(os.environ.get(SKIP_STANDARDS_ENV_VAR)):
+        return True
+    cfg = _llm_config()
+    if cfg.skip_standards:
         return True
     if env_config_value is not None:
         return env_config_value
@@ -663,6 +720,19 @@ class EnvironmentConfig:
     # `skip_taxonomy` for a fully RAG-only pipeline (set both via
     # `--rag-only` or `NORA_RAG_ONLY=1`).
     skip_graph: bool = False
+
+    # Skip the cross-reference resolve stage. Pipeline still produces
+    # parsed trees; downstream graph + vectorstore tolerate missing
+    # xref manifests (no resolved_internal / resolved_standards edges).
+    # Implies skip_standards (the standards stage reads resolve's
+    # manifest dir to build the spec reference index).
+    skip_resolve: bool = False
+
+    # Skip the standards (3GPP / GSMA) download + extract stage. No
+    # spec-section nodes get added to the graph and no spec chunks
+    # land in the vectorstore. Useful when running offline or when
+    # standards content isn't needed for the corpus.
+    skip_standards: bool = False
 
     # Metadata
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))

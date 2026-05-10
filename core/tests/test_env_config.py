@@ -341,6 +341,56 @@ def test_resolve_skip_graph_3tier(tmp_path, monkeypatch):
         env_cfg._reset_llm_config_cache()
 
 
+def test_resolve_skip_resolve_3tier(tmp_path, monkeypatch):
+    """CLI True > env var > config/llm.json > env config > False."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.SKIP_RESOLVE_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_skip_resolve() is False
+        assert env_cfg.resolve_skip_resolve(env_config_value=True) is True
+        p.write_text(json.dumps({"skip_resolve": True}))
+        env_cfg._reset_llm_config_cache()
+        assert env_cfg.resolve_skip_resolve(env_config_value=False) is True
+        p.write_text(json.dumps({"skip_resolve": False}))
+        env_cfg._reset_llm_config_cache()
+        monkeypatch.setenv(env_cfg.SKIP_RESOLVE_ENV_VAR, "1")
+        assert env_cfg.resolve_skip_resolve(env_config_value=False) is True
+        assert env_cfg.resolve_skip_resolve(cli_value=False) is False
+        assert env_cfg.resolve_skip_resolve(cli_value=True) is True
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_skip_standards_3tier(tmp_path, monkeypatch):
+    """CLI True > env var > config/llm.json > env config > False."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.SKIP_STANDARDS_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_skip_standards() is False
+        assert env_cfg.resolve_skip_standards(env_config_value=True) is True
+        p.write_text(json.dumps({"skip_standards": True}))
+        env_cfg._reset_llm_config_cache()
+        assert env_cfg.resolve_skip_standards(env_config_value=False) is True
+        p.write_text(json.dumps({"skip_standards": False}))
+        env_cfg._reset_llm_config_cache()
+        monkeypatch.setenv(env_cfg.SKIP_STANDARDS_ENV_VAR, "1")
+        assert env_cfg.resolve_skip_standards(env_config_value=False) is True
+        assert env_cfg.resolve_skip_standards(cli_value=False) is False
+        assert env_cfg.resolve_skip_standards(cli_value=True) is True
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
 def test_resolve_skip_rag_only_envvar_implies_both(tmp_path, monkeypatch):
     """`NORA_RAG_ONLY=1` flips both skip_taxonomy and skip_graph on."""
     import json
