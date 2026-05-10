@@ -751,10 +751,16 @@ class GenericStructuralParser:
                     indices.add(b.position.index)
                     consuming = True
                 continue
-            # Consuming: drop non-paragraph blocks (tables, images) until
-            # the next paragraph (which by construction is the next
-            # section's heading or inter-section text).
-            if b.type == BlockType.PARAGRAPH:
+            # Consuming: drop non-paragraph blocks (tables, images)
+            # until the next paragraph OR heading, either of which
+            # marks the start of post-revhist content. Originally only
+            # PARAGRAPH closed the consume (revhist's tail was always a
+            # PDF paragraph); DOCX extractors emit Word-styled headings
+            # as BlockType.HEADING, so a heading right after the
+            # revhist table would otherwise be swept into the revhist
+            # range — inflating ``revhist_blocks_dropped`` and
+            # extending the front-matter cutoff incorrectly.
+            if b.type in (BlockType.PARAGRAPH, BlockType.HEADING):
                 break
             indices.add(b.position.index)
         return indices
@@ -1041,14 +1047,13 @@ class GenericStructuralParser:
 
             # FR-34: revhist consume. After the revhist heading matched,
             # drop ALL subsequent table/image blocks until the next
-            # paragraph (which is always either the next section heading
-            # or some inter-section text). Multi-page revhist tables —
-            # which pdfplumber slices into one table block per page —
-            # all get consumed as a unit.
+            # paragraph or heading (either marks post-revhist content).
+            # Multi-page revhist tables — which pdfplumber slices into
+            # one table block per page — all get consumed as a unit.
             if revhist_active:
-                if block.type == BlockType.PARAGRAPH:
+                if block.type in (BlockType.PARAGRAPH, BlockType.HEADING):
                     revhist_active = False
-                    # fall through — process this paragraph normally
+                    # fall through — process this block normally
                 else:
                     self._parse_stats.revhist_blocks_dropped += 1
                     self._dropped_entries.append(
@@ -1721,6 +1726,7 @@ class GenericStructuralParser:
         is "body_text" or "table". When no section matches, returns ({}, "", "", []).
         """
         if self._definitions_section_re is None:
+            logger.debug("definitions: pattern unset — extraction disabled")
             return {}, "", "", []
 
         target: Requirement | None = None
@@ -1729,7 +1735,26 @@ class GenericStructuralParser:
                 target = s
                 break
         if target is None:
+            # Diagnostic: surfaces *why* defs is zero. Lists the first
+            # few section titles so the user can see what's being
+            # pattern-matched against.
+            sample_titles = [
+                s.title for s in sections[:8] if s.title
+            ]
+            logger.info(
+                "definitions: no section matched pattern=%r in %d sections; "
+                "sample titles=%r",
+                self._definitions_section_re.pattern,
+                len(sections),
+                sample_titles,
+            )
             return {}, "", "", []
+
+        logger.info(
+            "definitions: matched section=%r section_number=%r tables=%d body_len=%d",
+            target.title, target.section_number,
+            len(target.tables or []), len(target.text or ""),
+        )
 
         defs: dict[str, str] = {}
         acronym_entries: list[tuple[str, str, str]] = []
@@ -1756,13 +1781,15 @@ class GenericStructuralParser:
         # silently dropped (real corpus bug: SDM row in VZ LTEOTADM).
         # We filter the obvious "Acronym | Definition" canonical
         # header row so it doesn't pollute the map.
-        for tbl in target.tables:
+        for tbl_idx, tbl in enumerate(target.tables):
             candidates: list[tuple[str, str]] = []
             headers = getattr(tbl, "headers", None) or []
+            header_is_canonical = False
             if len(headers) >= 2:
                 h0 = re.sub(r"\s+", " ", (headers[0] or "")).strip()
                 h1 = re.sub(r"\s+", " ", (headers[1] or "")).strip()
-                if h0 and h1 and not self._looks_like_definition_column_header(h0, h1):
+                header_is_canonical = self._looks_like_definition_column_header(h0, h1)
+                if h0 and h1 and not header_is_canonical:
                     candidates.append((h0, h1))
             for row in tbl.rows:
                 if len(row) < 2:
@@ -1772,10 +1799,20 @@ class GenericStructuralParser:
                 if not term or not expansion:
                     continue
                 candidates.append((term, expansion))
+            kept_before = len(defs)
             for term, expansion in candidates:
                 if term not in defs:
                     defs[term] = expansion
                     acronym_entries.append((term, expansion, "table"))
+            logger.info(
+                "definitions: table[%d] headers=%r canonical=%s rows=%d candidates=%d kept=%d",
+                tbl_idx,
+                list(headers)[:4],
+                header_is_canonical,
+                len(tbl.rows),
+                len(candidates),
+                len(defs) - kept_before,
+            )
 
         return defs, target.section_number, target.title or "", acronym_entries
 

@@ -444,6 +444,29 @@ class TestFrontMatterCutoff:
         assert tree.parse_stats.toc_blocks_dropped == 0
         assert len(tree.requirements) == 1
 
+    def test_heading_after_revhist_table_not_swept_into_revhist(self):
+        """Regression guard: when the next block after the revhist table
+        is ``BlockType.HEADING`` (DOCX extractor's typing for Word
+        Heading-styled paragraphs), the consume must break — otherwise
+        the heading is silently included in ``revhist_blocks_dropped``,
+        the front-matter cutoff is extended past where it should be,
+        and downstream sections get truncated."""
+        blocks = [
+            _toc_para(0, "1\tReal VZ_REQ_X_1\t5", depth=1),
+            _revhist_label(1),
+            _table(2),
+            _heading(
+                3, 1, "Real ", "VZ_REQ_X_1", block_type=BlockType.HEADING
+            ),
+            _para(4, "body"),
+        ]
+        tree = _parse(blocks)
+        # revhist range is just label + table — 2 blocks, NOT 3.
+        assert tree.parse_stats.revhist_blocks_dropped == 2
+        # Heading is preserved as a Requirement (not consumed).
+        assert len(tree.requirements) == 1
+        assert tree.requirements[0].req_id == "VZ_REQ_X_1"
+
     def test_summary_carries_frontmatter_count(self):
         # Layout: TOC at 0, doc-title heading at 1, revhist at 2-3,
         # real body heading at 4. Cutoff = max(0, 3) = 3, so the doc
