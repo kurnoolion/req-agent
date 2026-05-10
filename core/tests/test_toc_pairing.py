@@ -291,6 +291,44 @@ class TestDocxStylesClassification:
         # Title should be the runs[:-1] joined, not the full text.
         assert tree.requirements[0].title.strip() == "Foo Title"
 
+    def test_empty_runs_falls_back_to_text_for_req_id_and_title(self, caplog):
+        """When body heading has ``runs=[]`` (DOCX formatting error
+        in source), the parser falls back to ``block.text`` for both
+        req_id extraction and title-stripping. Pair-by-req_id then
+        succeeds, the heading produces a Requirement with proper
+        section_number, and a ``parser.format_error`` WARN is logged."""
+        # Body heading: same shape as work-PC missing_toc_reqs.json
+        # — runs empty, text contains both title-prefix and req_id.
+        bad_heading = ContentBlock(
+            type=BlockType.PARAGRAPH,
+            position=Position(page=5, index=1),
+            text="1.1.1.Some Title VZ_REQ_FOO_42",
+            style="Heading 3",
+            font_info=FontInfo(size=14.0, bold=True),
+            runs=[],  # empty — the format error
+        )
+        blocks = [
+            _toc_para(0, "4.1.1\t1.1.1.Some Title VZ_REQ_FOO_42\t13", depth=3),
+            bad_heading,
+            _para(2, "body content"),
+        ]
+        import logging
+        with caplog.at_level(logging.WARNING):
+            tree = _parse(blocks)
+        # Requirement extracted; section_number from TOC; req_id from text fallback.
+        assert len(tree.requirements) == 1
+        r = tree.requirements[0]
+        assert r.req_id == "VZ_REQ_FOO_42"
+        assert r.section_number == "4.1.1"
+        # No TOC pair miss — pair-by-req_id succeeded.
+        assert tree.parse_stats.toc_pair_misses == 0
+        # Format error was logged.
+        format_errors = [
+            r for r in caplog.records
+            if r.message.startswith("parser.format_error: kind=empty_runs_heading")
+        ]
+        assert len(format_errors) >= 1
+
     def test_heading_blocktype_routes_through_classifier(self):
         """Real DOCX extractor emits ``BlockType.HEADING`` for
         Word-styled headings (per ``docx_extractor._paragraph_block``).

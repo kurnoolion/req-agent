@@ -445,6 +445,9 @@ class GenericStructuralParser:
         self._heading_entries: list[tuple[str, int, int, int]] = []
         # TOC pairing — body headings that didn't match any TOC entry.
         self._toc_pair_misses: list[TocPairMiss] = []
+        # Doc identity threaded into ``_log_format_error`` so warning
+        # lines are self-contained without reference to outer scope.
+        self._doc_source_file = doc.source_file
 
         # 1a. Style-driven TOC pre-pass (generic-rules pivot). Builds a
         #     ``(req_id | (depth, normalized_title)) → TocEntry`` index
@@ -2029,6 +2032,42 @@ class GenericStructuralParser:
             return []
         return [_canonicalize_req_id(rid) for rid in self._req_id_re.findall(text)]
 
+    def _log_format_error(
+        self,
+        kind: str,
+        block: ContentBlock,
+        **fields: Any,
+    ) -> None:
+        """Emit a structured WARN for a likely document formatting error.
+
+        Tag prefix: ``parser.format_error``. Used for source-document
+        formatting deviations the parser handles gracefully but that
+        signal a likely human authoring error worth surfacing for
+        review. Examples:
+
+          * ``empty_runs_heading`` — heading with ``runs=[]``; req_id
+            extracted from ``block.text`` fallback. Common DOCX
+            authoring artifact.
+          * ``toc_pair_miss`` — body heading didn't pair with any TOC
+            entry; could be heading-styled non-section text, or a real
+            heading missing from the auto-generated TOC.
+
+        String fields are truncated to 80 chars — parse logs are
+        local-only but compact RPT carries the count, not these
+        per-error lines.
+        """
+        parts = [
+            f"kind={kind}",
+            f"doc={self._doc_source_file}",
+            f"block={block.position.index}",
+            f"page={block.position.page}",
+        ]
+        for k, v in fields.items():
+            if isinstance(v, str) and len(v) > 80:
+                v = v[:77] + "..."
+            parts.append(f"{k}={v!r}")
+        logger.warning("parser.format_error: " + " ".join(parts))
+
     def _heading_req_id(self, block: ContentBlock) -> str:
         """Extract a heading-anchored req_id when the profile opts in.
 
@@ -2041,7 +2080,11 @@ class GenericStructuralParser:
         Modes:
           * ``"last_run"`` — read ``block.runs[-1]``. If its text
             solo-matches ``pattern`` (whitespace-tolerant), return the
-            canonicalized + optionally-uppercased id.
+            canonicalized + optionally-uppercased id. **Empty-runs
+            fallback**: when ``runs`` is empty (DOCX formatting error
+            — heading content not run-split), the trailing match in
+            ``block.text`` is used and the formatting deviation is
+            logged via ``parser.format_error: kind=empty_runs_heading``.
           * ``"leading_text"`` — match ``pattern`` anchored at the start
             of the heading's live text.
           * ``"trailing_text"`` — return ``""`` (preserves OA semantics).
@@ -2061,6 +2104,18 @@ class GenericStructuralParser:
 
         if anchor == "last_run":
             if not block.runs:
+                # Empty-runs fallback (formatting error in source doc).
+                # Pair-by-req_id still works; we log the format error so
+                # the architect can find and fix the source.
+                if block.text:
+                    ids = self._req_id_re.findall(block.text)
+                    if ids:
+                        self._log_format_error(
+                            "empty_runs_heading", block,
+                            note="req_id extracted from text fallback (runs=[])",
+                            text_excerpt=block.text,
+                        )
+                        return _normalize(ids[-1])
                 return ""
             last = block.runs[-1].text
             if self._req_id_anchored_re and self._req_id_anchored_re.match(last):
@@ -2176,9 +2231,12 @@ class GenericStructuralParser:
                     title=title,
                 )
             )
-            logger.warning(
-                "parser.toc_pair_miss: depth=%d req_id=%s block=%d page=%d",
-                depth, req_id or "<none>", block.position.index, block.position.page,
+            self._log_format_error(
+                "toc_pair_miss", block,
+                depth=depth,
+                req_id=req_id or "<none>",
+                title=title,
+                note="body heading not in TOC — likely heading-styled non-section text or unlisted appendix",
             )
 
         return section_num, title
@@ -2189,7 +2247,11 @@ class GenericStructuralParser:
         When ``anchor="last_run"`` AND the last run solo-matches the
         req_id pattern, that run is the requirement_id and is stripped
         from the title. Otherwise, the full live text is returned.
-        Falls back to ``block.text`` when ``runs`` is empty.
+        Falls back to ``block.text`` when ``runs`` is empty — and in
+        that case, if the text's tail matches the req_id pattern, the
+        match is stripped so TOC pair-by-title fallback can still
+        succeed (the source-doc formatting error is logged separately
+        by ``_heading_req_id``).
         """
         if (
             self.profile.requirement_id.anchor == "last_run"
@@ -2200,7 +2262,25 @@ class GenericStructuralParser:
             return "".join(
                 r.text for r in block.runs[:-1] if not r.struck
             ).strip()
-        return block.live_text().strip()
+
+        text = block.live_text().strip()
+
+        # Empty-runs path: strip a trailing req_id from text so the TOC
+        # pair-by-title fallback can match against TOC's clean title.
+        if (
+            self.profile.requirement_id.anchor == "last_run"
+            and not block.runs
+            and self._req_id_re
+            and text
+        ):
+            ids = self._req_id_re.findall(text)
+            if ids:
+                last_id = ids[-1]
+                last_pos = text.rfind(last_id)
+                if last_pos > 0:
+                    text = text[:last_pos].strip()
+
+        return text
 
     def _extract_priority(self, text: str) -> tuple[str, str]:
         """Extract a priority marker from heading text (FR-31).

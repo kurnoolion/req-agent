@@ -157,10 +157,13 @@ class TestLastRunAnchor:
         assert len(tree.requirements) == 1
         assert tree.requirements[0].req_id == ""
 
-    def test_falls_back_when_runs_empty(self):
-        """No runs (PDF block) → no last-run extraction; req_id stays empty
-        unless a trailing-marker block follows. Not a regression — just a
-        non-applicable mode."""
+    def test_falls_back_to_text_when_runs_empty(self):
+        """When ``runs=[]`` (DOCX formatting error in source), the
+        parser falls back to ``block.text`` for req_id extraction so
+        the heading still produces a properly-anchored Requirement
+        instead of one with an empty req_id. The format deviation is
+        logged separately under ``parser.format_error:
+        kind=empty_runs_heading`` for the architect's review."""
         block = ContentBlock(
             type=BlockType.PARAGRAPH,
             position=Position(page=1, index=0),
@@ -168,9 +171,8 @@ class TestLastRunAnchor:
             font_info=FontInfo(size=14.0, bold=True),
         )
         tree = _parse(_profile(anchor="last_run"), [block, _para(1, "body")])
-        # last_run mode + no runs → no heading-anchored extraction (the
-        # heading is still recognized, but req_id is empty).
-        assert tree.requirements[0].req_id == ""
+        # Text-fallback extracts the req_id from the trailing token.
+        assert tree.requirements[0].req_id == "VZ_REQ_X_1"
 
 
 # ---------------------------------------------------------------------------
