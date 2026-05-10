@@ -122,8 +122,12 @@ def substitute_placeholders(
     ad.global_section_pattern = sub(ad.global_section_pattern)
 
     out.definitions_entry_pattern = sub(out.definitions_entry_pattern)
+    out.definitions_table_term_column = sub(out.definitions_table_term_column)
+    out.definitions_table_definition_column = sub(out.definitions_table_definition_column)
     out.toc_detection_pattern = sub(out.toc_detection_pattern)
-    out.revision_history_heading_pattern = sub(out.revision_history_heading_pattern)
+    out.toc_detection.style_pattern = sub(out.toc_detection.style_pattern)
+    out.toc_detection.entry_pattern = sub(out.toc_detection.entry_pattern)
+    out.revision_history_label_pattern = sub(out.revision_history_label_pattern)
     out.reference_list_section_pattern = sub(out.reference_list_section_pattern)
     out.reference_list_entry_pattern = sub(out.reference_list_entry_pattern)
 

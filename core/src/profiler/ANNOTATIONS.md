@@ -318,9 +318,10 @@ something.
 **Definition.** The revision-history heading + the table that follows it,
 listing each release's changes. Pure metadata — never carries a requirement.
 
-**Pipeline path.** Profiler derives `revision_history_heading_pattern` →
+**Pipeline path.** Profiler derives `revision_history_label_pattern` →
 parser drops the heading + the next paragraph/table block as a unit (the
-"revhist consume" mechanism).
+"revhist consume" mechanism). Pattern matches against any
+heading-or-paragraph block text.
 
 **What to mark.** The heading and (optionally) the table that follows. If you
 mark the heading alone, set `kind_subtype="heading_only"`; if you include the

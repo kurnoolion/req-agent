@@ -75,7 +75,7 @@ class DocumentProfiler:
             header_footer=hf,
             cross_reference_patterns=xrefs,
             body_text=body,
-            revision_history_heading_pattern=revhist_pattern,
+            revision_history_label_pattern=revhist_pattern,
         )
 
         self._log_profile_summary(profile)
@@ -134,7 +134,7 @@ class DocumentProfiler:
         # previous narrowing isn't a regression even when the new pass
         # finds nothing.
         new_revhist = self._detect_revision_history_pattern(docs)
-        profile.revision_history_heading_pattern = new_revhist
+        profile.revision_history_label_pattern = new_revhist
 
         self._log_profile_summary(profile)
         return profile

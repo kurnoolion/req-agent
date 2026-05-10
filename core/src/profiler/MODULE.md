@@ -12,8 +12,9 @@ For the human-annotator's guide to the 13 annotation kinds the Bootstrap web UI 
 - `GENERIC_PLACEHOLDERS` (profile_substitute.py) — `{<DIGITS>: \d+, <MNO>: [A-Z]{2,4}, <PLAN>: [A-Z0-9_]+, <REL>: [A-Za-z0-9-]+}`.
 - `DocumentProfiler` (profiler.py) — `create_profile(docs, profile_name="") -> DocumentProfile`; also `update_profile()`, `validate_profile()` (coverage check against held-out docs)
 - `DocumentProfile` (profile_schema.py) — full profile container with `to_dict`, `save_json`, `load_json`
-- Profile subcomponents: `HeadingLevel`, `HeadingDetection`, `RequirementIdPattern`, `MetadataField`, `PlanMetadata`, `DocumentZone`, `HeaderFooter`, `CrossReferencePatterns`, `BodyText`, `ApplicabilityDetection` (FR-32 [D-030])
-- New `DocumentProfile` fields: `ignore_strikeout: bool = True` (FR-33 [D-031]); `applicability_detection` (FR-32); `toc_detection_pattern: str` + `toc_page_threshold: float` (FR-34); `definitions_entry_pattern: str` (FR-35 [D-032]); `revision_history_heading_pattern: str` (FR-34 [D-035])
+- Profile subcomponents: `HeadingLevel`, `HeadingDetection`, `RequirementIdPattern`, `MetadataField`, `PlanMetadata`, `DocumentZone`, `HeaderFooter`, `CrossReferencePatterns`, `BodyText`, `ApplicabilityDetection` (FR-32 [D-030]), `TocDetection`
+- New `DocumentProfile` fields: `ignore_strikeout: bool = True` (FR-33 [D-031]); `applicability_detection` (FR-32); `toc_detection_pattern: str` + `toc_page_threshold: float` (FR-34); `toc_detection: TocDetection` (style-driven TOC, generic-rules pivot); `definitions_entry_pattern: str` (FR-35 [D-032]); `definitions_table_term_column: str` + `definitions_table_definition_column: str` (table-form glossary); `revision_history_label_pattern: str` (FR-34 [D-035]; renamed from `revision_history_heading_pattern` — old field name still loads via migration in `_from_dict`)
+- New `RequirementIdPattern` fields: `anchor: str = "trailing_text" | "last_run" | "leading_text"`; `normalize: str = "none" | "upper"` (run-precise req_id extraction + mixed-case normalization)
 - New `HeadingDetection` fields: `priority_marker_pattern: str` (FR-31); `definitions_section_pattern: str` (FR-35 [D-032])
 - `profile_cli.main` — CLI: `create | update | validate`
 

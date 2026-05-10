@@ -15,6 +15,7 @@ from core.src.profiler.profile_schema import (
     MetadataField,
     PlanMetadata,
     RequirementIdPattern,
+    TocDetection,
 )
 
 
@@ -46,6 +47,8 @@ def _make_profile() -> DocumentProfile:
             components={"prefix": "VZ_REQ", "separator": "_", "plan_id_position": 2},
             sample_ids=["VZ_REQ_TEST_100", "VZ_REQ_TEST_200"],
             total_found=500,
+            anchor="last_run",
+            normalize="upper",
         ),
         plan_metadata=PlanMetadata(
             plan_name=MetadataField(location="first_page", pattern=r"Plan\s+Name:\s*(.+)", sample_value="Test_Plan"),
@@ -68,6 +71,13 @@ def _make_profile() -> DocumentProfile:
             requirement_id_refs=r"VZ_REQ_[A-Z0-9_]+_\d+",
         ),
         body_text=BodyText(font_size_min=11.5, font_size_max=12.5, font_families=["Fanwood"]),
+        toc_detection=TocDetection(
+            style_pattern=r"(?i)^toc\s+(\d+)$",
+            entry_pattern=r"^(?P<num>[\w.]+)\t(?P<body>.+?)\t(?P<page>\d+)\s*$",
+        ),
+        revision_history_label_pattern=r"(?i)^\s*custom\s+history\s*$",
+        definitions_table_term_column=r"(?i)^acronym$",
+        definitions_table_definition_column=r"(?i)^expansion$",
     )
 
 
@@ -118,6 +128,80 @@ class TestDocumentProfileRoundTrip:
         assert rid.components["plan_id_position"] == 2
         assert rid.total_found == 500
         assert len(rid.sample_ids) == 2
+        assert rid.anchor == "last_run"
+        assert rid.normalize == "upper"
+
+    def test_requirement_id_defaults_preserve_legacy_behavior(self):
+        """New ``anchor`` / ``normalize`` fields default to legacy values."""
+        rid = RequirementIdPattern()
+        assert rid.anchor == "trailing_text"
+        assert rid.normalize == "none"
+
+    def test_round_trip_toc_detection(self, tmp_path: Path):
+        original = _make_profile()
+        json_path = tmp_path / "profile.json"
+        original.save_json(json_path)
+        loaded = DocumentProfile.load_json(json_path)
+
+        toc = loaded.toc_detection
+        assert toc.style_pattern == r"(?i)^toc\s+(\d+)$"
+        assert "(?P<num>" in toc.entry_pattern
+        assert "(?P<body>" in toc.entry_pattern
+        assert "(?P<page>" in toc.entry_pattern
+
+    def test_toc_detection_defaults(self):
+        """Defaults: style empty (opt-in), entry pattern populated."""
+        toc = TocDetection()
+        assert toc.style_pattern == ""
+        assert toc.entry_pattern.startswith("^(?P<num>")
+
+    def test_round_trip_revhist_label_pattern(self, tmp_path: Path):
+        original = _make_profile()
+        json_path = tmp_path / "profile.json"
+        original.save_json(json_path)
+        loaded = DocumentProfile.load_json(json_path)
+
+        assert loaded.revision_history_label_pattern == r"(?i)^\s*custom\s+history\s*$"
+
+    def test_revhist_legacy_field_name_migrates(self, tmp_path: Path):
+        """Profiles saved with the old ``revision_history_heading_pattern``
+        field name still load — the value is migrated into the renamed
+        ``revision_history_label_pattern``."""
+        legacy_json = tmp_path / "legacy.json"
+        legacy_json.write_text(
+            '{"revision_history_heading_pattern": "(?i)^legacy$"}',
+            encoding="utf-8",
+        )
+        loaded = DocumentProfile.load_json(legacy_json)
+        assert loaded.revision_history_label_pattern == "(?i)^legacy$"
+
+    def test_round_trip_definitions_table_columns(self, tmp_path: Path):
+        original = _make_profile()
+        json_path = tmp_path / "profile.json"
+        original.save_json(json_path)
+        loaded = DocumentProfile.load_json(json_path)
+
+        assert loaded.definitions_table_term_column == r"(?i)^acronym$"
+        assert loaded.definitions_table_definition_column == r"(?i)^expansion$"
+
+    def test_definitions_table_column_defaults(self):
+        """Defaults match common acronym/term and definition column shapes."""
+        profile = DocumentProfile()
+        assert "acronym" in profile.definitions_table_term_column
+        assert "term" in profile.definitions_table_term_column
+        assert "definition" in profile.definitions_table_definition_column
+
+    def test_embed_glossary_default_true(self):
+        """``embed_glossary`` defaults to True — preserves OA behavior
+        (glossary section + per-acronym chunks emitted)."""
+        assert DocumentProfile().embed_glossary is True
+
+    def test_embed_glossary_round_trip(self, tmp_path: Path):
+        original = DocumentProfile(embed_glossary=False)
+        json_path = tmp_path / "profile.json"
+        original.save_json(json_path)
+        loaded = DocumentProfile.load_json(json_path)
+        assert loaded.embed_glossary is False
 
     def test_round_trip_plan_metadata(self, tmp_path: Path):
         original = _make_profile()

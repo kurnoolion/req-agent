@@ -72,6 +72,24 @@ class RequirementIdPattern:
     sample_ids: list[str] = field(default_factory=list)
     total_found: int = 0
 
+    anchor: str = "trailing_text"
+    """Where in a heading the req_id is anchored:
+      - ``"last_run"``: take the last ``TextRun`` of the heading; treat its
+        text as the req_id when it matches ``pattern``. Robust to
+        partial-strike and inline mentions; requires DOCX-style runs.
+      - ``"trailing_text"`` (default): regex-search ``pattern`` against the
+        heading's full text, anchored at end. Legacy / OA behavior.
+      - ``"leading_text"``: regex-search ``pattern`` anchored at start.
+    """
+
+    normalize: str = "none"
+    """Normalization applied to the extracted req_id token:
+      - ``"none"`` (default): no transformation.
+      - ``"upper"``: ``str.upper()`` — needed for corpora whose plan codes
+        appear in mixed case in headings (e.g., ``VoWiFi``) but are
+        canonical-uppercase elsewhere.
+    """
+
 
 @dataclass
 class MetadataField:
@@ -146,6 +164,36 @@ class BodyText:
     font_size_min: float = 0.0
     font_size_max: float = 0.0
     font_families: list[str] = field(default_factory=list)
+
+
+@dataclass
+class TocDetection:
+    """Style-driven TOC detection (DOCX-authoritative).
+
+    Two-stage detection complementing the legacy text-regex path
+    (``DocumentProfile.toc_detection_pattern``):
+
+    1. ``style_pattern`` — regex matched against a paragraph's ``style``
+       (e.g. DOCX's auto-generated ``toc 1``, ``toc 2``...). Capture
+       group 1 is the depth (1-indexed). When set and a paragraph's
+       style matches, the block is a TOC entry regardless of its text
+       shape.
+    2. ``entry_pattern`` — regex applied to the matched paragraph's
+       ``text``. Named groups extracted: ``num`` (full section number,
+       e.g. ``"1.2.3"``), ``body`` (title plus optional trailing
+       req_id), ``page`` (TOC page-number column). The parser further
+       peels the req_id from the tail of ``body`` using
+       ``RequirementIdPattern.pattern`` with ``\\s*`` tolerance —
+       handles both ``"<title> <req_id>"`` and ``"<title><req_id>"``.
+
+    Empty ``style_pattern`` disables the style-driven path; the parser
+    falls back to the text-regex / page-threshold heuristic.
+    """
+
+    style_pattern: str = ""
+    entry_pattern: str = (
+        r"^(?P<num>[\w.]+)\t(?P<body>.+?)\t(?P<page>\d+)\s*$"
+    )
 
 
 @dataclass
@@ -246,20 +294,62 @@ class DocumentProfile:
     disables entry extraction even if the section is found."""
 
     # ── Revision/version history omission (FR-34) ────────────────
-    revision_history_heading_pattern: str = (
+    revision_history_label_pattern: str = (
         r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$"
     )
-    """Regex matched against paragraph-block text. When a paragraph
-    matches AND the immediately-following block is a table, the parser
-    drops both — the heading and the revision/change-log table itself.
-    Empty string disables. The default covers common labels across MNOs
+    """Regex matched against the *text* of any paragraph or heading
+    block. When a block matches AND the immediately-following block is
+    a table, the parser drops both — the label and the
+    revision/change-log table itself. Renamed from
+    ``revision_history_heading_pattern`` (legacy) to reflect that the
+    label can be either heading-styled or a plain paragraph. Empty
+    string disables. The default covers common labels across MNOs
     ('Revision History', 'Change History', 'Version History', 'Document
     History', 'Change Log', 'Revision Log'); the profiler narrows it to
     the specific phrasing observed in a corpus (whitespace-tolerant),
-    and the corrections workflow can override per-MNO. Detection is
-    paragraph + next-block-is-table — the table-following gate prevents
-    spurious matches in body prose that happens to mention 'revision
-    history'."""
+    and the corrections workflow can override per-MNO. The
+    table-following gate prevents spurious matches in body prose that
+    happens to mention 'revision history'."""
+
+    # ── Style-driven TOC detection (generic-rules pivot) ─────────
+    toc_detection: TocDetection = field(default_factory=TocDetection)
+    """Style-driven TOC detection. Takes priority over
+    ``toc_detection_pattern`` when ``toc_detection.style_pattern`` is
+    non-empty. See ``TocDetection`` docstring for the two-stage
+    matching protocol."""
+
+    # ── Glossary / definitions table extraction ──────────────────
+    definitions_table_term_column: str = (
+        r"(?i)^\s*(acronym|abbrev|abbreviation|term)([/\s]+\w+)*\s*$"
+    )
+    """Regex matched against a table column header to identify the
+    *term* column of a glossary/definitions table. When the
+    definitions section is detected via
+    ``heading_detection.definitions_section_pattern`` and the next
+    table's columns include one matching this pattern AND one matching
+    ``definitions_table_definition_column``, the parser extracts
+    ``(term, definition)`` pairs by name. When neither column header
+    matches, falls back to positional (col 0 = term, col 1 =
+    definition). Empty disables the named-column path (positional
+    only)."""
+
+    definitions_table_definition_column: str = (
+        r"(?i)^\s*(definition|meaning|description|expansion)([/\s]+\w+)*\s*$"
+    )
+    """Companion to ``definitions_table_term_column``. Regex matched
+    against a table column header to identify the *definition* column.
+    Both must match for named-column extraction to apply."""
+
+    embed_glossary: bool = True
+    """When True (default — preserves OA behavior), the glossary section
+    and per-acronym chunks are emitted into the vector store and
+    knowledge graph. When False (generic-rules pivot), the glossary
+    section + descendants are dropped from ``RequirementTree.requirements``
+    and ``ChunkBuilder._build_glossary_chunks`` is skipped — the
+    ``definitions_map`` is preserved so acronym-expansion in body
+    chunks (``ChunkBuilder._expand_definitions``) still applies before
+    embedding. Use False for corpora where the glossary is purely an
+    expansion lookup, not retrieval-relevant content."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -340,10 +430,25 @@ class DocumentProfile:
             ),
             toc_detection_pattern=data.get("toc_detection_pattern", r".*\.{3,}\s*\d+\s*$"),
             toc_page_threshold=data.get("toc_page_threshold", 0.8),
-            revision_history_heading_pattern=data.get(
-                "revision_history_heading_pattern",
-                r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$",
+            revision_history_label_pattern=data.get(
+                "revision_history_label_pattern",
+                data.get(
+                    "revision_history_heading_pattern",
+                    r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$",
+                ),
             ),
+            toc_detection=TocDetection(
+                **data.get("toc_detection", {})
+            ),
+            definitions_table_term_column=data.get(
+                "definitions_table_term_column",
+                r"(?i)^\s*(acronym|abbrev|abbreviation|term)([/\s]+\w+)*\s*$",
+            ),
+            definitions_table_definition_column=data.get(
+                "definitions_table_definition_column",
+                r"(?i)^\s*(definition|meaning|description|expansion)([/\s]+\w+)*\s*$",
+            ),
+            embed_glossary=data.get("embed_glossary", True),
             reference_list_section_pattern=data.get(
                 "reference_list_section_pattern",
                 r"(?i)^(references|bibliography|normative\s+references)$",

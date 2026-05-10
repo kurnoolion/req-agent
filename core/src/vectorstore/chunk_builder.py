@@ -151,16 +151,24 @@ class ChunkBuilder:
         # rank it low. A dedicated chunk with the acronym in the
         # first ~80 chars wins on both BM25 (high TF-IDF) and dense
         # similarity (concise definition).
-        for entry in self._build_glossary_chunks(
-            definitions_map=definitions_map,
-            mno=mno,
-            release=release,
-            plan_id=plan_id,
-            plan_name=plan_name,
-            defs_section_num=defs_section_num,
-            feature_ids=feature_ids,
-        ):
-            chunks.append(entry)
+        #
+        # Skipped when ``tree.embed_glossary == False`` (Phase 5 —
+        # generic-rules pivot): the glossary section was already
+        # dropped from ``requirements`` upstream; per-acronym chunks
+        # would be the same content reaching RAG via a different
+        # door. ``definitions_map`` survives so body chunks still get
+        # acronym-expansion via ``_expand_definitions``.
+        if tree.get("embed_glossary", True):
+            for entry in self._build_glossary_chunks(
+                definitions_map=definitions_map,
+                mno=mno,
+                release=release,
+                plan_id=plan_id,
+                plan_name=plan_name,
+                defs_section_num=defs_section_num,
+                feature_ids=feature_ids,
+            ):
+                chunks.append(entry)
 
         return chunks
 

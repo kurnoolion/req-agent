@@ -44,6 +44,24 @@ _SECTION_NUM_RE = re.compile(r"^\d+(?:\.\d+)*")
 _REQ_ID_WHITESPACE_RE = re.compile(r"\s+")
 
 
+# DOCX heading-style detector (case-insensitive). Drives the
+# ``method="docx_styles"`` classification path: paragraphs whose
+# ``style`` matches gain heading status with depth = group(1). Used in
+# place of ``numbering_pattern`` for corpora whose Word-styled headings
+# carry no inline section number.
+_DOCX_HEADING_STYLE_RE = re.compile(r"(?i)^Heading\s+(\d+)$")
+
+
+# Title-normalization for TOC ↔ body heading pairing. Collapses runs of
+# whitespace + lowercases so cosmetic differences ("LTE/IMS", "lte / ims")
+# don't break the pair-up.
+_TITLE_NORM_RE = re.compile(r"\s+")
+
+
+def _normalize_title(s: str) -> str:
+    return _TITLE_NORM_RE.sub(" ", s.strip()).lower()
+
+
 def _canonicalize_req_id(rid: str) -> str:
     """Normalize whitespace in a matched req_id to underscores."""
     return _REQ_ID_WHITESPACE_RE.sub("_", rid).strip("_")
@@ -112,6 +130,43 @@ class ParseStats:
     revhist_blocks_dropped: int = 0 # FR-34 (revision-history table omission)
     defs_extracted: int = 0         # FR-35 [D-032]
     refs_extracted: int = 0         # D-059, D-061 (reference_list_map entries)
+    toc_pair_misses: int = 0        # generic-rules pivot — body heading with no TOC entry
+    frontmatter_blocks_dropped: int = 0
+    """Generic-rules pivot — blocks ≤ ``max(toc_end, revhist_end)`` that are
+    NOT themselves TOC or revhist (typically: doc title heading, preface
+    paragraphs, page-1 metadata blocks). TOC and revhist drops are still
+    counted on their own counters."""
+
+
+@dataclass
+class TocEntry:
+    """A single TOC line, parsed from a ``toc N``-styled paragraph.
+
+    Produced by ``_extract_toc_index`` during the pre-pass; consumed by
+    ``_classify_heading_docx_styles`` to attach the document's actual
+    section number to each body heading.
+    """
+    depth: int             # 1-based, from the ``toc N`` style suffix
+    section_number: str    # e.g. "1.2.3" — the literal in the doc's TOC
+    title: str             # body title text (req_id peeled from tail)
+    req_id: str            # canonicalized, normalize-applied; "" when absent
+    block_index: int       # source block position for diagnostics
+
+
+@dataclass
+class TocPairMiss:
+    """A body heading that had no matching TOC entry.
+
+    Surfaced in the parse log so the architect can spot drift between
+    TOC and body without scanning the whole tree. Title is kept locally
+    only — never pasted into compact reports per the no-proprietary-
+    content rule (the *count* is what reaches RPT).
+    """
+    block_index: int
+    page: int
+    depth: int
+    req_id: str
+    title: str
 
 
 @dataclass
@@ -143,6 +198,12 @@ class RequirementTree:
     reference_list_section_number: str = ""
     """Section number of the references / bibliography section when one
     was identified (else empty)."""
+    embed_glossary: bool = True
+    """Mirrors ``profile.embed_glossary`` (default True). When False,
+    the parser drops the glossary section + descendants from
+    ``requirements``, and the chunk builder skips per-acronym chunks.
+    ``definitions_map`` remains populated so acronym-expansion in body
+    chunks still applies."""
     """Section number of the definitions / acronyms / glossary section
     when one was identified (else empty). The chunk builder uses it to
     skip inline expansion within the section's own chunks (and its
@@ -208,6 +269,8 @@ class RequirementTree:
                 revhist_blocks_dropped=ps.get("revhist_blocks_dropped", 0),
                 defs_extracted=ps.get("defs_extracted", 0),
                 refs_extracted=ps.get("refs_extracted", 0),
+                toc_pair_misses=ps.get("toc_pair_misses", 0),
+                frontmatter_blocks_dropped=ps.get("frontmatter_blocks_dropped", 0),
             ),
             definitions_map=dict(data.get("definitions_map", {})),
             definitions_section_number=data.get("definitions_section_number", ""),
@@ -215,6 +278,7 @@ class RequirementTree:
                 int(k): dict(v) for k, v in (data.get("reference_list_map") or {}).items()
             },
             reference_list_section_number=data.get("reference_list_section_number", ""),
+            embed_glossary=data.get("embed_glossary", True),
         )
 
 
@@ -237,18 +301,50 @@ class GenericStructuralParser:
             if profile.requirement_id.pattern
             else None
         )
+        # Anchored req_id regex — same pattern, full-match only. Used by
+        # ``anchor="last_run"`` extraction to test whether a single run's
+        # text *is* a req_id (vs. merely contains one).
+        self._req_id_anchored_re = (
+            re.compile(rf"^\s*(?:{profile.requirement_id.pattern})\s*$")
+            if profile.requirement_id.pattern
+            else None
+        )
         # Revision/version-history heading detection (FR-34) — compiled
         # once; None if disabled. Drops the matching paragraph and the
         # immediately-following table block (within a small window).
         self._revhist_re = (
-            re.compile(profile.revision_history_heading_pattern)
-            if profile.revision_history_heading_pattern
+            re.compile(profile.revision_history_label_pattern)
+            if profile.revision_history_label_pattern
             else None
         )
         # TOC entry detection (FR-34) — compiled once; None if disabled
         self._toc_re = (
             re.compile(profile.toc_detection_pattern)
             if profile.toc_detection_pattern
+            else None
+        )
+        # Style-driven TOC detection (generic-rules pivot). When
+        # ``style_pattern`` is set, the pre-pass walks paragraphs whose
+        # ``style`` matches and parses each via ``entry_pattern`` to
+        # build a ``(section_number, title, req_id)`` index keyed by
+        # depth. ``_classify_heading_docx_styles`` consults the index
+        # to attach the document's real section_number to each body
+        # heading.
+        self._toc_style_re = (
+            re.compile(profile.toc_detection.style_pattern)
+            if profile.toc_detection.style_pattern
+            else None
+        )
+        self._toc_entry_re = (
+            re.compile(profile.toc_detection.entry_pattern)
+            if profile.toc_detection.entry_pattern
+            else None
+        )
+        # ``body`` field of a TOC entry holds ``"<title> <req_id>"`` or
+        # ``"<title><req_id>"``; this peeler tolerates either spacing.
+        self._toc_body_peel_re = (
+            re.compile(rf"^(?P<title>.*?)\s*(?P<req_id>{profile.requirement_id.pattern})\s*$")
+            if profile.requirement_id.pattern
             else None
         )
         # Priority marker detection (FR-31) — compiled once; None if disabled
@@ -277,6 +373,22 @@ class GenericStructuralParser:
         self._definitions_entry_re = (
             re.compile(profile.definitions_entry_pattern, re.MULTILINE)
             if profile.definitions_entry_pattern
+            else None
+        )
+        # Glossary table column-header detection (Phase 5 of the
+        # generic-rules pivot). When both patterns are set, the parser
+        # uses them to recognize the canonical (term, definition) header
+        # row of a glossary table — fold-or-skip decision in
+        # `_extract_definitions`. Default patterns cover the OA
+        # canonical set ("Acronym", "Term", "Definition", ...).
+        self._definitions_table_term_re = (
+            re.compile(profile.definitions_table_term_column)
+            if profile.definitions_table_term_column
+            else None
+        )
+        self._definitions_table_definition_re = (
+            re.compile(profile.definitions_table_definition_column)
+            if profile.definitions_table_definition_column
             else None
         )
         # Reference-list / bibliography detection (D-059, D-061) — compiled once
@@ -331,6 +443,39 @@ class GenericStructuralParser:
         self._dropped_entries: list[tuple[int, int, str]] = []
         # Each entry: (section_number, depth, block_index, page).
         self._heading_entries: list[tuple[str, int, int, int]] = []
+        # TOC pairing — body headings that didn't match any TOC entry.
+        self._toc_pair_misses: list[TocPairMiss] = []
+
+        # 1a. Style-driven TOC pre-pass (generic-rules pivot). Builds a
+        #     ``(req_id | (depth, normalized_title)) → TocEntry`` index
+        #     consulted during heading classification to assign the
+        #     document's actual section_number to each body heading.
+        #     Also tracks the set of TOC block indices for drop-time
+        #     skip in the body pass.
+        self._toc_index, self._toc_block_indices = self._extract_toc_index(doc)
+
+        # 1b. Revhist range pre-pass + front-matter cutoff (Phase 4).
+        #     Everything at block-index ≤ cutoff is dropped — TOC,
+        #     revhist, AND any preface content (doc title heading,
+        #     classification notice, etc.) that sits in the front
+        #     matter region. Cutoff = max of last TOC index and last
+        #     revhist index.
+        #
+        #     **Opt-in via ``toc_detection.style_pattern``.** The cutoff
+        #     fires only when the profile uses the style-driven TOC
+        #     path (the generic-rules pivot for DOCX corpora where
+        #     front-matter is at the top). OA-style numbering corpora
+        #     locate revhist *inside* chapter 1; applying the cutoff
+        #     there would drop chapter-1's heading. For those corpora
+        #     ``style_pattern`` is empty and the inline revhist consume
+        #     in the body pass remains the only drop mechanism.
+        self._frontmatter_revhist_indices = set()
+        self._frontmatter_cutoff = -1
+        if self._toc_style_re is not None:
+            self._frontmatter_revhist_indices = self._find_revhist_block_indices(doc)
+            toc_end = max(self._toc_block_indices, default=-1)
+            rev_end = max(self._frontmatter_revhist_indices, default=-1)
+            self._frontmatter_cutoff = max(toc_end, rev_end)
 
         # 1. Extract plan metadata
         plan_meta = self._extract_plan_metadata(doc)
@@ -341,6 +486,7 @@ class GenericStructuralParser:
         #    table-cell anchors (req-IDs found in column-1 of a row, falling
         #    back to all cells). Paragraph anchors win on duplicate req_ids.
         sections = self._build_sections(doc)
+        self._parse_stats.toc_pair_misses = len(self._toc_pair_misses)
 
         # 3. Extract referenced standards releases
         std_releases = self._extract_standards_releases(doc)
@@ -364,8 +510,12 @@ class GenericStructuralParser:
         self._apply_applicability(sections)
 
         # 8. Extract definitions / acronyms map from the glossary section
-        #    (FR-35 [D-032]). The section itself stays in the parsed tree;
-        #    the map is consumed at chunk-build time by the vectorstore.
+        #    (FR-35 [D-032]). The section itself stays in the parsed tree
+        #    by default; with ``profile.embed_glossary == False``
+        #    (Phase 5 — generic-rules pivot) the section + descendants
+        #    are dropped from ``sections`` after the map has been built
+        #    so the glossary content doesn't reach RAG / KG. The map
+        #    itself is preserved on the tree for acronym-expansion.
         (
             definitions_map,
             definitions_section_number,
@@ -373,6 +523,10 @@ class GenericStructuralParser:
             acronym_entries,
         ) = self._extract_definitions(sections)
         self._parse_stats.defs_extracted = len(definitions_map)
+        if not self.profile.embed_glossary and definitions_section_number:
+            sections = self._drop_glossary_subtree(
+                sections, definitions_section_number
+            )
 
         # 8b. Extract reference / bibliography map from the references
         #     section (D-059, D-061). Used by the resolver to resolve
@@ -406,6 +560,7 @@ class GenericStructuralParser:
             definitions_section_number=definitions_section_number,
             reference_list_map=reference_list_map,
             reference_list_section_number=reference_list_section_number,
+            embed_glossary=self.profile.embed_glossary,
             parse_log=parse_log,
         )
 
@@ -471,6 +626,156 @@ class GenericStructuralParser:
                 f"(threshold={threshold:.0%})"
             )
         return toc_pages
+
+    def _extract_toc_index(
+        self, doc: DocumentIR
+    ) -> tuple[dict[str, TocEntry], set[int]]:
+        """Style-driven TOC pre-pass.
+
+        Walks paragraph blocks whose ``style`` matches
+        ``profile.toc_detection.style_pattern``, parses each via
+        ``entry_pattern``, and builds an index used for body-heading
+        section-number pairing.
+
+        The returned dict has two key shapes:
+          * ``"rid:<req_id>"`` — primary lookup, when the TOC entry's
+            body trailing token matches the requirement_id pattern.
+          * ``"tt:<depth>:<normalized_title>"`` — fallback for entries
+            whose body has no req_id (e.g. front-matter). Same key
+            scheme for ``_classify_heading_docx_styles`` lookups.
+
+        Returns ``(index, toc_block_indices)`` — the second element is
+        the set of ``position.index`` values to skip during the body
+        pass. When ``style_pattern`` is unset, both are empty.
+        """
+        index: dict[str, TocEntry] = {}
+        toc_blocks: set[int] = set()
+
+        if not self._toc_style_re or not self._toc_entry_re:
+            return index, toc_blocks
+
+        normalize = self.profile.requirement_id.normalize
+
+        for block in doc.content_blocks:
+            if block.type != BlockType.PARAGRAPH:
+                continue
+            style = block.style or ""
+            sm = self._toc_style_re.match(style)
+            if not sm:
+                continue
+            try:
+                depth = int(sm.group(1))
+            except (IndexError, ValueError):
+                continue
+
+            toc_blocks.add(block.position.index)
+
+            em = self._toc_entry_re.match(block.text)
+            if not em:
+                # Style says TOC but text doesn't parse — drop the block,
+                # don't index. Logged at debug for diagnosis.
+                logger.debug(
+                    "toc.entry_unparseable: depth=%d block=%d style=%r",
+                    depth, block.position.index, style,
+                )
+                continue
+
+            section_number = em.group("num").strip()
+            body = em.group("body").strip()
+
+            # Peel req_id from tail of body (whitespace-tolerant).
+            title = body
+            req_id = ""
+            if self._toc_body_peel_re:
+                pm = self._toc_body_peel_re.match(body)
+                if pm:
+                    title = pm.group("title").strip()
+                    raw = pm.group("req_id")
+                    rid = _canonicalize_req_id(raw)
+                    req_id = rid.upper() if normalize == "upper" else rid
+
+            entry = TocEntry(
+                depth=depth,
+                section_number=section_number,
+                title=title,
+                req_id=req_id,
+                block_index=block.position.index,
+            )
+
+            # Index by req_id when present (unique, primary key); also
+            # by (depth, normalized title) as fallback. First-occurrence
+            # wins on duplicates so document-order is preserved.
+            if req_id:
+                index.setdefault(f"rid:{req_id}", entry)
+            index.setdefault(
+                f"tt:{depth}:{_normalize_title(title)}", entry
+            )
+
+        if toc_blocks:
+            logger.info(
+                "toc.indexed: entries=%d blocks=%d",
+                len(set(e.block_index for e in index.values())),
+                len(toc_blocks),
+            )
+        return index, toc_blocks
+
+    def _find_revhist_block_indices(self, doc: DocumentIR) -> set[int]:
+        """Return the block indices that constitute the revision-history
+        section (label paragraph + its trailing tables/images, up to but
+        not including the next paragraph).
+
+        Used by the front-matter cutoff (Phase 4 of the generic-rules
+        pivot): the body pass drops everything at index ≤
+        ``max(toc_end, revhist_end)`` so doc-title headings and preface
+        paragraphs that sit between front-matter sections also get
+        omitted. Returns the set of indices for the *first* revhist
+        section found — multiple revhist sections in one document is
+        rare; the inline consume in ``_build_sections`` still catches
+        any that appear after the cutoff.
+
+        Empty when ``revision_history_label_pattern`` is unset or no
+        matching label is found.
+        """
+        if self._revhist_re is None:
+            return set()
+
+        indices: set[int] = set()
+        consuming = False
+        for b in doc.content_blocks:
+            if not consuming:
+                if (
+                    b.type == BlockType.PARAGRAPH
+                    and b.text
+                    and self._revhist_re.match(b.text.strip())
+                ):
+                    indices.add(b.position.index)
+                    consuming = True
+                continue
+            # Consuming: drop non-paragraph blocks (tables, images) until
+            # the next paragraph (which by construction is the next
+            # section's heading or inter-section text).
+            if b.type == BlockType.PARAGRAPH:
+                break
+            indices.add(b.position.index)
+        return indices
+
+    def _toc_lookup(
+        self, depth: int, req_id: str, title: str
+    ) -> TocEntry | None:
+        """Resolve a body heading against the TOC index.
+
+        Primary key: ``req_id``. Fallback: ``(depth, normalized_title)``.
+        Returns ``None`` when neither matches.
+        """
+        if not self._toc_index:
+            return None
+        if req_id:
+            hit = self._toc_index.get(f"rid:{req_id}")
+            if hit is not None:
+                return hit
+        return self._toc_index.get(
+            f"tt:{depth}:{_normalize_title(title)}"
+        )
 
     def _build_sections(self, doc: DocumentIR) -> list[Requirement]:
         """Build the flat list of sections with hierarchy info from content blocks."""
@@ -583,12 +888,43 @@ class GenericStructuralParser:
                 return block.level
             if block.type != BlockType.PARAGRAPH or not block.text:
                 return None
+            # docx_styles classification path: depth from the ``Heading N``
+            # style suffix; section_number may be empty (TOC pairing miss)
+            # so it cannot be used to compute depth.
+            if self.profile.heading_detection.method == "docx_styles":
+                sm = _DOCX_HEADING_STYLE_RE.match(block.style or "")
+                if sm:
+                    try:
+                        return int(sm.group(1))
+                    except (IndexError, ValueError):
+                        return None
+                return None
             section_num, _ = self._classify_heading(block)
             if not section_num:
                 return None
             return section_num.count(".") + 1
 
         for block in doc.content_blocks:
+            # Front-matter cutoff (Phase 4 of the generic-rules pivot).
+            # Drop everything at index ≤ ``max(toc_end, revhist_end)``.
+            # Categorize the drop reason for diagnostics: TOC, revhist,
+            # or generic front_matter (the latter catches doc-title
+            # headings, classification notices, and other preface content
+            # that isn't itself TOC or revhist).
+            idx = block.position.index
+            if idx <= self._frontmatter_cutoff:
+                if idx in self._toc_block_indices:
+                    reason = "toc"
+                    self._parse_stats.toc_blocks_dropped += 1
+                elif idx in self._frontmatter_revhist_indices:
+                    reason = "revhist"
+                    self._parse_stats.revhist_blocks_dropped += 1
+                else:
+                    reason = "front_matter"
+                    self._parse_stats.frontmatter_blocks_dropped += 1
+                self._dropped_entries.append((idx, block.position.page, reason))
+                continue
+
             # FR-33 [D-031]: drop struck-through blocks. Checked first so
             # struck content never feeds heading classification, table
             # anchoring, or zone matching. Gated by profile.ignore_strikeout.
@@ -773,9 +1109,11 @@ class GenericStructuralParser:
 
                 # Check if this is a heading block
                 section_num, heading_text = self._classify_heading(block)
-                if section_num:
-                    new_depth = section_num.count(".") + 1
-
+                # Use ``_heading_depth`` so docx_styles headings (which
+                # may have an empty ``section_num`` when the TOC pre-pass
+                # didn't match) are still recognized as headings.
+                new_depth = _heading_depth(block)
+                if new_depth is not None:
                     # Heading-continuation defense. PyMuPDF often splits a
                     # multi-line heading across blocks; when the second
                     # line happens to start with `<digits><space><uppercase>`
@@ -789,8 +1127,11 @@ class GenericStructuralParser:
                     #     blocks reset the flag).
                     # When all three hold, the new "section" is appended
                     # to the current section's title as a continuation.
+                    # Defense is OA-specific (numbering-pattern path); the
+                    # docx_styles path doesn't suffer this PDF artifact.
                     if (
-                        new_depth == 1
+                        section_num
+                        and new_depth == 1
                         and seen_deep_section
                         and previous_block_was_heading
                         and current_section is not None
@@ -809,20 +1150,33 @@ class GenericStructuralParser:
                     # FR-31: extract priority marker (if any) from heading text
                     # before storing — title carries the cleaned form.
                     priority, heading_text = self._extract_priority(heading_text)
-                    if section_num not in seen_section_numbers:
+                    # Heading-anchored req_id (anchor="last_run" / "leading_text"
+                    # corpora; trailing_text mode falls back to pending_req_id
+                    # from a separate small-font block per the OA convention).
+                    heading_req_id = self._heading_req_id(block)
+                    section_req_id = heading_req_id or pending_req_id
+                    # Empty section_num (docx_styles + TOC pair miss) is
+                    # never deduplicated — every such heading creates its
+                    # own Requirement. Numbered sections continue to
+                    # dedup on first-occurrence-wins.
+                    is_new_section = (
+                        not section_num or section_num not in seen_section_numbers
+                    )
+                    if is_new_section:
                         # New section — first occurrence wins.
                         current_section = Requirement(
                             section_number=section_num,
                             title=heading_text,
-                            req_id=pending_req_id,
+                            req_id=section_req_id,
                             zone_type=self._classify_zone(section_num),
                             priority=priority,
                         )
-                        if pending_req_id:
-                            _record_paragraph_anchor(pending_req_id)
+                        if section_req_id:
+                            _record_paragraph_anchor(section_req_id)
                         pending_req_id = ""
                         sections.append(current_section)
-                        seen_section_numbers.add(section_num)
+                        if section_num:
+                            seen_section_numbers.add(section_num)
                         self._heading_entries.append(
                             (section_num, new_depth, block.position.index, block.position.page)
                         )
@@ -1167,6 +1521,7 @@ class GenericStructuralParser:
             ParseLog,
             ParseLogSummary,
             SectionRange,
+            TocPairMissEntry,
         )
 
         doc_id = Path(doc.source_file).stem
@@ -1250,7 +1605,20 @@ class GenericStructuralParser:
             cascade_blocks_dropped=by_reason.get("cascade", 0),
             total_dropped=len(entries),
             glossary_acronyms=len(acronym_entries),
+            toc_pair_misses=len(self._toc_pair_misses),
+            frontmatter_blocks_dropped=by_reason.get("front_matter", 0),
         )
+
+        toc_pair_miss_entries = [
+            TocPairMissEntry(
+                block_index=m.block_index,
+                page=m.page,
+                depth=m.depth,
+                req_id=m.req_id,
+                title=m.title,
+            )
+            for m in self._toc_pair_misses
+        ]
 
         return ParseLog(
             doc_id=doc_id,
@@ -1263,8 +1631,50 @@ class GenericStructuralParser:
             revision_history=revhist_range,
             glossary_section=glossary_info,
             acronyms=[AcronymEntry(a, e, s) for a, e, s in acronym_entries],
+            toc_pair_misses=toc_pair_miss_entries,
             summary=summary,
         )
+
+    def _drop_glossary_subtree(
+        self,
+        sections: list[Requirement],
+        defs_section_num: str,
+    ) -> list[Requirement]:
+        """Remove the glossary section and all of its descendants from
+        ``sections``. Used when ``profile.embed_glossary == False``.
+
+        Mirrors the predicate used by
+        ``vectorstore.chunk_builder._belongs_to_definitions``: a
+        Requirement belongs to the glossary subtree when its
+        ``section_number`` equals the glossary section number, or
+        starts with that number followed by a dot, or its
+        ``parent_section`` matches the same conditions (catches
+        table-anchored Requirements which carry no
+        ``section_number``).
+        """
+        if not defs_section_num:
+            return sections
+        prefix = defs_section_num + "."
+
+        def _belongs(r: Requirement) -> bool:
+            if r.section_number == defs_section_num:
+                return True
+            if r.section_number.startswith(prefix):
+                return True
+            if r.parent_section == defs_section_num:
+                return True
+            if r.parent_section.startswith(prefix):
+                return True
+            return False
+
+        kept = [r for r in sections if not _belongs(r)]
+        dropped = len(sections) - len(kept)
+        if dropped:
+            logger.info(
+                "parser.glossary_dropped: section=%s count=%d (embed_glossary=False)",
+                defs_section_num, dropped,
+            )
+        return kept
 
     def _extract_definitions(
         self, sections: list[Requirement]
@@ -1473,12 +1883,33 @@ class GenericStructuralParser:
             rest = rest.rstrip('"”').rstrip()
         return spec, rest
 
-    @staticmethod
-    def _looks_like_definition_column_header(h0: str, h1: str) -> bool:
+    def _looks_like_definition_column_header(self, h0: str, h1: str) -> bool:
         """True when (h0, h1) looks like the canonical column-header
-        row of a glossary table — `Acronym | Definition`, `Term |
-        Description`, etc. Used to decide whether to fold table
-        headers into the definitions map."""
+        row of a glossary table — ``Acronym | Definition``, ``Term |
+        Description``, etc. Used to decide whether to fold table
+        headers into the definitions map.
+
+        When ``profile.definitions_table_term_column`` and
+        ``definitions_table_definition_column`` are both set
+        (default), each column header is matched against those
+        regexes (column order is irrelevant — either ``(term, def)``
+        or ``(def, term)`` qualifies). Otherwise falls back to a
+        token-set check against the legacy canonical vocabulary.
+        """
+        h0_norm = re.sub(r"\s+", " ", (h0 or "").strip())
+        h1_norm = re.sub(r"\s+", " ", (h1 or "").strip())
+        if not (h0_norm and h1_norm):
+            return False
+
+        if self._definitions_table_term_re and self._definitions_table_definition_re:
+            term_h0 = bool(self._definitions_table_term_re.match(h0_norm))
+            def_h1 = bool(self._definitions_table_definition_re.match(h1_norm))
+            term_h1 = bool(self._definitions_table_term_re.match(h1_norm))
+            def_h0 = bool(self._definitions_table_definition_re.match(h0_norm))
+            return (term_h0 and def_h1) or (term_h1 and def_h0)
+
+        # Legacy canonical-set fallback (when profile patterns are
+        # explicitly cleared).
         canonical = {
             "acronym", "acronyms", "term", "terms",
             "abbreviation", "abbreviations", "abbr",
@@ -1488,10 +1919,8 @@ class GenericStructuralParser:
         def normalize(s: str) -> set[str]:
             tokens = re.split(r"[\s/]+", s.strip().lower())
             return {t.rstrip("./:") for t in tokens if t}
-        h0_tokens = normalize(h0)
-        h1_tokens = normalize(h1)
-        # If both columns' header tokens are entirely from the canonical
-        # set, this is the real header row.
+        h0_tokens = normalize(h0_norm)
+        h1_tokens = normalize(h1_norm)
         return (
             bool(h0_tokens) and bool(h1_tokens)
             and h0_tokens.issubset(canonical)
@@ -1555,23 +1984,85 @@ class GenericStructuralParser:
             return []
         return [_canonicalize_req_id(rid) for rid in self._req_id_re.findall(text)]
 
+    def _heading_req_id(self, block: ContentBlock) -> str:
+        """Extract a heading-anchored req_id when the profile opts in.
+
+        Only the heading-anchored anchor modes look at the heading
+        itself. ``"trailing_text"`` (the default / OA convention) is a
+        no-op here — those corpora carry the req_id in a separate
+        small-font block *after* the heading, threaded through
+        ``pending_req_id`` in the body pass.
+
+        Modes:
+          * ``"last_run"`` — read ``block.runs[-1]``. If its text
+            solo-matches ``pattern`` (whitespace-tolerant), return the
+            canonicalized + optionally-uppercased id.
+          * ``"leading_text"`` — match ``pattern`` anchored at the start
+            of the heading's live text.
+          * ``"trailing_text"`` — return ``""`` (preserves OA semantics).
+
+        Returns ``""`` when no match or when the mode doesn't extract
+        from the heading.
+        """
+        if not self._req_id_re:
+            return ""
+
+        anchor = self.profile.requirement_id.anchor
+        normalize = self.profile.requirement_id.normalize
+
+        def _normalize(rid: str) -> str:
+            rid = _canonicalize_req_id(rid)
+            return rid.upper() if normalize == "upper" else rid
+
+        if anchor == "last_run":
+            if not block.runs:
+                return ""
+            last = block.runs[-1].text
+            if self._req_id_anchored_re and self._req_id_anchored_re.match(last):
+                return _normalize(last.strip())
+            return ""
+
+        if anchor == "leading_text":
+            ids = self._req_id_re.findall(block.live_text())
+            return _normalize(ids[0]) if ids else ""
+
+        # Default ("trailing_text") — heading-text is not the anchor.
+        return ""
+
     def _classify_heading(
         self, block: ContentBlock
     ) -> tuple[str, str]:
         """Check if a block is a heading. Returns (section_number, title) or ("", "").
 
-        Numbering is the necessary signal: a block matching the profile's
-        numbering_pattern is a heading candidate. Style/font in
-        `profile.heading_detection.levels` is consulted only as a confidence
-        hint — never as a gate — because real-world specs apply styling
-        inconsistently. Hierarchy depth is derived elsewhere from the
-        section_number itself (see _link_parents).
+        Two methods are supported, selected by
+        ``profile.heading_detection.method``:
 
-        False-positive guards:
+          * ``"docx_styles"`` — DOCX paragraph style (``Heading 1``,
+            ``Heading 2``...) is the heading signal; depth comes from
+            the style's trailing digit. The actual section_number is
+            looked up against the TOC index (built by the pre-pass).
+            Title is extracted from runs (last-run req_id stripped when
+            ``RequirementIdPattern.anchor == "last_run"``). Headings
+            with no TOC match return an empty section_number — the
+            caller's dedup logic must tolerate this.
+          * ``"numbering"`` (default) and ``"font_size_clustering"`` —
+            a block matching the profile's ``numbering_pattern`` is a
+            heading candidate; style/font is advisory only.
+
+        Heading *recognition* reads ``block.text`` (not ``live_text``)
+        so a fully struck heading is still classified — the strike
+        cascade [D-037] needs the recognition. Value extraction (title,
+        req_id) downstream applies the runs-over-text invariant.
+
+        False-positive guards (numbering path):
           - text length capped (numbered list items in body text run long)
           - text doesn't end with sentence-terminal punctuation
         """
-        # Must have a numbering pattern to be treated as a structural heading
+        method = self.profile.heading_detection.method
+        if method == "docx_styles":
+            return self._classify_heading_docx_styles(block)
+
+        # Default / legacy: numbering-pattern path.
         if not self._num_re:
             return "", ""
 
@@ -1599,6 +2090,72 @@ class GenericStructuralParser:
         title = text[sec_m.end():].lstrip()
 
         return section_num, title
+
+    def _classify_heading_docx_styles(
+        self, block: ContentBlock
+    ) -> tuple[str, str]:
+        """``docx_styles`` classification path — style → depth, TOC → section_number.
+
+        Returns ``(section_number, title)`` where ``section_number`` may
+        be empty when no TOC entry pairs with this heading. Caller is
+        responsible for treating empty section_number as a non-dedup
+        case (one synthetic Requirement per such heading).
+        """
+        # Style is the recognition signal. ``block.text`` may be empty
+        # (image-only heading) — that's still a non-heading from this
+        # method's perspective.
+        sm = _DOCX_HEADING_STYLE_RE.match(block.style or "")
+        if not sm:
+            return "", ""
+        try:
+            depth = int(sm.group(1))
+        except (IndexError, ValueError):
+            return "", ""
+
+        # Title text — runs-aware. When ``anchor=last_run`` and the
+        # last run *is* a req_id, strip it from the title.
+        title = self._heading_title_text(block)
+
+        # Pair against the TOC index.
+        req_id = self._heading_req_id(block)
+        toc_entry = self._toc_lookup(depth, req_id, title)
+        section_num = toc_entry.section_number if toc_entry else ""
+
+        if toc_entry is None:
+            self._toc_pair_misses.append(
+                TocPairMiss(
+                    block_index=block.position.index,
+                    page=block.position.page,
+                    depth=depth,
+                    req_id=req_id,
+                    title=title,
+                )
+            )
+            logger.warning(
+                "parser.toc_pair_miss: depth=%d req_id=%s block=%d page=%d",
+                depth, req_id or "<none>", block.position.index, block.position.page,
+            )
+
+        return section_num, title
+
+    def _heading_title_text(self, block: ContentBlock) -> str:
+        """Heading title text per the runs-over-text invariant.
+
+        When ``anchor="last_run"`` AND the last run solo-matches the
+        req_id pattern, that run is the requirement_id and is stripped
+        from the title. Otherwise, the full live text is returned.
+        Falls back to ``block.text`` when ``runs`` is empty.
+        """
+        if (
+            self.profile.requirement_id.anchor == "last_run"
+            and block.runs
+            and self._req_id_anchored_re
+            and self._req_id_anchored_re.match(block.runs[-1].text)
+        ):
+            return "".join(
+                r.text for r in block.runs[:-1] if not r.struck
+            ).strip()
+        return block.live_text().strip()
 
     def _extract_priority(self, text: str) -> tuple[str, str]:
         """Extract a priority marker from heading text (FR-31).

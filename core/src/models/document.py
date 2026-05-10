@@ -158,6 +158,22 @@ class ContentBlock:
             return self.headers[col_index]
         return ""
 
+    def last_run_text(self) -> str:
+        """Return the text of the last ``TextRun`` (regardless of strike state).
+
+        Used by the parser's ``anchor="last_run"`` req_id extraction path:
+        in run-aware corpora the requirement_id is conventionally the
+        trailing run of a heading, so reading ``runs[-1]`` is more
+        precise than regex-searching the full text. Returns ``""`` when
+        ``runs`` is empty. Strike state is intentionally ignored — the
+        caller decides whether a struck last-run should still produce a
+        cascade-relevant id (it should: struck reqs are recorded in the
+        ``struck_req_ids`` set so table-anchored extraction skips them).
+        """
+        if not self.runs:
+            return ""
+        return self.runs[-1].text
+
 
 def _cells_all_struck(cells: list[list[TextRun]]) -> bool:
     """True iff every cell with textful content has every textful run struck.

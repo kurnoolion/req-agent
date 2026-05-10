@@ -106,6 +106,7 @@ def generate_template(log_path: Path) -> dict[str, Any]:
         "parser_snapshot": {
             "toc": _range_str(toc) + f"  ({summary.get('toc_blocks_dropped', 0)} blocks)",
             "revision_history": _range_str(rh) + f"  ({summary.get('revhist_blocks_dropped', 0)} blocks)",
+            "toc_pair_misses": summary.get("toc_pair_misses", 0),
             "struck_and_cascade": (
                 f"{summary.get('struck_blocks_dropped', 0)} struck + "
                 f"{summary.get('cascade_blocks_dropped', 0)} cascade = "
@@ -242,9 +243,14 @@ def generate_compact_report(review_path: Path, log_path: Path | None = None) -> 
     )
 
     header = f"PLG-CHK {doc_id}  {review_date}  reviewer={reviewer}  verdict={verdict}"
+    misses = summary.get("toc_pair_misses", 0)
+    misses_str = f"  toc_misses={misses}" if misses else ""
+    fm = summary.get("frontmatter_blocks_dropped", 0)
+    fm_str = f"  frontmatter={fm}" if fm else ""
     parser_line = (
         f"parser  toc={toc_str}  revhist={rh_str}  "
         f"struck={struck_str}  cascade={cascade}  glossary={gs_str}"
+        f"{misses_str}{fm_str}"
     )
 
     # Collect errors

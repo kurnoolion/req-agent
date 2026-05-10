@@ -60,7 +60,7 @@ def _profile(
         ignore_strikeout=ignore_strikeout,
         toc_detection_pattern=toc_pattern,
         toc_page_threshold=toc_threshold,
-        revision_history_heading_pattern=revhist_pattern,
+        revision_history_label_pattern=revhist_pattern,
         definitions_entry_pattern=defs_entry_pattern,
     )
 

@@ -1,0 +1,434 @@
+"""Tests for the style-driven TOC pre-pass and section-number pairing.
+
+Phase 3 of the generic-rules pivot. The DOCX TOC carries the document's
+real section numbers (``"1.2.3"``) — body headings styled ``Heading N``
+have only depth (from style suffix) and title text, no inline number.
+The parser pre-pass walks ``toc N``-styled paragraphs to build an
+index, then pairs each body heading against it during classification to
+attach the actual section_number.
+
+Test surface:
+
+* ``TestTocIndex`` — pre-pass extraction (entry parsing, req_id peel
+  with / without space, body block dropped at parse time).
+* ``TestPairing`` — pair-by-req_id (primary), pair-by-title (fallback),
+  miss-counter incrementation.
+* ``TestDocxStylesClassification`` — ``Heading N`` style produces a
+  Requirement at depth N with section_number from TOC; missing TOC
+  entry yields empty section_number but still creates a Requirement.
+"""
+
+from __future__ import annotations
+
+from core.src.models.document import (
+    BlockType,
+    ContentBlock,
+    DocumentIR,
+    FontInfo,
+    Position,
+    TextRun,
+)
+from core.src.parser.structural_parser import GenericStructuralParser
+from core.src.profiler.profile_schema import (
+    BodyText,
+    CrossReferencePatterns,
+    DocumentProfile,
+    HeaderFooter,
+    HeadingDetection,
+    PlanMetadata,
+    RequirementIdPattern,
+    TocDetection,
+)
+
+
+_REQ_PATTERN = r"[A-Z]+_REQ_[A-Za-z0-9_]+_\d+"
+
+
+def _profile() -> DocumentProfile:
+    return DocumentProfile(
+        profile_name="test_docx",
+        profile_version=1,
+        created_from=[],
+        last_updated="2026-05-10",
+        heading_detection=HeadingDetection(
+            method="docx_styles",
+            max_observed_depth=4,
+        ),
+        requirement_id=RequirementIdPattern(
+            pattern=_REQ_PATTERN,
+            anchor="last_run",
+            normalize="upper",
+        ),
+        plan_metadata=PlanMetadata(),
+        document_zones=[],
+        header_footer=HeaderFooter(),
+        cross_reference_patterns=CrossReferencePatterns(),
+        body_text=BodyText(font_size_min=11.0, font_size_max=12.0),
+        toc_detection=TocDetection(
+            style_pattern=r"(?i)^toc\s+(\d+)$",
+            entry_pattern=r"^(?P<num>[\w.]+)\t(?P<body>.+?)\t(?P<page>\d+)\s*$",
+        ),
+    )
+
+
+def _toc_para(idx: int, text: str, depth: int) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=idx),
+        text=text,
+        style=f"toc {depth}",
+        font_info=FontInfo(size=10.0),
+    )
+
+
+def _heading(
+    idx: int, depth: int, title: str, req_id: str, *, page: int = 5
+) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=page, index=idx),
+        text=f"{title}{req_id}",
+        style=f"Heading {depth}",
+        font_info=FontInfo(size=14.0, bold=True),
+        runs=[
+            TextRun(text=title, struck=False),
+            TextRun(text=req_id, struck=False),
+        ],
+    )
+
+
+def _para(idx: int, text: str, *, page: int = 5) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=page, index=idx),
+        text=text,
+        style="div",
+        font_info=FontInfo(size=11.0),
+    )
+
+
+def _doc(blocks: list[ContentBlock]) -> DocumentIR:
+    for i, b in enumerate(blocks):
+        b.position.index = i
+    return DocumentIR(
+        source_file="fixture.docx",
+        source_format="docx",
+        mno="MNO0",
+        release="r1",
+        doc_type="requirement",
+        content_blocks=blocks,
+    )
+
+
+def _parse(blocks: list[ContentBlock]):
+    return GenericStructuralParser(_profile()).parse(_doc(blocks))
+
+
+# ---------------------------------------------------------------------------
+# TOC index pre-pass
+# ---------------------------------------------------------------------------
+
+
+class TestTocIndex:
+    def test_index_built_from_toc_styled_paragraphs(self):
+        blocks = [
+            _toc_para(0, "1\tIntroduction VZ_REQ_FOO_1\t10", depth=1),
+            _toc_para(1, "1.1\tScope VZ_REQ_FOO_2\t11", depth=2),
+            _heading(2, 1, "Introduction ", "VZ_REQ_FOO_1"),
+        ]
+        parser = GenericStructuralParser(_profile())
+        index, toc_blocks = parser._extract_toc_index(_doc(blocks))
+        # Two TOC blocks indexed.
+        assert toc_blocks == {0, 1}
+        # Primary (req_id) keys present, normalize=upper applied.
+        assert "rid:VZ_REQ_FOO_1" in index
+        assert "rid:VZ_REQ_FOO_2" in index
+        # Section numbers preserved literally from TOC.
+        assert index["rid:VZ_REQ_FOO_1"].section_number == "1"
+        assert index["rid:VZ_REQ_FOO_2"].section_number == "1.1"
+
+    def test_no_space_between_title_and_req_id(self):
+        """TOC body may have no space before the req_id — peel still works."""
+        blocks = [
+            _toc_para(0, "1.1\tScopeVZ_REQ_FOO_2\t11", depth=2),
+        ]
+        parser = GenericStructuralParser(_profile())
+        index, _ = parser._extract_toc_index(_doc(blocks))
+        entry = index["rid:VZ_REQ_FOO_2"]
+        assert entry.section_number == "1.1"
+        assert entry.title == "Scope"
+
+    def test_mixed_case_req_id_normalized_upper(self):
+        blocks = [
+            _toc_para(0, "1.1\tWiFi VZ_REQ_VoWiFi_99\t11", depth=2),
+        ]
+        parser = GenericStructuralParser(_profile())
+        index, _ = parser._extract_toc_index(_doc(blocks))
+        # Stored under upper-cased key.
+        assert "rid:VZ_REQ_VOWIFI_99" in index
+        assert "rid:VZ_REQ_VoWiFi_99" not in index
+
+    def test_toc_blocks_dropped_at_parse_time(self):
+        blocks = [
+            _toc_para(0, "1\tIntro VZ_REQ_FOO_1\t10", depth=1),
+            _heading(1, 1, "Intro ", "VZ_REQ_FOO_1"),
+            _para(2, "body content"),
+        ]
+        tree = _parse(blocks)
+        assert tree.parse_stats.toc_blocks_dropped == 1
+        # Only the body heading creates a Requirement; the TOC block
+        # is harvested for metadata then dropped.
+        assert len(tree.requirements) == 1
+
+
+# ---------------------------------------------------------------------------
+# Heading ↔ TOC pairing
+# ---------------------------------------------------------------------------
+
+
+class TestPairing:
+    def test_pair_by_req_id_attaches_section_number(self):
+        blocks = [
+            _toc_para(0, "1.2.3\tFoo Section VZ_REQ_FOO_42\t15", depth=3),
+            _heading(1, 3, "Foo Section ", "VZ_REQ_FOO_42"),
+            _para(2, "body"),
+        ]
+        tree = _parse(blocks)
+        assert len(tree.requirements) == 1
+        assert tree.requirements[0].section_number == "1.2.3"
+        assert tree.requirements[0].req_id == "VZ_REQ_FOO_42"
+
+    def test_pair_by_title_fallback_when_no_req_id_in_toc(self):
+        """TOC entry lacks req_id; pair-by-title still works."""
+        blocks = [
+            _toc_para(0, "2\tOverview \t20", depth=1),  # body has no req_id
+            _heading(1, 1, "Overview ", "VZ_REQ_FOO_5"),  # heading has req_id
+            _para(2, "body"),
+        ]
+        tree = _parse(blocks)
+        assert tree.requirements[0].section_number == "2"
+        assert tree.requirements[0].req_id == "VZ_REQ_FOO_5"
+
+    def test_miss_counter_increments_on_unmatched_heading(self):
+        blocks = [
+            _toc_para(0, "1\tIntro VZ_REQ_X_1\t10", depth=1),
+            # Body heading with no matching TOC entry (different req_id, different title).
+            _heading(1, 2, "Unrelated ", "VZ_REQ_X_99"),
+            _para(2, "body"),
+        ]
+        tree = _parse(blocks)
+        assert tree.parse_stats.toc_pair_misses == 1
+        # Heading still produces a Requirement (with empty section_number).
+        assert len(tree.requirements) == 1
+        assert tree.requirements[0].section_number == ""
+        assert tree.requirements[0].req_id == "VZ_REQ_X_99"
+
+    def test_zero_misses_when_all_paired(self):
+        blocks = [
+            _toc_para(0, "1\tIntro VZ_REQ_X_1\t10", depth=1),
+            _toc_para(1, "1.1\tScope VZ_REQ_X_2\t11", depth=2),
+            _heading(2, 1, "Intro ", "VZ_REQ_X_1"),
+            _heading(3, 2, "Scope ", "VZ_REQ_X_2"),
+            _para(4, "body"),
+        ]
+        tree = _parse(blocks)
+        assert tree.parse_stats.toc_pair_misses == 0
+
+
+# ---------------------------------------------------------------------------
+# docx_styles classification path
+# ---------------------------------------------------------------------------
+
+
+class TestDocxStylesClassification:
+    def test_heading_n_style_recognized_as_heading(self):
+        blocks = [
+            _toc_para(0, "1\tFoo VZ_REQ_X_1\t10", depth=1),
+            _toc_para(1, "1.1\tBar VZ_REQ_X_2\t11", depth=2),
+            _heading(2, 1, "Foo ", "VZ_REQ_X_1"),
+            _heading(3, 2, "Bar ", "VZ_REQ_X_2"),
+            _para(4, "body"),
+        ]
+        tree = _parse(blocks)
+        assert len(tree.requirements) == 2
+        # First Requirement is parent of second per depth.
+        assert tree.requirements[0].section_number == "1"
+        assert tree.requirements[1].section_number == "1.1"
+        assert tree.requirements[1].parent_req_id == "VZ_REQ_X_1"
+
+    def test_heading_without_toc_match_still_creates_requirement(self):
+        """Empty section_number is allowed — a docx_styles heading
+        produces a Requirement with section_number='' when TOC pairing
+        misses. Critical: this does NOT collide with other empty
+        section_numbers via the dedup set (every miss → its own
+        Requirement)."""
+        blocks = [
+            _heading(0, 2, "First Section ", "VZ_REQ_X_1"),
+            _para(1, "body"),
+            _heading(2, 2, "Second Section ", "VZ_REQ_X_2"),
+            _para(3, "body"),
+        ]
+        tree = _parse(blocks)
+        # Both headings produce Requirements despite empty section_numbers.
+        assert len(tree.requirements) == 2
+        assert tree.requirements[0].req_id == "VZ_REQ_X_1"
+        assert tree.requirements[1].req_id == "VZ_REQ_X_2"
+        assert tree.parse_stats.toc_pair_misses == 2
+
+    def test_title_strips_last_run_when_anchor_last_run(self):
+        blocks = [
+            _toc_para(0, "1\tFoo Title VZ_REQ_X_1\t10", depth=1),
+            _heading(1, 1, "Foo Title ", "VZ_REQ_X_1"),
+        ]
+        tree = _parse(blocks)
+        # Title should be the runs[:-1] joined, not the full text.
+        assert tree.requirements[0].title.strip() == "Foo Title"
+
+
+# ---------------------------------------------------------------------------
+# Parse-log + RPT integration (counter flows into compact report)
+# ---------------------------------------------------------------------------
+
+
+class TestParseLogIntegration:
+    def test_summary_carries_toc_pair_misses_count(self):
+        """``ParseLogSummary.toc_pair_misses`` mirrors
+        ``ParseStats.toc_pair_misses``; per-miss list lives on
+        ``ParseLog.toc_pair_misses`` for local diagnostics."""
+        blocks = [
+            _toc_para(0, "1\tIntro VZ_REQ_X_1\t10", depth=1),
+            _heading(1, 2, "Unrelated ", "VZ_REQ_X_99"),  # miss
+            _heading(2, 2, "Also Unrelated ", "VZ_REQ_X_98"),  # miss
+            _para(3, "body"),
+        ]
+        tree = _parse(blocks)
+        assert tree.parse_stats.toc_pair_misses == 2
+        assert tree.parse_log.summary.toc_pair_misses == 2
+        assert len(tree.parse_log.toc_pair_misses) == 2
+        # Per-miss entries carry the title locally — never inlined into RPT.
+        miss_req_ids = {m.req_id for m in tree.parse_log.toc_pair_misses}
+        assert miss_req_ids == {"VZ_REQ_X_99", "VZ_REQ_X_98"}
+
+    def test_zero_misses_emits_no_entries(self):
+        blocks = [
+            _toc_para(0, "1\tIntro VZ_REQ_X_1\t10", depth=1),
+            _heading(1, 1, "Intro ", "VZ_REQ_X_1"),
+            _para(2, "body"),
+        ]
+        tree = _parse(blocks)
+        assert tree.parse_log.summary.toc_pair_misses == 0
+        assert tree.parse_log.toc_pair_misses == []
+
+
+# ---------------------------------------------------------------------------
+# Front-matter cutoff (Phase 4)
+# ---------------------------------------------------------------------------
+
+
+def _revhist_label(idx: int) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.PARAGRAPH,
+        position=Position(page=1, index=idx),
+        text="Revision History",
+        style="div",
+        font_info=FontInfo(size=12.0),
+        runs=[TextRun("Revision History", struck=False)],
+    )
+
+
+def _table(idx: int) -> ContentBlock:
+    return ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=1, index=idx),
+        headers=["Date", "Change"],
+        rows=[["2026-01-01", "Initial"]],
+    )
+
+
+class TestFrontMatterCutoff:
+    def test_doc_title_heading_before_revhist_dropped(self):
+        """Work-PC layout: doc title heading sits in front matter
+        before the revision-history section. With the style-driven TOC
+        path enabled, everything ≤ revhist_end is dropped."""
+        blocks = [
+            _heading(0, 1, "Doc Title ", "VZ_REQ_X_1"),  # doc-title heading
+            _revhist_label(1),
+            _table(2),
+            _heading(3, 1, "Real Section ", "VZ_REQ_X_2"),  # body content
+            _para(4, "body content", page=2),
+        ]
+        # Add a TOC entry so style-driven path is active and pairs the body heading.
+        blocks.insert(0, _toc_para(0, "1\tReal Section VZ_REQ_X_2\t5", depth=1))
+        tree = _parse(blocks)
+        # Only the post-cutoff body heading produces a Requirement.
+        assert len(tree.requirements) == 1
+        assert tree.requirements[0].req_id == "VZ_REQ_X_2"
+        # Counters: TOC, revhist (label + table), front_matter (doc title).
+        assert tree.parse_stats.toc_blocks_dropped == 1
+        assert tree.parse_stats.revhist_blocks_dropped == 2
+        assert tree.parse_stats.frontmatter_blocks_dropped == 1
+
+    def test_cutoff_disabled_when_style_path_off(self):
+        """OA-style corpora (no ``toc_detection.style_pattern``) keep
+        legacy behavior — revhist drop is inline only; chapter
+        headings before revhist are never dropped."""
+        # Build profile WITHOUT style_pattern.
+        profile = _profile()
+        profile.toc_detection.style_pattern = ""
+        profile.heading_detection.method = "numbering"
+        profile.heading_detection.numbering_pattern = r"^(\d+(?:\.\d+)*)\s+\S"
+
+        # Use plain numbered text (no runs) so the numbering path applies.
+        chapter = ContentBlock(
+            type=BlockType.PARAGRAPH,
+            position=Position(page=1, index=0),
+            text="1 LTE Data Retry",
+            font_info=FontInfo(size=14.0, bold=True),
+        )
+        scope = ContentBlock(
+            type=BlockType.PARAGRAPH,
+            position=Position(page=1, index=3),
+            text="1.1 Scope",
+            font_info=FontInfo(size=12.0, bold=True),
+        )
+        blocks = [
+            chapter,
+            _revhist_label(1),
+            _table(2),
+            scope,
+            _para(4, "body"),
+        ]
+        for i, b in enumerate(blocks):
+            b.position.index = i
+        tree = GenericStructuralParser(profile).parse(_doc(blocks))
+        section_nums = [r.section_number for r in tree.requirements]
+        assert section_nums == ["1", "1.1"]  # chapter retained
+        assert tree.parse_stats.frontmatter_blocks_dropped == 0
+
+    def test_cutoff_zero_when_no_front_matter(self):
+        """Empty front matter (no TOC, no revhist) → no cutoff,
+        nothing dropped beyond ordinary mechanisms."""
+        blocks = [
+            _heading(0, 1, "First Section ", "VZ_REQ_X_1"),
+            _para(1, "body"),
+        ]
+        tree = _parse(blocks)
+        assert tree.parse_stats.frontmatter_blocks_dropped == 0
+        assert tree.parse_stats.revhist_blocks_dropped == 0
+        assert tree.parse_stats.toc_blocks_dropped == 0
+        assert len(tree.requirements) == 1
+
+    def test_summary_carries_frontmatter_count(self):
+        # Layout: TOC at 0, doc-title heading at 1, revhist at 2-3,
+        # real body heading at 4. Cutoff = max(0, 3) = 3, so the doc
+        # title heading at index 1 is the front_matter drop.
+        blocks = [
+            _toc_para(0, "1\tReal VZ_REQ_X_2\t5", depth=1),
+            _heading(1, 1, "Doc Title ", "VZ_REQ_X_1"),
+            _revhist_label(2),
+            _table(3),
+            _heading(4, 1, "Real ", "VZ_REQ_X_2"),
+            _para(5, "body"),
+        ]
+        tree = _parse(blocks)
+        assert tree.parse_log.summary.frontmatter_blocks_dropped == 1

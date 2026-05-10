@@ -199,7 +199,7 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     if not ir_files:
         return _fail(stage, "PIP-E002", f"No IR files in {extract_dir}", time.time() - t0)
 
-    stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0}
+    stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0, "toc_pair_misses": 0, "frontmatter": 0}
     tree_paths: list[str] = []
     warnings: list[str] = []
     # Derive env_dir from stage layout (works in both from_env and standalone mode).
@@ -237,6 +237,8 @@ def run_parse(ctx: PipelineContext) -> StageResult:
             stats["cascade"] += tree.parse_stats.cascade_blocks_dropped
             stats["revhist"] += tree.parse_stats.revhist_blocks_dropped
             stats["defs"] += tree.parse_stats.defs_extracted
+            stats["toc_pair_misses"] += tree.parse_stats.toc_pair_misses
+            stats["frontmatter"] += tree.parse_stats.frontmatter_blocks_dropped
         except Exception as e:
             warnings.append(f"PRS-E001: {f.name}: {e}")
 

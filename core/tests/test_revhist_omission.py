@@ -5,7 +5,7 @@ Verifies the end-to-end contract:
   - profiler discovers the heading phrase from documents that contain a
     'Revision History' (or 'Change History', etc.) paragraph immediately
     followed by a table block, and tightens
-    `revision_history_heading_pattern` accordingly;
+    `revision_history_label_pattern` accordingly;
   - parser drops both the heading paragraph AND the next-block table,
     and reports the count via `parse_stats.revhist_blocks_dropped`;
   - false positives are gated: a paragraph mentioning 'revision history'
@@ -143,10 +143,10 @@ def test_revhist_alternate_label_change_history():
 
 
 def test_revhist_pattern_disabled_via_empty_string():
-    """Profile setting `revision_history_heading_pattern = ""` disables
+    """Profile setting `revision_history_label_pattern = ""` disables
     the drop entirely — heading and table are processed normally."""
     profile = _profile()
-    profile.revision_history_heading_pattern = ""
+    profile.revision_history_label_pattern = ""
     blocks = [
         _para(0, "1 Chapter"),
         _para(1, "Revision History"),

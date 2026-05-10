@@ -76,6 +76,27 @@ class ParseLogSummary:
     cascade_blocks_dropped: int = 0
     total_dropped: int = 0
     glossary_acronyms: int = 0
+    toc_pair_misses: int = 0
+    frontmatter_blocks_dropped: int = 0
+    """Body headings (docx_styles classification) that had no matching
+    TOC entry. Generic-rules pivot — counter only here; the per-miss
+    list (with titles, kept local) lives on ``ParseLog.toc_pair_misses``
+    so compact reports stay free of proprietary content."""
+
+
+@dataclass
+class TocPairMissEntry:
+    """A single body heading that didn't pair against the TOC index.
+
+    Stored locally in the parse log (read by the architect via
+    ``<env_dir>/reports/``); the *count* surfaces in compact RPT but
+    titles never do — they may carry proprietary section names.
+    """
+    block_index: int
+    page: int
+    depth: int
+    req_id: str
+    title: str
 
 
 @dataclass
@@ -106,6 +127,11 @@ class ParseLog:
 
     # Extracted acronyms in document order.
     acronyms: list[AcronymEntry] = field(default_factory=list)
+
+    # TOC ↔ body-heading pairing misses (generic-rules pivot). Per-miss
+    # list with titles — local diagnostics only; never inlined into
+    # compact RPT.
+    toc_pair_misses: list[TocPairMissEntry] = field(default_factory=list)
 
     summary: ParseLogSummary = field(default_factory=ParseLogSummary)
 
