@@ -82,13 +82,20 @@ def _toc_para(idx: int, text: str, depth: int) -> ContentBlock:
 
 
 def _heading(
-    idx: int, depth: int, title: str, req_id: str, *, page: int = 5
+    idx: int,
+    depth: int,
+    title: str,
+    req_id: str,
+    *,
+    page: int = 5,
+    block_type: BlockType = BlockType.PARAGRAPH,
 ) -> ContentBlock:
     return ContentBlock(
-        type=BlockType.PARAGRAPH,
+        type=block_type,
         position=Position(page=page, index=idx),
         text=f"{title}{req_id}",
         style=f"Heading {depth}",
+        level=depth if block_type == BlockType.HEADING else None,
         font_info=FontInfo(size=14.0, bold=True),
         runs=[
             TextRun(text=title, struck=False),
@@ -283,6 +290,25 @@ class TestDocxStylesClassification:
         tree = _parse(blocks)
         # Title should be the runs[:-1] joined, not the full text.
         assert tree.requirements[0].title.strip() == "Foo Title"
+
+    def test_heading_blocktype_routes_through_classifier(self):
+        """Real DOCX extractor emits ``BlockType.HEADING`` for
+        Word-styled headings (per ``docx_extractor._paragraph_block``).
+        Regression guard: HEADING-typed blocks must reach the heading
+        classifier the same way PARAGRAPH-typed blocks do — earlier
+        the body pass only entered the heading-creation branch when
+        ``block.type == BlockType.PARAGRAPH``, leaving DOCX heading
+        blocks unrouted (work-PC corpus produced reqs=0)."""
+        blocks = [
+            _toc_para(0, "1\tFoo VZ_REQ_X_1\t10", depth=1),
+            _heading(1, 1, "Foo ", "VZ_REQ_X_1", block_type=BlockType.HEADING),
+            _para(2, "body content"),
+        ]
+        tree = _parse(blocks)
+        assert len(tree.requirements) == 1
+        assert tree.requirements[0].section_number == "1"
+        assert tree.requirements[0].req_id == "VZ_REQ_X_1"
+        assert tree.requirements[0].title.strip() == "Foo"
 
 
 # ---------------------------------------------------------------------------

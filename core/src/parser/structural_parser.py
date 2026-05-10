@@ -1069,14 +1069,22 @@ class GenericStructuralParser:
                 revhist_active = True
                 continue
 
-            if block.type == BlockType.PARAGRAPH:
-                if not block.font_info:
+            if block.type in (BlockType.PARAGRAPH, BlockType.HEADING):
+                # DOCX extractors emit heading-styled paragraphs as
+                # BlockType.HEADING (per ``docx_extractor._paragraph_block``);
+                # PDF extractors emit them as PARAGRAPH with a numbering
+                # prefix in ``block.text``. Both must reach the heading
+                # classifier — the small-font / no-font-info paragraph
+                # gates below are PARAGRAPH-only since HEADING blocks
+                # always carry FontInfo and never qualify as small-font
+                # req_id markers.
+                if block.type == BlockType.PARAGRAPH and not block.font_info:
                     if current_section:
                         self._append_text(current_section, block.text)
                     continue
 
                 # Check if this is a requirement ID block (small font)
-                if self._is_req_id_block(block):
+                if block.type == BlockType.PARAGRAPH and self._is_req_id_block(block):
                     req_ids = self._find_req_ids(block.text)
                     if req_ids:
                         if current_section is None:
