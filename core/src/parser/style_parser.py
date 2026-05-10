@@ -113,6 +113,29 @@ _OMA_RE = re.compile(r"(?:OMADM|OMA\s+DM)\s+[\d.]+")
 _OMA_SECTION_RE = re.compile(r"[Ss]ection\s+([\d.]+)")
 _CONTEXT_WINDOW = 200
 
+# Definitions / acronyms / glossary section detection (case-insensitive).
+# Uses prefix stems so plural forms (ACRONYMS, DEFINITIONS, ABBREVIATIONS)
+# all match without requiring a trailing word boundary.
+_DEFS_SECTION_RE = re.compile(
+    r"(?i)\b(acronym|glossar|definit|abbreviat)"
+)
+
+# Canonical column-header tokens to skip (identical to StructuralParser logic).
+_DEFS_HEADER_TOKENS = {
+    "acronym", "acronyms", "term", "terms",
+    "abbreviation", "abbreviations", "abbr",
+    "definition", "definitions", "description",
+    "meaning", "expansion", "full form",
+}
+
+
+def _looks_like_definition_column_header(h0: str, h1: str) -> bool:
+    """True when (h0, h1) looks like a canonical glossary column-header row."""
+    return (
+        h0.lower().strip() in _DEFS_HEADER_TOKENS
+        or h1.lower().strip() in _DEFS_HEADER_TOKENS
+    )
+
 
 # ── Parser ────────────────────────────────────────────────────────────
 
@@ -145,6 +168,11 @@ class StyleDrivenParser:
         current: Optional[Requirement] = None
         in_heading_phase = False
 
+        # Definitions / acronyms extraction state
+        definitions_map: dict[str, str] = {}
+        definitions_section_number: str = ""
+        in_definitions_section: bool = False
+
         for block in doc.content_blocks:
 
             if block.type == BlockType.HEADING:
@@ -156,8 +184,30 @@ class StyleDrivenParser:
 
                 title, req_id = _split_heading(text)
                 if req_id is None:
-                    logger.debug("Heading has no VZ_REQ_ — skipped: %r", text)
+                    # Check if this is a definitions/acronyms section heading.
+                    if _DEFS_SECTION_RE.search(text):
+                        in_definitions_section = True
+                        # Compute a section number for the definitions section
+                        # using the same counter logic (but don't push to stack).
+                        counters[level] = counters.get(level, 0) + 1
+                        for deeper in list(counters):
+                            if deeper > level:
+                                counters[deeper] = 0
+                        definitions_section_number = ".".join(
+                            str(counters.get(lv, 0)) for lv in range(1, level + 1)
+                        )
+                        current = None  # detach so tables don't go to last req
+                        logger.debug(
+                            "Definitions section detected at %s: %r",
+                            definitions_section_number, text,
+                        )
+                    else:
+                        in_definitions_section = False
+                        logger.debug("Heading has no VZ_REQ_ — skipped: %r", text)
                     continue
+
+                # A VZ_REQ_ heading exits definitions mode.
+                in_definitions_section = False
 
                 # Update section counters
                 counters[level] = counters.get(level, 0) + 1
@@ -215,7 +265,32 @@ class StyleDrivenParser:
                 )
 
             elif block.type == BlockType.TABLE:
-                if current is not None:
+                if in_definitions_section:
+                    # Extract acronym → expansion pairs from this table.
+                    # Col[0] = term, col[1] = expansion (same as StructuralParser).
+                    headers = block.headers or []
+                    rows = block.rows or []
+                    candidates: list[tuple[str, str]] = []
+                    if len(headers) >= 2:
+                        h0 = re.sub(r"\s+", " ", (headers[0] or "")).strip()
+                        h1 = re.sub(r"\s+", " ", (headers[1] or "")).strip()
+                        if h0 and h1 and not _looks_like_definition_column_header(h0, h1):
+                            candidates.append((h0, h1))
+                    for row in rows:
+                        if len(row) < 2:
+                            continue
+                        term = re.sub(r"\s+", " ", (row[0] or "")).strip()
+                        expansion = re.sub(r"\s+", " ", (row[1] or "")).strip()
+                        if term and expansion:
+                            candidates.append((term, expansion))
+                    for term, expansion in candidates:
+                        if term not in definitions_map:
+                            definitions_map[term] = expansion
+                    logger.debug(
+                        "Definitions table: %d new entries (total=%d)",
+                        len(candidates), len(definitions_map),
+                    )
+                elif current is not None:
                     current.tables.append(TableData(
                         headers=block.headers or [],
                         rows=block.rows or [],
@@ -262,7 +337,9 @@ class StyleDrivenParser:
             release_date=meta["release_date"],
             referenced_standards_releases=doc_std_refs,
             requirements=requirements,
-            parse_stats=ParseStats(),
+            definitions_map=definitions_map,
+            definitions_section_number=definitions_section_number,
+            parse_stats=ParseStats(defs_extracted=len(definitions_map)),
         )
         logger.info(
             "Style-driven parse done: %s requirements, plan_id=%s",
