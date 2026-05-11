@@ -245,6 +245,10 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
               {% if ch.source == "glossary_pin" %}
                 <span class="badge bg-info ms-1" title="Pinned by acronym chain (D-043)">pin</span>
               {% endif %}
+              {% if ch.graph_source %}
+                <span class="badge bg-dark ms-1"
+                      title="Stage 3 graph-scoping source for this req_id (entity / feature / plan / title = seed; traversal = edge-expanded)">graph:{{ ch.graph_source }}</span>
+              {% endif %}
               {% if ch.dense_rank is not none %}
                 <span class="badge bg-success ms-1"
                       title="Rank in dense top-K (lower = better)">dense#{{ ch.dense_rank }}</span>

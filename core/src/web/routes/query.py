@@ -561,13 +561,26 @@ def _run_query_sync(
     # Full RAG retrieval — every chunk that came back from Stage 4
     # (post-rerank top-K). The Test page renders these collapsed and
     # expands the text on click.
+    # Stage 3 → Stage 4 bridge: tag each retrieved chunk with the graph
+    # scoper's source for that req_id (entity / feature / plan / title /
+    # traversal). The retrieval-meta on the chunk only knows about
+    # dense / BM25 / rerank; this side-channel tells the Test page
+    # which path through Stage 3 *gated* the chunk for retrieval.
+    req_id_to_graph_source: dict[str, str] = {}
+    if response.graph_candidates is not None:
+        for n in response.graph_candidates.requirement_nodes:
+            rid = n.attributes.get("req_id") or ""
+            if rid:
+                req_id_to_graph_source[rid] = n.source
+
     rag_chunks = []
     for ch in response.retrieved_chunks:
         meta = ch.metadata or {}
         rm = ch.retrieval_meta or {}
+        rid = meta.get("req_id", "")
         rag_chunks.append({
             "chunk_id": ch.chunk_id,
-            "req_id": meta.get("req_id", ""),
+            "req_id": rid,
             "plan_id": meta.get("plan_id", ""),
             "section_number": meta.get("section_number", ""),
             "similarity_score": round(float(ch.similarity_score), 3),
@@ -581,6 +594,11 @@ def _run_query_sync(
             "reranker_rank_in": rm.get("reranker_rank_in"),
             "reranker_rank_out": rm.get("reranker_rank_out"),
             "source": rm.get("source"),
+            # Stage 3 (graph scoping) source for this chunk's req_id.
+            # ``None`` when graph was bypassed (--rag-only) OR when
+            # the chunk's req_id wasn't in the candidate set (only
+            # possible via metadata fallback or glossary pin).
+            "graph_source": req_id_to_graph_source.get(rid),
         })
 
     # Stage 4.7 disambiguation. When the pipeline short-circuits
