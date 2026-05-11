@@ -132,6 +132,18 @@ class PipelineContext:
                         f"OpenAI-compatible provider unavailable ({e}), falling back to mock"
                     )
 
+        # Fallthrough: every real-provider branch above returned its
+        # own provider or logged a warning before falling here. Emit a
+        # last-resort WARN so a silent mock substitution can never
+        # mask a misconfigured model_provider — taxonomy + synthesis
+        # would otherwise quietly return canned MockLLMProvider output
+        # that looks superficially fine.
+        logger.warning(
+            "LLM provider could not be constructed (model_provider=%r, "
+            "model_name=%r) — falling back to MockLLMProvider. Taxonomy "
+            "and query synthesis will use canned responses.",
+            self.model_provider, self.model_name,
+        )
         from core.src.llm.mock_provider import MockLLMProvider
         mock = MockLLMProvider()
         mock._is_mock = True
