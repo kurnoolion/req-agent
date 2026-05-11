@@ -136,43 +136,57 @@ def main() -> None:
              "overrides NORA_STANDARDS_SOURCE env var).",
     )
     parser.add_argument("--continue-on-error", action="store_true", help="Continue past failed stages")
+    # Each --skip-X flag also accepts --no-skip-X to FORCE the stage on
+    # when ``config/llm.json`` or the env-var tier has the skip enabled.
+    # Default (neither flag passed) leaves the value None so the
+    # resolver chain decides; explicit True / False from the CLI beats
+    # every lower tier.
     parser.add_argument(
-        "--skip-taxonomy", action="store_true", default=None,
+        "--skip-taxonomy",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Skip the taxonomy stage entirely (no LLM call, no feature/maps_to "
              "edges in the graph). Downstream stages tolerate the missing "
-             "taxonomy.json. Useful when taxonomy LLM output is noisy or "
-             "non-deterministic; trades feature-aware retrieval for a "
-             "reproducible graph topology. Overrides $NORA_SKIP_TAXONOMY / "
-             "config/llm.json:skip_taxonomy.",
+             "taxonomy.json. Pass --no-skip-taxonomy to FORCE the stage on "
+             "even when $NORA_SKIP_TAXONOMY / config/llm.json:skip_taxonomy "
+             "is True. Default (neither): resolver chain decides.",
     )
     parser.add_argument(
-        "--skip-graph", action="store_true", default=None,
+        "--skip-graph",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Skip the knowledge-graph stage entirely (no graph file built). "
              "Query path falls back to pure-RAG retrieval (the pipeline builds "
-             "a stub graph from vectorstore metadata at query time). Overrides "
-             "$NORA_SKIP_GRAPH / config/llm.json:skip_graph.",
+             "a stub graph from vectorstore metadata at query time). Pass "
+             "--no-skip-graph to FORCE the stage on even when "
+             "$NORA_SKIP_GRAPH / config/llm.json:skip_graph is True.",
     )
     parser.add_argument(
         "--rag-only", action="store_true", default=None,
         help="Convenience for --skip-taxonomy --skip-graph. Pipeline builds "
              "extract → profile → parse → resolve → standards → vectorstore, "
              "skipping the LLM-derived feature taxonomy and the unified "
-             "knowledge graph. Query path operates in pure-RAG mode.",
+             "knowledge graph. Query path operates in pure-RAG mode. "
+             "--no-skip-taxonomy / --no-skip-graph win over --rag-only.",
     )
     parser.add_argument(
-        "--skip-resolve", action="store_true", default=None,
+        "--skip-resolve",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Skip the cross-reference resolve stage. Downstream graph + "
              "vectorstore tolerate missing xref manifests (no resolved "
              "internal / standards edges). Implies --skip-standards (the "
-             "standards stage reads resolve's manifests). Overrides "
-             "$NORA_SKIP_RESOLVE / config/llm.json:skip_resolve.",
+             "standards stage reads resolve's manifests). Pass "
+             "--no-skip-resolve to FORCE on. Default: resolver chain decides.",
     )
     parser.add_argument(
-        "--skip-standards", action="store_true", default=None,
+        "--skip-standards",
+        action=argparse.BooleanOptionalAction,
+        default=None,
         help="Skip the 3GPP / GSMA spec download + extract stage. No "
              "spec-section nodes / chunks reach the graph or vectorstore. "
              "Useful when offline or when standards content isn't needed. "
-             "Overrides $NORA_SKIP_STANDARDS / config/llm.json:skip_standards.",
+             "Pass --no-skip-standards to FORCE on. Default: resolver chain decides.",
     )
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
 
@@ -310,10 +324,18 @@ def main() -> None:
     # --rag-only is a convenience that implies skip_taxonomy + skip_graph.
     # It only forces them ON; it doesn't override an explicit --skip-X=False.
     rag_only_cli = bool(args.rag_only)
-    cli_skip_tax = True if (args.skip_taxonomy is True or rag_only_cli) else None
-    cli_skip_graph = True if (args.skip_graph is True or rag_only_cli) else None
-    cli_skip_resolve = True if (args.skip_resolve is True) else None
-    cli_skip_standards = True if (args.skip_standards is True) else None
+    # Explicit True / False from --skip-X or --no-skip-X wins. None
+    # (neither passed) falls through. --rag-only only fills None slots
+    # — explicit --no-skip-taxonomy / --no-skip-graph beats it.
+    def _resolve_cli_skip(flag_value: bool | None, rag_only_implies: bool) -> bool | None:
+        if flag_value is not None:
+            return flag_value
+        return True if rag_only_implies else None
+
+    cli_skip_tax = _resolve_cli_skip(args.skip_taxonomy, rag_only_cli)
+    cli_skip_graph = _resolve_cli_skip(args.skip_graph, rag_only_cli)
+    cli_skip_resolve = _resolve_cli_skip(args.skip_resolve, False)
+    cli_skip_standards = _resolve_cli_skip(args.skip_standards, False)
 
     env_skip_tax = (
         bool(getattr(env, "skip_taxonomy", False))

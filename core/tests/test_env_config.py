@@ -575,6 +575,45 @@ def test_resolve_reranker_model_3tier(tmp_path, monkeypatch):
         env_cfg._reset_llm_config_cache()
 
 
+def test_resolve_skip_taxonomy_cli_false_beats_config_file(tmp_path, monkeypatch):
+    """``--no-skip-taxonomy`` (cli_value=False) FORCES the stage on even
+    when config/llm.json has skip_taxonomy=True. Regression guard for
+    the 'I removed --skip-taxonomy but it's still skipping' bug — user
+    can now pass --no-skip-taxonomy to override a sticky config-file
+    default without editing the file."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.SKIP_TAXONOMY_ENV_VAR, raising=False)
+    monkeypatch.delenv(env_cfg.RAG_ONLY_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({"skip_taxonomy": True}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        # Without CLI: config-file wins → skip = True
+        assert env_cfg.resolve_skip_taxonomy() is True
+        # Explicit --no-skip-taxonomy → cli_value=False → wins
+        assert env_cfg.resolve_skip_taxonomy(cli_value=False) is False
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_skip_graph_cli_false_beats_config_file(tmp_path, monkeypatch):
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.SKIP_GRAPH_ENV_VAR, raising=False)
+    monkeypatch.delenv(env_cfg.RAG_ONLY_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({"skip_graph": True}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_skip_graph() is True
+        assert env_cfg.resolve_skip_graph(cli_value=False) is False
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
 def test_resolve_skip_rag_only_envvar_implies_both(tmp_path, monkeypatch):
     """`NORA_RAG_ONLY=1` flips both skip_taxonomy and skip_graph on."""
     import json
