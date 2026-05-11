@@ -81,6 +81,115 @@
     </div>
     <div class="answer-body" style="line-height: 1.5;">{{ answer | md }}</div>
 
+    {# Stage 1 + Stage 3 visibility — what the analyzer (taxonomy-aware)
+       and the graph scoper produced BEFORE retrieval ran. Helps users
+       see whether the right features matched and how broad the
+       candidate set was. Both panels are click-to-expand to keep the
+       page compact when not needed. #}
+    {% if query_intent or graph_candidates %}
+      <hr>
+      <div class="small">
+        {% if query_intent %}
+          {% set intent_id = "intent-" ~ row_id %}
+          <button type="button"
+                  class="btn btn-sm btn-link p-0 align-baseline"
+                  data-bs-toggle="collapse"
+                  data-bs-target="#{{ intent_id }}"
+                  aria-expanded="false"
+                  aria-controls="{{ intent_id }}">
+            <strong>Query analysis (Stage 1 — taxonomy)</strong>
+          </button>
+          <span class="text-muted ms-1">
+            type=<code>{{ query_intent.query_type }}</code>
+            {% if query_intent.features %}
+              · features={{ query_intent.features|length }}
+            {% endif %}
+            {% if query_intent.entities %}
+              · entities={{ query_intent.entities|length }}
+            {% endif %}
+          </span>
+          <div id="{{ intent_id }}" class="collapse mt-1">
+            <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap;">{%- if query_intent.features -%}
+features (taxonomy match): {{ query_intent.features|join(", ") }}
+{% endif -%}
+{%- if query_intent.likely_features -%}
+likely_features: {{ query_intent.likely_features|join(", ") }}
+{% endif -%}
+{%- if query_intent.entities -%}
+entities: {{ query_intent.entities|join(", ") }}
+{% endif -%}
+{%- if query_intent.concepts -%}
+concepts: {{ query_intent.concepts|join(", ") }}
+{% endif -%}
+{%- if query_intent.mnos -%}
+mnos: {{ query_intent.mnos|join(", ") }}
+{% endif -%}
+{%- if query_intent.releases -%}
+releases: {{ query_intent.releases|join(", ") }}
+{% endif -%}
+{%- if query_intent.plan_ids -%}
+plan_ids: {{ query_intent.plan_ids|join(", ") }}
+{% endif -%}
+</pre>
+          </div>
+        {% endif %}
+
+        {% if graph_candidates %}
+          {% set graph_id = "graph-" ~ row_id %}
+          <div class="mt-1">
+            <button type="button"
+                    class="btn btn-sm btn-link p-0 align-baseline"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#{{ graph_id }}"
+                    aria-expanded="false"
+                    aria-controls="{{ graph_id }}">
+              <strong>Graph scoping (Stage 3)</strong>
+            </button>
+            <span class="text-muted ms-1">
+              {{ graph_candidates.total }} candidates
+              ({{ graph_candidates.requirement_count }} reqs
+              {%- if graph_candidates.feature_count %}, {{ graph_candidates.feature_count }} features{% endif %}
+              {%- if graph_candidates.standards_count %}, {{ graph_candidates.standards_count }} stds{% endif -%}
+              )
+            </span>
+            <div id="{{ graph_id }}" class="collapse mt-1">
+              <div class="border rounded p-2">
+                {% if graph_candidates.features %}
+                  <div class="mb-2">
+                    <strong>Matched features:</strong>
+                    {% for f in graph_candidates.features %}
+                      <code class="ms-1">{{ f.name }}</code><span class="text-muted">[{{ f.source }}]</span>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+                {% if graph_candidates.standards %}
+                  <div class="mb-2">
+                    <strong>Matched standards:</strong>
+                    {% for s in graph_candidates.standards %}
+                      <code class="ms-1">{{ s.spec }}</code><span class="text-muted">[{{ s.source }}]</span>
+                    {% endfor %}
+                  </div>
+                {% endif %}
+                {% if graph_candidates.top_reqs %}
+                  <div>
+                    <strong>Top {{ graph_candidates.top_reqs|length }} candidate reqs
+                      (of {{ graph_candidates.requirement_count }}):</strong>
+                    <ul class="list-unstyled mb-0 mt-1">
+                      {% for r in graph_candidates.top_reqs %}
+                        <li><code>{{ r.req_id }}</code>
+                          <span class="text-muted">[{{ r.source }}, score {{ r.score }}]</span>
+                        </li>
+                      {% endfor %}
+                    </ul>
+                  </div>
+                {% endif %}
+              </div>
+            </div>
+          </div>
+        {% endif %}
+      </div>
+    {% endif %}
+
     {# LLM-cited subset — what the answer actually leans on. #}
     {% if llm_citations %}
       <hr>

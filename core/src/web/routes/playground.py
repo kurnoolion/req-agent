@@ -201,6 +201,8 @@ async def playground_ask(request: Request):
         "llm_system_prompt": result.get("llm_system_prompt", ""),
         "llm_context_text": result.get("llm_context_text", ""),
         "citation_audit": result.get("citation_audit"),
+        "query_intent": result.get("query_intent"),
+        "graph_candidates": result.get("graph_candidates"),
     })
 
 
@@ -383,4 +385,6 @@ def _run_query_for_test(
         "llm_system_prompt": raw.get("llm_system_prompt", ""),
         "llm_context_text": raw.get("llm_context_text", ""),
         "citation_audit": raw.get("citation_audit"),
+        "query_intent": raw.get("query_intent"),
+        "graph_candidates": raw.get("graph_candidates"),
     }

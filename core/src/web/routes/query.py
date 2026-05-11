@@ -614,6 +614,51 @@ def _run_query_sync(
             ],
         }
 
+    # Stage 1 + Stage 3 surfacing — the Test page's "Graph & Taxonomy"
+    # panel renders these so the user can see what the analyzer
+    # (taxonomy-aware) and graph scoper produced before retrieval ran.
+    query_intent_payload = None
+    if response.query_intent is not None:
+        qi = response.query_intent
+        query_intent_payload = {
+            "query_type": qi.query_type.value,
+            "mnos": list(qi.mnos),
+            "releases": list(qi.releases),
+            "plan_ids": list(qi.plan_ids),
+            "entities": list(qi.entities),
+            "concepts": list(qi.concepts),
+            "features": list(qi.features),
+            "likely_features": list(qi.likely_features),
+        }
+    graph_candidates_payload = None
+    if response.graph_candidates is not None:
+        gc = response.graph_candidates
+        graph_candidates_payload = {
+            "total": gc.total,
+            "requirement_count": len(gc.requirement_nodes),
+            "standards_count": len(gc.standards_nodes),
+            "feature_count": len(gc.feature_nodes),
+            "top_reqs": [
+                {
+                    "req_id": n.attributes.get("req_id", "") or n.node_id,
+                    "source": n.source,
+                    "score": round(n.score, 3),
+                }
+                for n in gc.requirement_nodes[:15]
+            ],
+            "features": [
+                {"name": n.attributes.get("name", "") or n.node_id, "source": n.source}
+                for n in gc.feature_nodes
+            ],
+            "standards": [
+                {
+                    "spec": n.attributes.get("spec", "") or n.node_id,
+                    "source": n.source,
+                }
+                for n in gc.standards_nodes[:10]
+            ],
+        }
+
     result = {
         "answer": response.answer,
         "citations": citations,
@@ -626,6 +671,8 @@ def _run_query_sync(
         "llm_system_prompt": llm_system_prompt,
         "llm_context_text": llm_context_text,
         "citation_audit": citation_audit_payload,
+        "query_intent": query_intent_payload,
+        "graph_candidates": graph_candidates_payload,
     }
 
     # Attach LLM metrics for the background task to record

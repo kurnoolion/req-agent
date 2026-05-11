@@ -350,6 +350,13 @@ class QueryResponse:
     # paths (no real answer to audit).
     citation_audit: CitationAudit | None = None
 
+    # Stage 3 output captured for Test-page visibility. The Test page
+    # renders a "Graph & Taxonomy" panel showing matched features
+    # (from intent / taxonomy) + graph-scoping candidate counts and a
+    # sample of top req_ids / feature names. None when graph is
+    # bypassed (RAG-only mode).
+    graph_candidates: "CandidateSet | None" = None
+
     def to_dict(self) -> dict[str, Any]:
         d = {
             "answer": self.answer,

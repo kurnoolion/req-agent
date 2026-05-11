@@ -595,6 +595,10 @@ class QueryPipeline:
         # Surface the exact prompt sent to the LLM so the Test page
         # can render a "Show LLM prompt" debug view.
         response.assembled_context = context
+        # Surface Stage 3 output so the Test page can show what
+        # graph scoping + taxonomy contributed (matched features +
+        # candidate node sample). None when graph is bypassed.
+        response.graph_candidates = candidates if not self._bypass_graph else None
 
         # Stage 6.5: Citation audit. Per-sentence breakdown of which
         # sentences cite a requirement and which don't, plus
