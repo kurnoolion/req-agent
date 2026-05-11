@@ -182,6 +182,86 @@ def test_embed_query_delegates_to_embed():
     assert emb.embed_query("query text") == [1.0, 0.0]
 
 
+def test_embed_retries_with_shrink_on_5xx():
+    """HTTP 5xx → retry with halved text up to ``_MAX_SHRINK_RETRIES``.
+    Second attempt succeeds → embed returns the vector cleanly."""
+    import urllib.error
+    from core.src.vectorstore.embedding_ollama import OllamaEmbedder
+
+    long_text = "x" * 8000
+
+    def _open_side_effect(req, timeout=None):
+        # First /api/tags then the embedding requests.
+        if req.full_url.endswith("/api/tags"):
+            return _MockResponse(_tags_payload(["nomic-embed-text:latest"]))
+        if _open_side_effect.call_count == 0:
+            _open_side_effect.call_count += 1
+            raise urllib.error.HTTPError(
+                req.full_url, 500, "Internal Server Error", {}, None
+            )
+        _open_side_effect.call_count += 1
+        return _MockResponse(_emb_payload([1.0, 0.0]))
+    _open_side_effect.call_count = 0
+
+    with patch("core.src.vectorstore.embedding_ollama._build_opener") as mock_builder:
+        mock_opener = MagicMock(spec=urllib.request.OpenerDirector)
+        mock_opener.open.side_effect = _open_side_effect
+        mock_builder.return_value = mock_opener
+        emb = OllamaEmbedder(model_name="nomic-embed-text", normalize=False)
+        vecs = emb.embed([long_text])
+    assert vecs == [[1.0, 0.0]]
+    # First failed call + one retry-with-shrink = 2 embedding-API calls.
+    assert _open_side_effect.call_count == 2
+
+
+def test_embed_raises_chunk_error_after_exhausted_5xx_retries():
+    """After ``_MAX_SHRINK_RETRIES`` failed shrinks, raises
+    ``ChunkEmbeddingError`` so the builder can skip the chunk."""
+    import urllib.error
+    from core.src.vectorstore.embedding_ollama import (
+        OllamaEmbedder,
+        ChunkEmbeddingError,
+    )
+
+    def _always_500(req, timeout=None):
+        if req.full_url.endswith("/api/tags"):
+            return _MockResponse(_tags_payload(["nomic-embed-text:latest"]))
+        raise urllib.error.HTTPError(
+            req.full_url, 500, "Internal Server Error", {}, None
+        )
+
+    with patch("core.src.vectorstore.embedding_ollama._build_opener") as mock_builder:
+        mock_opener = MagicMock(spec=urllib.request.OpenerDirector)
+        mock_opener.open.side_effect = _always_500
+        mock_builder.return_value = mock_opener
+        emb = OllamaEmbedder(model_name="nomic-embed-text", normalize=False)
+        with pytest.raises(ChunkEmbeddingError) as excinfo:
+            emb.embed(["x" * 8000])
+    assert excinfo.value.idx == 0
+    assert excinfo.value.attempts >= 1
+
+
+def test_embed_propagates_4xx_immediately_without_retry():
+    """HTTP 4xx (e.g. 404 model not found) → no retry, raise as-is."""
+    import urllib.error
+    from core.src.vectorstore.embedding_ollama import OllamaEmbedder
+
+    def _404(req, timeout=None):
+        if req.full_url.endswith("/api/tags"):
+            return _MockResponse(_tags_payload(["nomic-embed-text:latest"]))
+        raise urllib.error.HTTPError(
+            req.full_url, 404, "Not Found", {}, None
+        )
+
+    with patch("core.src.vectorstore.embedding_ollama._build_opener") as mock_builder:
+        mock_opener = MagicMock(spec=urllib.request.OpenerDirector)
+        mock_opener.open.side_effect = _404
+        mock_builder.return_value = mock_opener
+        emb = OllamaEmbedder(model_name="nomic-embed-text", normalize=False)
+        with pytest.raises(urllib.error.HTTPError):
+            emb.embed(["any text"])
+
+
 def test_empty_input_returns_empty_without_calling_api():
     with patch("core.src.vectorstore.embedding_ollama._build_opener") as mock_builder:
         # Only the /api/tags call is expected.

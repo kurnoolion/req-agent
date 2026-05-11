@@ -50,6 +50,40 @@ def _l2_normalize(vec: list[float]) -> list[float]:
 
 
 _DEFAULT_MAX_INPUT_CHARS = 8000
+
+# Per-chunk shrink-retry policy for 5xx responses. AT-command tables and
+# other dense corpora occasionally trip the embedding model's token
+# budget even at the char-truncation cap; halving the text twice rescues
+# nearly all of them. After exhausted retries, ``ChunkEmbeddingError``
+# is raised so the builder can skip the chunk rather than fail the
+# whole stage.
+_MAX_SHRINK_RETRIES = 2
+_MIN_SHRINK_CHARS = 500
+
+
+class ChunkEmbeddingError(RuntimeError):
+    """A single chunk failed to embed after retry-with-shrink.
+
+    The builder catches this and skips the chunk while continuing the
+    rest of the batch. Other ``RuntimeError`` subclasses (e.g. wire-
+    level URLError) still abort the whole stage.
+    """
+
+    def __init__(
+        self,
+        idx: int,
+        text_preview: str,
+        attempts: int,
+        last_error: Exception,
+    ) -> None:
+        self.idx = idx
+        self.text_preview = text_preview
+        self.attempts = attempts
+        self.last_error = last_error
+        super().__init__(
+            f"chunk {idx} embedding failed after {attempts} attempt(s); "
+            f"preview={text_preview!r}; last_error={last_error}"
+        )
 """Conservative default cap on per-text input length sent to /api/embeddings.
 
 Different Ollama embedding models have different effective context windows.
@@ -133,50 +167,95 @@ class OllamaEmbedder:
         batches this is slower than sentence-transformers' native batching,
         but it keeps the wire protocol simple and matches what `ollama pull`
         ships out of the box.
+
+        **Per-text resilience**: HTTP 5xx responses (typically token-count
+        overruns or backend OOM on dense content like AT-command tables)
+        trigger a retry with the text halved, up to ``_MAX_SHRINK_RETRIES``
+        times. Non-HTTP errors (connection refused, timeout) propagate
+        immediately since they indicate a server-level problem the caller
+        should handle. After exhausted retries on a 5xx, a
+        ``ChunkEmbeddingError`` is raised so the builder can skip just
+        that chunk instead of failing the entire stage.
         """
         if not texts:
             return []
         vectors: list[list[float]] = []
         for i, text in enumerate(texts):
-            if len(text) > self._max_input_chars:
-                logger.warning(
-                    f"Text {i} length {len(text)} > max_input_chars "
-                    f"{self._max_input_chars}; truncating "
-                    f"({len(text) - self._max_input_chars} chars dropped)"
-                )
-                text = text[:self._max_input_chars]
-                self._truncated_count += 1
-            payload = json.dumps(
-                {"model": self._model_name, "prompt": text}
-            ).encode("utf-8")
-            req = urllib.request.Request(
-                f"{self._base_url}/api/embeddings",
-                data=payload,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            try:
-                with self._opener.open(req, timeout=self._timeout) as resp:
-                    data = json.loads(resp.read())
-            except urllib.error.URLError as e:
-                raise RuntimeError(
-                    f"Ollama embedding request failed (text {i}, "
-                    f"length={len(text)} chars, "
-                    f"preview={text[:80]!r}{'…' if len(text) > 80 else ''}): {e}"
-                ) from e
-            vec = data.get("embedding", [])
-            if not vec:
-                raise RuntimeError(
-                    f"Ollama returned empty embedding for input #{i}; "
-                    f"check that '{self._model_name}' is an embedding model "
-                    f"(LLM models like gemma3:12b don't expose /api/embeddings output)"
-                )
-            if self._normalize:
-                vec = _l2_normalize(vec)
+            vec = self._embed_one_with_retry(text, i)
             vectors.append(vec)
             if self._dimension is None:
                 self._dimension = len(vec)
         return vectors
+
+    def _embed_one_with_retry(self, text: str, idx: int) -> list[float]:
+        """Embed a single text; retry with halved length on 5xx."""
+        if len(text) > self._max_input_chars:
+            logger.warning(
+                f"Text {idx} length {len(text)} > max_input_chars "
+                f"{self._max_input_chars}; truncating "
+                f"({len(text) - self._max_input_chars} chars dropped)"
+            )
+            text = text[:self._max_input_chars]
+            self._truncated_count += 1
+
+        attempt = 0
+        current = text
+        last_error: Exception | None = None
+        while True:
+            try:
+                return self._embed_one(current, idx)
+            except urllib.error.HTTPError as e:
+                last_error = e
+                # 5xx → server-side failure; try shrinking. 4xx → caller-
+                # side problem (bad model name, malformed request); raise
+                # immediately.
+                if not (500 <= e.code < 600):
+                    raise
+                if attempt >= _MAX_SHRINK_RETRIES or len(current) <= _MIN_SHRINK_CHARS:
+                    raise ChunkEmbeddingError(
+                        idx=idx,
+                        text_preview=text[:80],
+                        attempts=attempt + 1,
+                        last_error=e,
+                    ) from e
+                new_len = max(_MIN_SHRINK_CHARS, len(current) // 2)
+                logger.warning(
+                    "Ollama 5xx on chunk %d (len=%d); retry %d/%d with len=%d",
+                    idx, len(current), attempt + 1, _MAX_SHRINK_RETRIES, new_len,
+                )
+                current = current[:new_len]
+                attempt += 1
+            except urllib.error.URLError as e:
+                # Non-HTTP (DNS, refused, timeout) — propagate as before.
+                raise RuntimeError(
+                    f"Ollama embedding request failed (text {idx}, "
+                    f"length={len(current)} chars, "
+                    f"preview={current[:80]!r}{'…' if len(current) > 80 else ''}): {e}"
+                ) from e
+
+    def _embed_one(self, text: str, idx: int) -> list[float]:
+        """One POST to /api/embeddings; raises URLError / HTTPError on failure."""
+        payload = json.dumps(
+            {"model": self._model_name, "prompt": text}
+        ).encode("utf-8")
+        req = urllib.request.Request(
+            f"{self._base_url}/api/embeddings",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with self._opener.open(req, timeout=self._timeout) as resp:
+            data = json.loads(resp.read())
+        vec = data.get("embedding", [])
+        if not vec:
+            raise RuntimeError(
+                f"Ollama returned empty embedding for input #{idx}; "
+                f"check that '{self._model_name}' is an embedding model "
+                f"(LLM models like gemma3:12b don't expose /api/embeddings output)"
+            )
+        if self._normalize:
+            vec = _l2_normalize(vec)
+        return vec
 
     def embed_query(self, text: str) -> list[float]:
         """Embed a single query.

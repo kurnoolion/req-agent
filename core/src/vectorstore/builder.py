@@ -121,11 +121,28 @@ class VectorStoreBuilder:
             f"Embedding {len(texts)} chunks with {self.embedder.model_name} "
             f"({self.embedder.dimension}d)"
         )
-        embeddings = self._embed_batched(texts)
+        embeddings, skipped_indices = self._embed_batched(texts)
 
-        # Store
+        # Store — filter out chunks whose embedding failed after retries.
+        # ``ChunkEmbeddingError``-skipped indices are recorded but their
+        # ids / texts / metadatas are omitted from the store so the
+        # vector store stays internally consistent. The skip is logged
+        # at WARN with the chunk id so the architect can audit which
+        # requirements lack retrieval coverage.
         ids = [c.chunk_id for c in chunks]
         metadatas = [c.metadata for c in chunks]
+        if skipped_indices:
+            skipped_set = set(skipped_indices)
+            kept = [i for i in range(len(chunks)) if i not in skipped_set]
+            ids = [ids[i] for i in kept]
+            texts = [texts[i] for i in kept]
+            metadatas = [metadatas[i] for i in kept]
+            logger.warning(
+                "Embedding skipped %d/%d chunks after exhausted retries; "
+                "skipped chunk_ids=%r",
+                len(skipped_indices), len(chunks),
+                [chunks[i].chunk_id for i in skipped_indices][:10],
+            )
         self.store.add(ids, embeddings, texts, metadatas)
 
         logger.info(
@@ -136,23 +153,58 @@ class VectorStoreBuilder:
         stats = self._compute_stats(chunks)
         return stats
 
-    def _embed_batched(self, texts: list[str]) -> list[list[float]]:
-        """Embed texts in batches to manage memory."""
+    def _embed_batched(
+        self, texts: list[str]
+    ) -> tuple[list[list[float]], list[int]]:
+        """Embed texts in batches; return ``(vectors, skipped_indices)``.
+
+        On a per-chunk ``ChunkEmbeddingError`` (raised by
+        ``OllamaEmbedder`` after exhausted shrink retries), the failing
+        chunk is dropped and its absolute index recorded in
+        ``skipped_indices``. The rest of the batch retries one-at-a-
+        time so a single bad chunk doesn't poison its neighbors. Other
+        runtime errors (connection refused, malformed response, bad
+        model name) propagate and abort the stage as before.
+        """
+        # Optional: only import here so non-Ollama backends don't pay
+        # the import cost.
+        try:
+            from core.src.vectorstore.embedding_ollama import (
+                ChunkEmbeddingError,
+            )
+        except ImportError:  # pragma: no cover — defensive
+            ChunkEmbeddingError = ()  # type: ignore
+
         batch_size = self.config.embedding_batch_size
         all_embeddings: list[list[float]] = []
+        skipped: list[int] = []
 
+        total_batches = (len(texts) + batch_size - 1) // batch_size
         for i in range(0, len(texts), batch_size):
             batch = texts[i:i + batch_size]
-            batch_embeddings = self.embedder.embed(batch)
-            all_embeddings.extend(batch_embeddings)
+            try:
+                batch_embeddings = self.embedder.embed(batch)
+                all_embeddings.extend(batch_embeddings)
+            except ChunkEmbeddingError:  # type: ignore[misc]
+                # One chunk in this batch failed — retry each chunk
+                # individually so the rest of the batch still embeds.
+                for j, single in enumerate(batch):
+                    try:
+                        vec = self.embedder.embed([single])[0]
+                        all_embeddings.append(vec)
+                    except ChunkEmbeddingError as e:  # type: ignore[misc]
+                        skipped.append(i + j)
+                        logger.warning(
+                            "skipping chunk at abs_idx=%d after shrink retries: %s",
+                            i + j, e,
+                        )
 
             if len(texts) > batch_size:
                 logger.info(
-                    f"Embedded batch {i // batch_size + 1}/"
-                    f"{(len(texts) + batch_size - 1) // batch_size}"
+                    f"Embedded batch {i // batch_size + 1}/{total_batches}"
                 )
 
-        return all_embeddings
+        return all_embeddings, skipped
 
     def _compute_stats(self, chunks: list[Chunk]) -> BuildStats:
         """Compute build statistics."""
