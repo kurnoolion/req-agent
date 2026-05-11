@@ -233,23 +233,33 @@ def _normalize_mapping(raw: dict[str, str]) -> dict[str, str]:
 def load_substituted_profile(
     profile_path: Path, env_dir: Path | None = None
 ) -> DocumentProfile:
-    """Load a profile and apply mapping substitution if a mapping exists.
+    """Load a profile and apply placeholder substitution.
 
     Drop-in replacement for ``DocumentProfile.load_json`` at the parser
     boundary. *env_dir* is optional; when provided it enables fallback
     to ``<env_dir>/state/cline-mapping.json``.
+
+    ``substitute_placeholders`` is called unconditionally so that
+    **generic placeholders** (``<PLAN>``, ``<DIGITS>``, ``<MNO>``,
+    ``<REL>``) always expand to their regex character class — even
+    when no mapping snapshot is found. Without this, a profile that
+    has its specific placeholders manually filled in (e.g. user
+    replaced ``<MNO0>`` → ``VZ``) but still contains generic
+    ``<PLAN>`` would leave ``<PLAN>`` as a literal substring in the
+    compiled regex, breaking every req_id match downstream. Specific
+    placeholders with no mapping entry are surfaced as WARN logs by
+    ``substitute_placeholders`` (not silently dropped).
     """
     profile = DocumentProfile.load_json(profile_path)
     mapping_path = find_mapping_file(profile_path, env_dir)
     if mapping_path is None:
         logger.debug(
-            "profile %s loaded with no mapping (substitution is a no-op)",
+            "profile %s: no mapping snapshot — generic placeholders will "
+            "still substitute; any specific placeholders left will WARN",
             profile_path.name,
         )
-        return profile
+        return substitute_placeholders(profile, {})
     mapping = _load_mapping_dict(mapping_path)
-    if not mapping:
-        return profile
     logger.info(
         "applying %d mapping entries from %s to profile %s",
         len(mapping), mapping_path, profile_path.name,

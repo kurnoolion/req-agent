@@ -258,17 +258,45 @@ class TestLoadSubstitutedProfile:
         out = load_substituted_profile(profile_path, env_dir=env_dir)
         assert out.requirement_id.pattern == r"VZ_REQ_[A-Z0-9_]+_\d+"
 
-    def test_no_mapping_returns_profile_unchanged(self, tmp_path):
-        # Public-corpus case (vzw_oa_profile.json analogue): no mapping
-        # anywhere → load returns the profile with placeholders/strings
-        # exactly as written. Wildcards (<PLAN>) still resolve to their
-        # generic class because that's mapping-independent.
+    def test_no_mapping_still_substitutes_generic_placeholders(self, tmp_path):
+        """Generic placeholders (``<PLAN>``, ``<DIGITS>``, ``<MNO>``,
+        ``<REL>``) are mapping-independent — they always expand to
+        their regex character class even when no mapping snapshot is
+        found. Without this, a profile whose specific placeholders
+        are manually filled in (user replacing ``<MNO0>`` → ``VZ``
+        directly in the file) but still has ``<PLAN>`` would compile
+        a regex looking literally for the string ``<PLAN>`` — every
+        req_id match fails, every Requirement gets req_id="", and
+        chunk_builder drops them all."""
         project, profile_path = self._scaffold_project(tmp_path)
         out = load_substituted_profile(profile_path, env_dir=None)
-        # Specific placeholder UNCHANGED (no mapping)
+        # Specific placeholder UNCHANGED (no mapping entry); WARN logged
+        # by substitute_placeholders but stays literal so the user can
+        # spot it.
         assert "<MNO0>" in out.requirement_id.pattern
-        # No accidental wildcard substitution either
-        assert "<PLAN>" in out.requirement_id.pattern
+        # Generic placeholder DID substitute even without a mapping.
+        assert "<PLAN>" not in out.requirement_id.pattern
+        assert "[A-Z0-9_]+" in out.requirement_id.pattern
+
+    def test_workaround_user_replaced_specific_in_profile(self, tmp_path):
+        """User workaround for missing mapping: edit the profile JSON
+        directly, replacing ``<MNO0>`` → real value. The generic
+        placeholders MUST still expand at load time — otherwise the
+        regex stays half-substituted and matches nothing. Regression
+        guard for the 2026-05-10 chunks=0 incident."""
+        project, _ = self._scaffold_project(tmp_path)
+        # Author profile with MNO0 already filled in (mirrors the user's
+        # manual edit of <env_dir>/corrections/profile.json).
+        profile = DocumentProfile(
+            profile_name="bs_test",
+            requirement_id=RequirementIdPattern(
+                pattern=r"VZ_REQ_<PLAN>_\d+"
+            ),
+        )
+        profile_path = project / "customizations" / "profiles" / "bs_test_partial.json"
+        profile.save_json(profile_path)
+        out = load_substituted_profile(profile_path, env_dir=None)
+        assert out.requirement_id.pattern == r"VZ_REQ_[A-Z0-9_]+_\d+"
 
     def test_committed_bs_d7a2c81f_loads(self):
         # Sanity: the placeholdered profile we ship in this commit loads
