@@ -88,14 +88,17 @@ def requirement_schema() -> dict[str, Any]:
         name=REQUIREMENT,
         vectorizer_config=wvc.config.Configure.Vectorizer.none(),
         properties=[
-            _p("req_id",          D.TEXT,       searchable=False),
-            _p("carrier",         D.TEXT,       searchable=False),
-            _p("req_text",        D.TEXT,       searchable=True),    # BM25 + vector
-            _p("req_tables",      D.TEXT_ARRAY, searchable=True),    # BM25
-            _p("req_tg",          D.TEXT,       searchable=False),
-            _p("has_images",      D.BOOL,       searchable=False),
-            _p("image_captions",  D.TEXT,       searchable=True),
-            _p("current_release", D.TEXT,       searchable=False),
+            _p("req_id",           D.TEXT,       searchable=False),
+            _p("carrier",          D.TEXT,       searchable=False),
+            _p("req_text",         D.TEXT,       searchable=True),    # BM25 + vector
+            _p("req_tables",       D.TEXT_ARRAY, searchable=True),    # BM25
+            _p("req_tg",           D.TEXT,       searchable=False),
+            _p("has_images",       D.BOOL,       searchable=False),
+            _p("image_captions",   D.TEXT,       searchable=True),
+            _p("current_release",  D.TEXT,       searchable=False),
+            _p("parent_req_id",    D.TEXT,       searchable=False),   # context enrichment
+            _p("children_req_ids", D.TEXT_ARRAY, searchable=False),   # context enrichment
+            _p("hierarchy_path",   D.TEXT_ARRAY, searchable=False),   # breadcrumb display
         ],
         references=[
             _r("depends_on",      REQUIREMENT),            # self-referential
@@ -128,6 +131,9 @@ def requirement_release_schema() -> dict[str, Any]:
             _p("req_tg",             D.TEXT,       searchable=False),
             _p("depends_on_req_ids", D.TEXT_ARRAY, searchable=False),
             _p("content_hash",       D.TEXT,       searchable=False),
+            _p("parent_req_id",      D.TEXT,       searchable=False),   # context enrichment
+            _p("children_req_ids",   D.TEXT_ARRAY, searchable=False),   # context enrichment
+            _p("hierarchy_path",     D.TEXT_ARRAY, searchable=False),   # breadcrumb display
         ],
         references=[
             _r("standards",    STANDARDS),

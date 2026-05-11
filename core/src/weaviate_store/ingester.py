@@ -545,6 +545,9 @@ class WeaviateIngester:
                     "req_tg":             "",
                     "depends_on_req_ids": dep_req_ids,
                     "content_hash":       c_hash,
+                    "parent_req_id":      req.parent_req_id or "",
+                    "children_req_ids":   list(req.children or []),
+                    "hierarchy_path":     list(req.hierarchy_path or []),
                 }
 
                 references = {
@@ -620,14 +623,17 @@ class WeaviateIngester:
                         std_ref_uuids.append(u)
 
                 properties = {
-                    "req_id":          req_id,
-                    "carrier":         carrier,
-                    "req_text":        req_text,
-                    "req_tables":      req_tables,
-                    "req_tg":          "",
-                    "has_images":      bool(req.images),
-                    "image_captions":  image_captions,
-                    "current_release": release,
+                    "req_id":            req_id,
+                    "carrier":           carrier,
+                    "req_text":          req_text,
+                    "req_tables":        req_tables,
+                    "req_tg":            "",
+                    "has_images":        bool(req.images),
+                    "image_captions":    image_captions,
+                    "current_release":   release,
+                    "parent_req_id":     req.parent_req_id or "",
+                    "children_req_ids":  list(req.children or []),
+                    "hierarchy_path":    list(req.hierarchy_path or []),
                 }
 
                 references: dict[str, Any] = {}
