@@ -240,7 +240,27 @@ plan_ids: {{ query_intent.plan_ids|join(", ") }}
               </button>
               {% if ch.plan_id %}<span class="badge bg-secondary ms-1">{{ ch.plan_id }}</span>{% endif %}
               {% if ch.section_number %} — sec <code>{{ ch.section_number }}</code>{% endif %}
-              <span class="text-muted ms-1">score {{ ch.similarity_score }}</span>
+              <span class="text-muted ms-1">dense_score={{ ch.similarity_score }}</span>
+              {# Retrieval-provenance badges (D-041 RRF + reranker + glossary pin). #}
+              {% if ch.source == "glossary_pin" %}
+                <span class="badge bg-info ms-1" title="Pinned by acronym chain (D-043)">pin</span>
+              {% endif %}
+              {% if ch.dense_rank is not none %}
+                <span class="badge bg-success ms-1"
+                      title="Rank in dense top-K (lower = better)">dense#{{ ch.dense_rank }}</span>
+              {% endif %}
+              {% if ch.bm25_rank is not none %}
+                <span class="badge bg-warning text-dark ms-1"
+                      title="Rank in BM25 top-K (lower = better)">bm25#{{ ch.bm25_rank }}</span>
+              {% endif %}
+              {% if ch.rrf_score is not none %}
+                <span class="badge bg-light text-dark ms-1"
+                      title="Reciprocal Rank Fusion score (higher = better)">rrf={{ ch.rrf_score }}</span>
+              {% endif %}
+              {% if ch.reranker_rank_in is not none and ch.reranker_rank_out is not none %}
+                <span class="badge bg-primary ms-1"
+                      title="Cross-encoder reranker: position before → after">rerank {{ ch.reranker_rank_in }}→{{ ch.reranker_rank_out }}</span>
+              {% endif %}
               <div id="{{ frag_id }}" class="collapse mt-1">
                 <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap;">{{ ch.text }}</pre>
               </div>

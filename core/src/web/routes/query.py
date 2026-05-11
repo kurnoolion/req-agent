@@ -564,6 +564,7 @@ def _run_query_sync(
     rag_chunks = []
     for ch in response.retrieved_chunks:
         meta = ch.metadata or {}
+        rm = ch.retrieval_meta or {}
         rag_chunks.append({
             "chunk_id": ch.chunk_id,
             "req_id": meta.get("req_id", ""),
@@ -571,6 +572,15 @@ def _run_query_sync(
             "section_number": meta.get("section_number", ""),
             "similarity_score": round(float(ch.similarity_score), 3),
             "text": ch.text,
+            # Per-chunk retrieval provenance — surfaces dense / BM25 /
+            # RRF / reranker / glossary-pin info on the Test page so
+            # the user can see *why* each chunk landed in the top-K.
+            "dense_rank": rm.get("dense_rank"),
+            "bm25_rank": rm.get("bm25_rank"),
+            "rrf_score": rm.get("rrf_score"),
+            "reranker_rank_in": rm.get("reranker_rank_in"),
+            "reranker_rank_out": rm.get("reranker_rank_out"),
+            "source": rm.get("source"),
         })
 
     # Stage 4.7 disambiguation. When the pipeline short-circuits

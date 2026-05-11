@@ -225,7 +225,13 @@ class RAGRetriever:
         # before truncation to top_k. Reranker returns the same chunks
         # in a (possibly) different order; we then take top_k.
         if rerank_active and len(chunks) > 1:
+            # Capture pre-rerank rank per chunk so the Test page can
+            # show how the reranker reordered things.
+            for i, c in enumerate(chunks):
+                c.retrieval_meta["reranker_rank_in"] = i
             chunks = self._reranker.rerank(query, chunks)
+            for i, c in enumerate(chunks):
+                c.retrieval_meta["reranker_rank_out"] = i
             logger.info(
                 f"Reranker reordered {len(chunks)} chunks; keeping top {k}"
             )
@@ -244,6 +250,11 @@ class RAGRetriever:
         if pin_term:
             pinned = self._glossary_by_acronym.get(pin_term.lower(), [])
             if pinned:
+                # Tag pinned chunks so the Test page can render a
+                # "source=glossary_pin" badge — pinned chunks otherwise
+                # have no dense / BM25 / rerank rank.
+                for c in pinned:
+                    c.retrieval_meta["source"] = "glossary_pin"
                 pinned_ids = {c.chunk_id for c in pinned}
                 rest = [c for c in chunks if c.chunk_id not in pinned_ids]
                 chunks = pinned + rest
@@ -271,6 +282,8 @@ class RAGRetriever:
         query_embedding = self._embedder.embed_query(query)
         if not bm25_active:
             chunks = self._scoped_retrieve(query_embedding, req_ids, top_k)
+            for i, c in enumerate(chunks):
+                c.retrieval_meta["dense_rank"] = i
             logger.info(
                 f"Scoped retrieval (dense): {len(req_ids)} candidates "
                 f"→ {len(chunks)} retrieved"
@@ -307,6 +320,8 @@ class RAGRetriever:
         query_embedding = self._embedder.embed_query(query)
         if not bm25_active:
             chunks = self._metadata_retrieve(query_embedding, scopes, top_k)
+            for i, c in enumerate(chunks):
+                c.retrieval_meta["dense_rank"] = i
             logger.info(
                 f"Metadata retrieval (dense, no candidates): "
                 f"{len(chunks)} retrieved"
@@ -338,6 +353,11 @@ class RAGRetriever:
     ) -> list[RetrievedChunk]:
         """RRF-fuse dense and BM25 rankings; materialize chunks for
         BM25-only ids using the BM25 index's text/metadata cache.
+
+        Per-chunk provenance (dense_rank / bm25_rank / rrf_score) is
+        attached to ``RetrievedChunk.retrieval_meta`` so callers (e.g.
+        the Test page's Returned-by-RAG panel) can show *which*
+        retriever found each chunk and how the fusion ordered them.
         """
         dense_ids = [c.chunk_id for c in dense_chunks]
         bm25_ids = [cid for cid, _ in bm25_pairs]
@@ -347,23 +367,33 @@ class RAGRetriever:
             top_k=top_k,
         )
 
+        # Rank lookups (None when the retriever didn't return the chunk).
+        dense_rank_map = {cid: i for i, cid in enumerate(dense_ids)}
+        bm25_rank_map = {cid: i for i, cid in enumerate(bm25_ids)}
+
         # Build a lookup for materialization. Dense chunks are ready;
         # BM25-only ids need text + metadata from the BM25 index.
         dense_by_id = {c.chunk_id: c for c in dense_chunks}
         out: list[RetrievedChunk] = []
         for cid, fused_score in fused:
             if cid in dense_by_id:
-                # Preserve the dense distance for downstream callers
-                # that look at it; fused_score is informational only.
-                out.append(dense_by_id[cid])
+                chunk = dense_by_id[cid]
             elif self._bm25 is not None:
-                out.append(RetrievedChunk(
+                chunk = RetrievedChunk(
                     chunk_id=cid,
                     text=self._bm25.chunk_text(cid),
                     metadata=self._bm25.chunk_metadata(cid),
                     similarity_score=0.0,  # no dense distance
                     graph_node_id=cid,
-                ))
+                )
+            else:
+                continue
+            chunk.retrieval_meta.update({
+                "dense_rank": dense_rank_map.get(cid),
+                "bm25_rank": bm25_rank_map.get(cid),
+                "rrf_score": round(fused_score, 4),
+            })
+            out.append(chunk)
         return out
 
     def _scoped_retrieve(

@@ -168,6 +168,19 @@ class RetrievedChunk:
     similarity_score: float = 0.0
     graph_node_id: str = ""
 
+    # Per-chunk retrieval provenance for the Test page / debugging.
+    # Keys are populated by ``RAGRetriever._fuse`` (when hybrid) and
+    # by reranker / glossary-pin steps. None / missing keys mean "the
+    # corresponding retriever didn't return this chunk in its top-K".
+    # Schema (all optional):
+    #   dense_rank: int       — 0-based rank in dense top-K
+    #   bm25_rank: int        — 0-based rank in BM25 top-K
+    #   rrf_score: float      — RRF score after fusion
+    #   reranker_rank_in: int — rank before cross-encoder rerank
+    #   reranker_rank_out: int — rank after cross-encoder rerank
+    #   source: str           — "glossary_pin" when prepended by D-043
+    retrieval_meta: dict[str, Any] = field(default_factory=dict)
+
 
 # ── Stage 5 output ──────────────────────────────────────────────
 
