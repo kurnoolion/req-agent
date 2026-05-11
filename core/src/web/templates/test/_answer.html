@@ -101,19 +101,16 @@
           </button>
           <span class="text-muted ms-1">
             type=<code>{{ query_intent.query_type }}</code>
-            {% if query_intent.features %}
-              · features={{ query_intent.features|length }}
+            {% if query_intent.likely_features %}
+              · features={{ query_intent.likely_features|length }}
             {% endif %}
             {% if query_intent.entities %}
               · entities={{ query_intent.entities|length }}
             {% endif %}
           </span>
           <div id="{{ intent_id }}" class="collapse mt-1">
-            <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap;">{%- if query_intent.features -%}
-features (taxonomy match): {{ query_intent.features|join(", ") }}
-{% endif -%}
-{%- if query_intent.likely_features -%}
-likely_features: {{ query_intent.likely_features|join(", ") }}
+            <pre class="border rounded p-2 small mb-0" style="white-space: pre-wrap;">{%- if query_intent.likely_features -%}
+features (taxonomy match): {{ query_intent.likely_features|join(", ") }}
 {% endif -%}
 {%- if query_intent.entities -%}
 entities: {{ query_intent.entities|join(", ") }}

@@ -620,6 +620,10 @@ def _run_query_sync(
     query_intent_payload = None
     if response.query_intent is not None:
         qi = response.query_intent
+        # ``QueryIntent`` exposes ``likely_features`` (the analyzer's
+        # taxonomy-derived match list); the legacy log line that says
+        # "features=..." is just logging that same list under a
+        # different label. There is no separate ``features`` attribute.
         query_intent_payload = {
             "query_type": qi.query_type.value,
             "mnos": list(qi.mnos),
@@ -627,7 +631,6 @@ def _run_query_sync(
             "plan_ids": list(qi.plan_ids),
             "entities": list(qi.entities),
             "concepts": list(qi.concepts),
-            "features": list(qi.features),
             "likely_features": list(qi.likely_features),
         }
     graph_candidates_payload = None
