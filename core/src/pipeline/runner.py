@@ -40,6 +40,8 @@ class PipelineContext:
     model_provider: str = "ollama"
     model_name: str = "auto"
     model_timeout: int = 600
+    llm_base_url: str = ""
+    llm_api_key: str = ""
 
     # Embedding config (local providers only)
     embedding_provider: str = "sentence-transformers"
@@ -109,9 +111,17 @@ class PipelineContext:
             else:
                 try:
                     from core.src.llm.openai_provider import OpenAICompatibleProvider
+                    # Pass explicit base_url / api_key when resolved upstream
+                    # (CLI > Config DB > env var > config/llm.json). Empty
+                    # strings let the provider fall back to its own
+                    # NORA_LLM_{BASE_URL,API_KEY} env-var defaults — preserves
+                    # the legacy path for callers that never touched the new
+                    # fields.
                     provider = OpenAICompatibleProvider(
                         model=self.model_name,
                         timeout=self.model_timeout,
+                        base_url=self.llm_base_url or None,
+                        api_key=self.llm_api_key or None,
                     )
                     logger.info(f"Using OpenAI-compatible LLM: {self.model_name}")
                     return provider

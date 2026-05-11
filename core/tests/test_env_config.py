@@ -309,6 +309,122 @@ def test_resolve_llm_provider_cli_beats_env_and_config(tmp_path, monkeypatch):
         env_cfg._reset_llm_config_cache()
 
 
+def test_resolve_llm_provider_db_beats_env_var(tmp_path, monkeypatch):
+    """Config-page DB sits **above** env var (deviation from the
+    documented D-053 ordering) for LLM params so values saved through
+    the Config page actually take effect at query time."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.setenv(env_cfg.LLM_PROVIDER_ENV_VAR, "ollama")
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        # DB has a value → wins over env var
+        assert env_cfg.resolve_llm_provider(
+            config_store_value="openai-compatible"
+        ) == "openai-compatible"
+        # DB unset (None / empty) → falls through to env var
+        assert env_cfg.resolve_llm_provider(config_store_value=None) == "ollama"
+        assert env_cfg.resolve_llm_provider(config_store_value="") == "ollama"
+        # CLI still beats DB
+        assert env_cfg.resolve_llm_provider(
+            cli_value="mock",
+            config_store_value="openai-compatible",
+        ) == "mock"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_llm_model_db_beats_env_var(tmp_path, monkeypatch):
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.setenv(env_cfg.LLM_MODEL_ENV_VAR, "gemma:7b")
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_llm_model(
+            config_store_value="qwen:14b"
+        ) == "qwen:14b"
+        assert env_cfg.resolve_llm_model(config_store_value=None) == "gemma:7b"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_llm_timeout_db_beats_env_var(tmp_path, monkeypatch):
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.setenv(env_cfg.LLM_TIMEOUT_ENV_VAR, "120")
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_llm_timeout(config_store_value=300) == 300
+        assert env_cfg.resolve_llm_timeout(config_store_value=None) == 120
+        # DB with "0" or non-positive falls through (treated as unset)
+        assert env_cfg.resolve_llm_timeout(config_store_value=0) == 120
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_llm_base_url_3tier(tmp_path, monkeypatch):
+    """CLI > Config-page DB > env var > config/llm.json > env config > ''."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.LLM_BASE_URL_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        # Default
+        assert env_cfg.resolve_llm_base_url() == ""
+        # env config back-compat
+        assert env_cfg.resolve_llm_base_url(
+            env_config_value="http://ec/"
+        ) == "http://ec/"
+        # config file beats env config
+        p.write_text(json.dumps({"llm_base_url": "http://cfg/"}))
+        env_cfg._reset_llm_config_cache()
+        assert env_cfg.resolve_llm_base_url(
+            env_config_value="http://ec/"
+        ) == "http://cfg/"
+        # env var beats config file
+        monkeypatch.setenv(env_cfg.LLM_BASE_URL_ENV_VAR, "http://env/")
+        assert env_cfg.resolve_llm_base_url() == "http://env/"
+        # DB beats env var
+        assert env_cfg.resolve_llm_base_url(
+            config_store_value="http://db/"
+        ) == "http://db/"
+        # CLI beats DB
+        assert env_cfg.resolve_llm_base_url(
+            cli_value="http://cli/",
+            config_store_value="http://db/",
+        ) == "http://cli/"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_llm_api_key_db_beats_env_var(tmp_path, monkeypatch):
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.setenv(env_cfg.LLM_API_KEY_ENV_VAR, "envkey")
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_llm_api_key(config_store_value="dbkey") == "dbkey"
+        assert env_cfg.resolve_llm_api_key(config_store_value=None) == "envkey"
+        assert env_cfg.resolve_llm_api_key(config_store_value="") == "envkey"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
 def test_resolve_skip_graph_3tier(tmp_path, monkeypatch):
     """CLI True > env var > config/llm.json > env config > False."""
     import json

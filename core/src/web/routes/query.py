@@ -187,11 +187,14 @@ def _find_env_config_for_web():
 def _build_llm_from_env_or_default():
     """Construct the LLM provider for /query and /test.
 
-    Resolves provider / model / timeout via the unified D-044 chain:
-    CLI flag (n/a here) > NORA_LLM_* env var > config/llm.json >
-    EnvironmentConfig (legacy back-compat) > default. The
-    OpenAI-compatible provider additionally reads NORA_LLM_BASE_URL /
-    NORA_LLM_API_KEY directly at construction time.
+    Resolves provider / model / timeout / base_url / api_key via the
+    unified resolver chain: CLI flag (n/a here) > **Config-page DB
+    (``llm.*``)** > NORA_LLM_* env var > config/llm.json >
+    EnvironmentConfig (legacy back-compat) > default. The DB tier sits
+    above env vars (deviation from D-053's documented ordering)
+    specifically for LLM params so values saved through the Config
+    page take effect at query time — otherwise stale shell-set env
+    vars would permanently mask UI edits.
 
     Reuses PipelineContext.create_llm_provider so the dispatch matches
     the eval pipeline exactly. Returns the provider, or a mock on
@@ -199,23 +202,38 @@ def _build_llm_from_env_or_default():
     UI keeps responding).
     """
     from core.src.env.config import (
-        resolve_llm_provider, resolve_llm_model, resolve_llm_timeout,
+        resolve_llm_provider,
+        resolve_llm_model,
+        resolve_llm_timeout,
+        resolve_llm_base_url,
+        resolve_llm_api_key,
     )
     from core.src.pipeline.runner import PipelineContext
 
     env_cfg = _find_env_config_for_web()
     provider = resolve_llm_provider(
+        config_store_value=_config_store_get("llm", "llm_provider"),
         env_config_value=env_cfg.model_provider if env_cfg else None,
     )
     model = resolve_llm_model(
+        config_store_value=_config_store_get("llm", "llm_model"),
         env_config_value=env_cfg.model_name if env_cfg else None,
     )
     timeout = resolve_llm_timeout(
+        config_store_value=_config_store_get("llm", "llm_timeout"),
         env_config_value=env_cfg.model_timeout if env_cfg else None,
     )
+    base_url = resolve_llm_base_url(
+        config_store_value=_config_store_get("llm", "llm_base_url"),
+    )
+    api_key = resolve_llm_api_key(
+        config_store_value=_config_store_get("llm", "llm_api_key"),
+    )
     logger.info(
-        "Web LLM resolved: provider=%s model=%s timeout=%ds",
+        "Web LLM resolved: provider=%s model=%s timeout=%ds base_url=%s api_key=%s",
         provider, model, timeout,
+        base_url or "<unset>",
+        "<set>" if api_key else "<unset>",
     )
     ctx = PipelineContext(
         documents_dir=Path("."),
@@ -225,6 +243,8 @@ def _build_llm_from_env_or_default():
         model_provider=provider,
         model_name=model,
         model_timeout=timeout,
+        llm_base_url=base_url,
+        llm_api_key=api_key,
     )
     return ctx.create_llm_provider(require_real=False)
 

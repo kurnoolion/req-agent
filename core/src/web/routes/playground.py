@@ -30,41 +30,85 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
-# Section registry. Add a new section by appending to this list and
-# wiring its handler in `_run_section()`. The template renders one
-# tab per entry; only sections marked `enabled=True` get an active
-# tab body — others render a "Coming soon" placeholder.
-_SECTIONS: list[dict[str, Any]] = [
-    {
-        "id": "requirement_bot",
-        "label": "Requirement Bot",
-        "enabled": True,
-        "blurb": (
-            "Ask any free-form question about the indexed VZW OA "
-            "requirements corpus. The answer is synthesized from "
-            "retrieved chunks; rate it below to log feedback for "
-            "offline review."
-        ),
-    },
-    {
-        "id": "compliance_check",
-        "label": "Compliance Check",
-        "enabled": False,
-        "blurb": "Single-requirement compliance against device specs.",
-    },
-    {
-        "id": "cross_mno_compare",
-        "label": "Cross-MNO Compare",
-        "enabled": False,
-        "blurb": "Compare requirement coverage across operators.",
-    },
-    {
-        "id": "standards_lookup",
-        "label": "Standards Lookup",
-        "enabled": False,
-        "blurb": "Look up 3GPP TS section text by spec + section.",
-    },
-]
+def _corpus_label() -> str:
+    """Best-effort short label for the corpus the web UI is bound to.
+
+    Reads the active ``EnvironmentConfig.mnos`` + ``.releases`` lists
+    when an env config can be located for the configured ``env_dir``;
+    otherwise returns ``"the indexed"`` so the blurb stays grammatical.
+
+    Format:
+      * Single MNO + single release: ``"VZW Feb2026"``.
+      * Multi-MNO or multi-release: ``"<N MNOs × M releases>"``.
+      * Unknown: ``"the indexed"``.
+    """
+    try:
+        from core.src.web.routes.query import _find_env_config_for_web
+        env_cfg = _find_env_config_for_web()
+    except Exception as e:  # pragma: no cover — defensive
+        logger.debug("corpus label: env-config lookup failed (%s)", e)
+        return "the indexed"
+    if env_cfg is None:
+        return "the indexed"
+    mnos = [m for m in (env_cfg.mnos or []) if m]
+    releases = [r for r in (env_cfg.releases or []) if r]
+    if len(mnos) == 1 and len(releases) == 1:
+        return f"{mnos[0]} {releases[0]}"
+    if mnos and releases:
+        return f"{len(mnos)} MNOs × {len(releases)} releases"
+    return "the indexed"
+
+
+def _build_sections() -> list[dict[str, Any]]:
+    """Build the per-request section registry with a corpus-aware blurb.
+
+    Sections are otherwise static (handlers wired in ``_run_section()``);
+    only the ``requirement_bot`` blurb is dynamic so the Test page
+    reflects what's actually ingested on-prem instead of a hardcoded
+    corpus name.
+    """
+    label = _corpus_label()
+    return [
+        {
+            "id": "requirement_bot",
+            "label": "Requirement Bot",
+            "enabled": True,
+            "blurb": (
+                f"Ask any free-form question about the {label} "
+                "requirements corpus. The answer is synthesized from "
+                "retrieved chunks; rate it below to log feedback for "
+                "offline review."
+            ),
+        },
+        {
+            "id": "compliance_check",
+            "label": "Compliance Check",
+            "enabled": False,
+            "blurb": "Single-requirement compliance against device specs.",
+        },
+        {
+            "id": "cross_mno_compare",
+            "label": "Cross-MNO Compare",
+            "enabled": False,
+            "blurb": "Compare requirement coverage across operators.",
+        },
+        {
+            "id": "standards_lookup",
+            "label": "Standards Lookup",
+            "enabled": False,
+            "blurb": "Look up 3GPP TS section text by spec + section.",
+        },
+    ]
+
+
+# Section IDs are static — only the blurb on requirement_bot is dynamic;
+# this constant survives only as a quick id-validity check.
+_SECTION_IDS: set[str] = {
+    "requirement_bot",
+    "compliance_check",
+    "cross_mno_compare",
+    "standards_lookup",
+}
 
 
 # -- Pages ------------------------------------------------------------------
@@ -75,11 +119,10 @@ async def playground_page(request: Request, section: str = "requirement_bot"):
     from core.src.web.app import _template_response
 
     # Default to first enabled section if user passed an unknown id
-    valid_ids = {s["id"] for s in _SECTIONS}
-    active_section = section if section in valid_ids else "requirement_bot"
+    active_section = section if section in _SECTION_IDS else "requirement_bot"
 
     return _template_response(request, "test/index.html", {
-        "sections": _SECTIONS,
+        "sections": _build_sections(),
         "active_section": active_section,
     })
 

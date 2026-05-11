@@ -363,21 +363,29 @@ DEFAULT_LLM_TIMEOUT: int = 600
 LLM_PROVIDER_ENV_VAR: str = "NORA_LLM_PROVIDER"
 LLM_MODEL_ENV_VAR: str = "NORA_LLM_MODEL"
 LLM_TIMEOUT_ENV_VAR: str = "NORA_LLM_TIMEOUT"
+LLM_BASE_URL_ENV_VAR: str = "NORA_LLM_BASE_URL"
+LLM_API_KEY_ENV_VAR: str = "NORA_LLM_API_KEY"
 
 
 def resolve_llm_provider(
     cli_value: str | None = None,
+    config_store_value: str | None = None,
     env_config_value: str | None = None,
 ) -> str:
     """Resolve the effective LLM provider.
 
-    Precedence: CLI flag > NORA_LLM_PROVIDER env var > config/llm.json
-    `llm_provider` > EnvironmentConfig field (deprecated, back-compat
-    only) > default ("ollama"). Raises ValueError if any provided value
-    is not in LLM_PROVIDERS.
+    Precedence: CLI flag > Config-page DB (``llm.llm_provider``) >
+    NORA_LLM_PROVIDER env var > config/llm.json ``llm_provider`` >
+    EnvironmentConfig field (deprecated, back-compat only) > default
+    ("ollama"). DB sits **above** env var (deviation from D-053's
+    documented ordering) so that values saved through the Config page
+    actually take effect at query time — otherwise a stale shell-set
+    env var permanently overrides UI edits. Raises ValueError if any
+    provided value is not in LLM_PROVIDERS.
     """
     for label, value in (
         ("--llm-provider", cli_value),
+        ("config_db:llm.llm_provider", config_store_value),
         (LLM_PROVIDER_ENV_VAR, os.environ.get(LLM_PROVIDER_ENV_VAR)),
         ("config/llm.json:llm_provider", _llm_config().llm_provider),
         ("EnvironmentConfig.model_provider", env_config_value),
@@ -393,18 +401,22 @@ def resolve_llm_provider(
 
 def resolve_llm_model(
     cli_value: str | None = None,
+    config_store_value: str | None = None,
     env_config_value: str | None = None,
 ) -> str:
     """Resolve the effective LLM model name.
 
-    Precedence: CLI flag > NORA_LLM_MODEL env var > config/llm.json
-    `llm_model` > EnvironmentConfig field (deprecated, back-compat
-    only) > default ("auto"). No enum validation — model names are
-    provider-specific. "auto" is meaningful only for the ollama
-    provider; cloud providers require an explicit name.
+    Precedence: CLI flag > Config-page DB (``llm.llm_model``) >
+    NORA_LLM_MODEL env var > config/llm.json ``llm_model`` >
+    EnvironmentConfig field (deprecated, back-compat only) > default
+    ("auto"). DB above env var — see ``resolve_llm_provider`` for
+    rationale. No enum validation — model names are provider-specific.
+    "auto" is meaningful only for the ollama provider; cloud providers
+    require an explicit name.
     """
     for value in (
         cli_value,
+        config_store_value,
         os.environ.get(LLM_MODEL_ENV_VAR),
         _llm_config().llm_model,
         env_config_value,
@@ -416,17 +428,26 @@ def resolve_llm_model(
 
 def resolve_llm_timeout(
     cli_value: int | None = None,
+    config_store_value: int | None = None,
     env_config_value: int | None = None,
 ) -> int:
     """Resolve the effective LLM request timeout (seconds).
 
-    Precedence: CLI flag > NORA_LLM_TIMEOUT env var > config/llm.json
-    `llm_timeout` > EnvironmentConfig field (deprecated, back-compat
-    only) > default (600). Each layer's "0" is treated as unset and
-    falls through.
+    Precedence: CLI flag > Config-page DB (``llm.llm_timeout``) >
+    NORA_LLM_TIMEOUT env var > config/llm.json ``llm_timeout`` >
+    EnvironmentConfig field (deprecated, back-compat only) > default
+    (600). DB above env var — see ``resolve_llm_provider`` for
+    rationale. Each layer's "0" is treated as unset and falls through.
     """
     if cli_value:
         return cli_value
+    if config_store_value:
+        try:
+            n = int(config_store_value)
+            if n > 0:
+                return n
+        except (TypeError, ValueError):
+            pass
     env_raw = os.environ.get(LLM_TIMEOUT_ENV_VAR)
     if env_raw:
         try:
@@ -441,6 +462,55 @@ def resolve_llm_timeout(
     if env_config_value:
         return env_config_value
     return DEFAULT_LLM_TIMEOUT
+
+
+def resolve_llm_base_url(
+    cli_value: str | None = None,
+    config_store_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the effective LLM base URL (OpenAI-compatible providers).
+
+    Precedence: CLI > Config-page DB (``llm.llm_base_url``) >
+    ``NORA_LLM_BASE_URL`` env var > config/llm.json ``llm_base_url`` >
+    EnvironmentConfig field > "". The empty default lets the caller
+    (typically ``OpenAICompatibleProvider``) decide whether to raise
+    or apply its own provider-specific fallback.
+    """
+    for value in (
+        cli_value,
+        config_store_value,
+        os.environ.get(LLM_BASE_URL_ENV_VAR),
+        _llm_config().llm_base_url,
+        env_config_value,
+    ):
+        if value:
+            return value.strip() if isinstance(value, str) else value
+    return ""
+
+
+def resolve_llm_api_key(
+    cli_value: str | None = None,
+    config_store_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the effective LLM API key (OpenAI-compatible providers).
+
+    Precedence: CLI > Config-page DB (``llm.llm_api_key``) >
+    ``NORA_LLM_API_KEY`` env var > config/llm.json ``llm_api_key`` >
+    EnvironmentConfig field > "". Empty default = no auth (the
+    provider decides whether to raise or send unauthenticated).
+    """
+    for value in (
+        cli_value,
+        config_store_value,
+        os.environ.get(LLM_API_KEY_ENV_VAR),
+        _llm_config().llm_api_key,
+        env_config_value,
+    ):
+        if value:
+            return value.strip() if isinstance(value, str) else value
+    return ""
 
 
 # ---------------------------------------------------------------------------
