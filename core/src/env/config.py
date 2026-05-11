@@ -70,6 +70,8 @@ class LLMConfigFile:
     skip_graph: bool = False
     skip_resolve: bool = False
     skip_standards: bool = False
+    reranker_enabled: bool = False
+    reranker_model: str = ""
 
     @classmethod
     def load(cls, path: Path | None = None) -> LLMConfigFile:
@@ -97,6 +99,8 @@ class LLMConfigFile:
             skip_graph=bool(data.get("skip_graph", False)),
             skip_resolve=bool(data.get("skip_resolve", False)),
             skip_standards=bool(data.get("skip_standards", False)),
+            reranker_enabled=bool(data.get("reranker_enabled", False)),
+            reranker_model=str(data.get("reranker_model", "") or "").strip(),
         )
 
 
@@ -507,7 +511,15 @@ SKIP_TAXONOMY_ENV_VAR: str = "NORA_SKIP_TAXONOMY"
 SKIP_GRAPH_ENV_VAR: str = "NORA_SKIP_GRAPH"
 SKIP_RESOLVE_ENV_VAR: str = "NORA_SKIP_RESOLVE"
 SKIP_STANDARDS_ENV_VAR: str = "NORA_SKIP_STANDARDS"
+RERANKER_ENABLED_ENV_VAR: str = "NORA_RERANKER_ENABLED"
+RERANKER_MODEL_ENV_VAR: str = "NORA_RERANKER_MODEL"
 RAG_ONLY_ENV_VAR: str = "NORA_RAG_ONLY"
+
+DEFAULT_RERANKER_MODEL: str = "cross-encoder/ms-marco-MiniLM-L6-v2"
+"""Sentence-transformers cross-encoder model id (or local filesystem
+path). When the work-PC corpus is firewalled from HuggingFace, pre-
+download via ``huggingface-cli download <id> --local-dir <path>`` and
+set this to the local-dir path."""
 
 
 def _truthy(value: str | None) -> bool:
@@ -617,6 +629,62 @@ def resolve_skip_standards(
     if env_config_value is not None:
         return env_config_value
     return False
+
+
+def resolve_reranker_enabled(
+    config_store_value: bool | None = None,
+    env_config_value: bool | None = None,
+) -> bool:
+    """Resolve whether to attach the cross-encoder reranker at query time.
+
+    Precedence: NORA_RERANKER_ENABLED env var > Config-page DB
+    (``llm.reranker_enabled``) > config/llm.json ``reranker_enabled``
+    > env config ``reranker_enabled`` > default (False).
+
+    False (default) → ``MockReranker`` passthrough — current production
+    behavior. True → ``CrossEncoderReranker(model)`` is constructed and
+    plumbed into ``QueryPipeline``; the per-query-type
+    ``_TYPE_RERANK_ENABLED`` gate still decides which intents actually
+    trigger reranking."""
+    raw_env = os.environ.get(RERANKER_ENABLED_ENV_VAR)
+    if raw_env is not None and raw_env.strip() != "":
+        return _truthy(raw_env)
+    if config_store_value is not None:
+        return bool(config_store_value)
+    cfg = _llm_config()
+    if cfg.reranker_enabled:
+        return True
+    if env_config_value is not None:
+        return env_config_value
+    return False
+
+
+def resolve_reranker_model(
+    config_store_value: str | None = None,
+    env_config_value: str | None = None,
+) -> str:
+    """Resolve the cross-encoder model id / path.
+
+    Precedence: NORA_RERANKER_MODEL env var > Config-page DB
+    (``llm.reranker_model``) > config/llm.json ``reranker_model`` >
+    env config ``reranker_model`` > built-in
+    ``DEFAULT_RERANKER_MODEL``.
+
+    Accepts either a HuggingFace model id (e.g.
+    ``BAAI/bge-reranker-base``) or a local filesystem path (e.g.
+    ``~/work/models/bge-reranker-base``). Local paths sidestep the
+    online HF download when the host can't reach huggingface.co."""
+    raw_env = (os.environ.get(RERANKER_MODEL_ENV_VAR) or "").strip()
+    if raw_env:
+        return raw_env
+    if config_store_value:
+        return str(config_store_value).strip()
+    cfg = _llm_config()
+    if cfg.reranker_model:
+        return cfg.reranker_model
+    if env_config_value:
+        return env_config_value.strip()
+    return DEFAULT_RERANKER_MODEL
 
 # ---------------------------------------------------------------------------
 # Pipeline stage registry — single source of truth for names and ordering
@@ -733,6 +801,17 @@ class EnvironmentConfig:
     # land in the vectorstore. Useful when running offline or when
     # standards content isn't needed for the corpus.
     skip_standards: bool = False
+
+    # Cross-encoder reranker (query-time). When `reranker_enabled` is
+    # True, `_get_or_build_pipeline` constructs a
+    # `CrossEncoderReranker(model)` and plumbs it into `QueryPipeline`;
+    # the per-query-type `_TYPE_RERANK_ENABLED` gate still decides
+    # which intents actually trigger reranking. `reranker_model`
+    # accepts either a HuggingFace id (e.g. `BAAI/bge-reranker-base`)
+    # or a local filesystem path — local paths sidestep the online HF
+    # fetch in firewalled environments.
+    reranker_enabled: bool = False
+    reranker_model: str = ""
 
     # Metadata
     created_at: str = field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))

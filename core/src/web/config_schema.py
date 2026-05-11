@@ -126,6 +126,32 @@ _LLM_FIELDS: list[ConfigField] = [
             "vectorstore metadata)."
         ),
     ),
+    ConfigField(
+        module="llm", key="reranker_enabled",
+        label="Cross-Encoder Reranker", kind="bool", category="feature",
+        help=(
+            "Attach a sentence-transformers cross-encoder reranker to "
+            "the query pipeline. Reranks the RRF-fused top-K against "
+            "the query before diversity / context build. Per-query-"
+            "type gating still applies (FACT / CROSS_DOC / etc. on; "
+            "SUMMARIZE / GENERAL off — see _TYPE_RERANK_ENABLED). "
+            "False keeps the MockReranker passthrough (current "
+            "default; no reranking)."
+        ),
+    ),
+    ConfigField(
+        module="llm", key="reranker_model",
+        label="Reranker Model", kind="string", category="value",
+        help=(
+            "HuggingFace cross-encoder id OR local filesystem path "
+            "(local sidesteps the online HF download when the host is "
+            "firewalled). Defaults to cross-encoder/ms-marco-"
+            "MiniLM-L6-v2 when blank. Suggested for technical specs: "
+            "BAAI/bge-reranker-base (~280M, strong on out-of-domain) "
+            "or BAAI/bge-reranker-large (~560M, best accuracy). "
+            "Empty = built-in default."
+        ),
+    ),
 ]
 
 

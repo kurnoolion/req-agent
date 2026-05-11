@@ -391,6 +391,74 @@ def test_resolve_skip_standards_3tier(tmp_path, monkeypatch):
         env_cfg._reset_llm_config_cache()
 
 
+def test_resolve_reranker_enabled_3tier(tmp_path, monkeypatch):
+    """env var > Config-page DB > config/llm.json > env config > False."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.RERANKER_ENABLED_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        assert env_cfg.resolve_reranker_enabled() is False
+        assert env_cfg.resolve_reranker_enabled(env_config_value=True) is True
+        # config/llm.json beats env config
+        p.write_text(json.dumps({"reranker_enabled": True}))
+        env_cfg._reset_llm_config_cache()
+        assert env_cfg.resolve_reranker_enabled(env_config_value=False) is True
+        # Config-page DB beats config/llm.json
+        p.write_text(json.dumps({"reranker_enabled": True}))
+        env_cfg._reset_llm_config_cache()
+        assert env_cfg.resolve_reranker_enabled(
+            config_store_value=False
+        ) is False
+        # Env var is the strongest
+        monkeypatch.setenv(env_cfg.RERANKER_ENABLED_ENV_VAR, "1")
+        assert env_cfg.resolve_reranker_enabled(
+            config_store_value=False
+        ) is True
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
+def test_resolve_reranker_model_3tier(tmp_path, monkeypatch):
+    """env var > Config-page DB > config/llm.json > env config > default."""
+    import json
+    from core.src.env import config as env_cfg
+    monkeypatch.delenv(env_cfg.RERANKER_MODEL_ENV_VAR, raising=False)
+    p = tmp_path / "llm.json"
+    p.write_text(json.dumps({}))
+    monkeypatch.setattr(env_cfg, "DEFAULT_LLM_CONFIG_PATH", p)
+    env_cfg._reset_llm_config_cache()
+    try:
+        # Default
+        assert env_cfg.resolve_reranker_model() == env_cfg.DEFAULT_RERANKER_MODEL
+        # Env config back-compat
+        assert env_cfg.resolve_reranker_model(
+            env_config_value="from-env-config"
+        ) == "from-env-config"
+        # config/llm.json beats env config
+        p.write_text(json.dumps({"reranker_model": "from-config-file"}))
+        env_cfg._reset_llm_config_cache()
+        assert env_cfg.resolve_reranker_model(
+            env_config_value="from-env-config"
+        ) == "from-config-file"
+        # DB beats config/llm.json
+        assert env_cfg.resolve_reranker_model(
+            config_store_value="from-db",
+            env_config_value="from-env-config",
+        ) == "from-db"
+        # Env var beats DB
+        monkeypatch.setenv(env_cfg.RERANKER_MODEL_ENV_VAR, "from-env-var")
+        assert env_cfg.resolve_reranker_model(
+            config_store_value="from-db",
+            env_config_value="from-env-config",
+        ) == "from-env-var"
+    finally:
+        env_cfg._reset_llm_config_cache()
+
+
 def test_resolve_skip_rag_only_envvar_implies_both(tmp_path, monkeypatch):
     """`NORA_RAG_ONLY=1` flips both skip_taxonomy and skip_graph on."""
     import json

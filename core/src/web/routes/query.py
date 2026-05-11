@@ -99,6 +99,55 @@ def _resolve_top_k_cap() -> int | None:
         return None
 
 
+def _resolve_reranker():
+    """Resolve and instantiate the cross-encoder reranker from the
+    3-tier config chain.
+
+    Returns ``None`` when reranking is disabled (default) — caller
+    passes ``None`` to ``QueryPipeline`` and ``RAGRetriever`` falls
+    back to ``MockReranker`` (passthrough). When enabled, returns a
+    ``CrossEncoderReranker(model_name=<resolved>)``. If the model
+    fails to load (missing local files, SSL block, etc.) the helper
+    returns ``None`` and logs a WARN so the query path still runs in
+    passthrough mode rather than failing the request."""
+    from core.src.env.config import (
+        resolve_reranker_enabled,
+        resolve_reranker_model,
+    )
+    db_enabled = _config_store_get("llm", "reranker_enabled")
+    if db_enabled is not None:
+        # Stored as a string by ConfigStore; coerce to bool.
+        db_enabled = str(db_enabled).strip().lower() in {
+            "1", "true", "yes", "on",
+        }
+    enabled = resolve_reranker_enabled(config_store_value=db_enabled)
+    if not enabled:
+        logger.info("Cross-encoder reranker: disabled (MockReranker passthrough)")
+        return None
+
+    db_model = _config_store_get("llm", "reranker_model")
+    model_name = resolve_reranker_model(config_store_value=db_model)
+    logger.info("Cross-encoder reranker: ENABLED model=%s", model_name)
+
+    try:
+        from core.src.query.reranker import CrossEncoderReranker
+        reranker = CrossEncoderReranker(model_name=model_name)
+        if not getattr(reranker, "available", True):
+            logger.warning(
+                "CrossEncoderReranker for %r not available — falling back "
+                "to MockReranker passthrough for this query session.",
+                model_name,
+            )
+            return None
+        return reranker
+    except Exception as e:  # pragma: no cover — defensive
+        logger.warning(
+            "CrossEncoderReranker init failed (%s) — falling back to "
+            "MockReranker passthrough.", e,
+        )
+        return None
+
+
 def _graph_path() -> Path:
     """Resolve `<env_dir>/out/graph/knowledge_graph.json`. The Web UI
     is env_dir-bound (D-022); set `env_dir` in `config/web.json`."""
@@ -355,11 +404,17 @@ def _build_pipeline(graph_path: Path, vectorstore_dir: Path):
         logger.info("Top-K cap: %d (user-configured)", top_k_cap)
     else:
         logger.info("Top-K cap: NONE (per-type widening unconstrained)")
+
+    # Cross-encoder reranker — resolved via the unified 3-tier chain
+    # (env var > Config-page DB > config/llm.json > default). False
+    # default preserves the MockReranker passthrough behavior.
+    reranker = _resolve_reranker()
     pipeline = QueryPipeline(
         graph=graph,
         embedder=embedder,
         store=store,
         synthesizer=synthesizer,
+        reranker=reranker,
         top_k=10,            # floor; per-type widening lifts breadth queries
         top_k_cap=top_k_cap,  # ceiling; user-set, applied AFTER widening
         max_context_chars=30000,
