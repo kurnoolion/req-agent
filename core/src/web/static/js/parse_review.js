@@ -168,11 +168,20 @@
                 badge.className = 'ann-badge ann-badge-added me-1 ' + cls;
                 badge.style.background = '#f59e0b';
                 badge.style.color = '#fff';
-                badge.textContent = '+' + reason.replace('_', '-').toUpperCase();
+                badge.textContent = '+' + reason.replace(/_/g, '-').toUpperCase();
                 // Insert before the block content (after page badge and existing badges)
                 const ref = el.querySelector('p, .table-responsive, span.text-muted');
                 el.insertBefore(badge, ref || null);
             }
+            // Strike through the parser's original ``ann-badge-*``
+            // labels on this block to signal "the parser said X, but
+            // user is correcting it to Y". The original badge stays
+            // visible (audit trail) but is visually subdued.
+            el.querySelectorAll('.ann-badge').forEach(function (b) {
+                if (!b.classList.contains('ann-badge-added')) {
+                    b.classList.add('ann-badge-superseded');
+                }
+            });
         }
         _renderStats();
     }
@@ -196,6 +205,12 @@
             // names and are intentionally preserved.
             el.querySelectorAll('.ann-badge-added').forEach(function (b) {
                 b.remove();
+            });
+            // Restore parser-emitted badges to full opacity (undo the
+            // ``ann-badge-superseded`` strike-through applied by
+            // ``_applyAddedAnnotation``).
+            el.querySelectorAll('.ann-badge-superseded').forEach(function (b) {
+                b.classList.remove('ann-badge-superseded');
             });
         }
         _renderStats();

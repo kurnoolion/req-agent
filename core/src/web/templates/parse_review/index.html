@@ -33,6 +33,11 @@
 .ann-badge-dropped-cascade { background: #f97316; color: #fff; }
 .ann-badge-glossary        { background: #10b981; color: #fff; }
 .ann-badge-section-heading { background: #059669; color: #fff; }
+/* Superseded — parser-emitted badge is visually struck-through when
+ * the user adds a corrective annotation on the same block. The audit
+ * trail (original classification) is preserved; the correction badge
+ * sits beside it to make the new intent clear. */
+.ann-badge.ann-badge-superseded { text-decoration: line-through; opacity: 0.45; }
 /* Context menu */
 .ctx-menu { position: fixed; z-index: 9999; background: #fff; border: 1px solid #dee2e6; border-radius: 6px; box-shadow: 0 4px 16px #0002; min-width: 200px; padding: 4px 0; }
 .ctx-menu-hdr { padding: 4px 12px; font-size: .7rem; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
