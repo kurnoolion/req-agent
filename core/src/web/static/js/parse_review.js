@@ -136,7 +136,9 @@
             clone.addEventListener('click', function () {
                 const reason = clone.dataset.reason;
                 _hideCtxMenu();
-                if (reason && reason !== '__cancel') {
+                if (reason === '__clear') {
+                    _clearAnnotation(_ctxTargetIdx);
+                } else if (reason && reason !== '__cancel') {
                     _applyAddedAnnotation(_ctxTargetIdx, reason);
                 }
             });
@@ -153,13 +155,17 @@
         _added[idx] = { reason };
         _setStatus(idx, 'added');
 
-        // Insert a small badge into the block if it doesn't already show one
+        // Insert a small badge into the block if it doesn't already
+        // show one. The badge class encodes the reason so
+        // ``_clearAnnotation`` can remove the right element when the
+        // user later changes their mind.
         const el = document.getElementById('rv-' + idx);
         if (el) {
-            const existing = el.querySelector('.ann-badge-added-' + reason);
+            const cls = 'ann-badge-added-' + reason;
+            const existing = el.querySelector('.' + cls);
             if (!existing) {
                 const badge = document.createElement('span');
-                badge.className = 'ann-badge me-1';
+                badge.className = 'ann-badge ann-badge-added me-1 ' + cls;
                 badge.style.background = '#f59e0b';
                 badge.style.color = '#fff';
                 badge.textContent = '+' + reason.replace('_', '-').toUpperCase();
@@ -167,6 +173,30 @@
                 const ref = el.querySelector('p, .table-responsive, span.text-muted');
                 el.insertBefore(badge, ref || null);
             }
+        }
+        _renderStats();
+    }
+
+    function _clearAnnotation(idx) {
+        if (idx === null || idx === undefined) return;
+        // Drop internal state — both the user-added pending change AND
+        // any accepted/rejected status the user toggled on the
+        // pipeline-detected drop. ``__clear`` is the single revert
+        // verb regardless of how the block got into its current state.
+        delete _added[idx];
+        delete _status[idx];
+
+        const el = document.getElementById('rv-' + idx);
+        if (el) {
+            // Remove status CSS classes painted by ``_setStatus``.
+            el.classList.remove('rev-accepted', 'rev-rejected', 'rev-added');
+            // Remove any user-added badges previously inserted by
+            // ``_applyAddedAnnotation``. The original parse-stage badges
+            // (page number, drop reason, etc.) carry different class
+            // names and are intentionally preserved.
+            el.querySelectorAll('.ann-badge-added').forEach(function (b) {
+                b.remove();
+            });
         }
         _renderStats();
     }
