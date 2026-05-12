@@ -63,6 +63,14 @@ class HeadingDetection:
     # variants. Empty string disables definitions extraction.
     definitions_section_pattern: str = r"(?i)acronym|definition|glossary"
 
+    # Table-header fallback for the glossary section: when a TABLE block
+    # has no preceding heading that matches `definitions_section_pattern`
+    # but its joined headers (` | `.join(headers)) match this regex, the
+    # parser treats the table as the definitions section and extracts
+    # entries the same way it would for the label-detected case. Empty
+    # disables (default).
+    definitions_table_header_pattern: str = ""
+
 
 @dataclass
 class RequirementIdPattern:
@@ -311,6 +319,18 @@ class DocumentProfile:
     table-following gate prevents spurious matches in body prose that
     happens to mention 'revision history'."""
 
+    revhist_table_header_pattern: str = ""
+    """Table-header fallback for the revision-history drop: when a TABLE
+    block has no preceding label that matched
+    ``revision_history_label_pattern`` but its joined headers (joined
+    with ` | `) match this regex, the parser drops the table and arms
+    the same consume-until-next-paragraph state the label path uses.
+    Empty disables (default). Use this for corpora that begin with a
+    bare revision-history table and no introducing heading — common in
+    cover-page-style docs. The corrections-driven profile_miner emits
+    proposals against this field when the user annotates a table block
+    as ``revhist``."""
+
     # ── Style-driven TOC detection (generic-rules pivot) ─────────
     toc_detection: TocDetection = field(default_factory=TocDetection)
     """Style-driven TOC detection. Takes priority over
@@ -391,6 +411,9 @@ class DocumentProfile:
                 definitions_section_pattern=hd.get(
                     "definitions_section_pattern", r"(?i)acronym|definition|glossary"
                 ),
+                definitions_table_header_pattern=hd.get(
+                    "definitions_table_header_pattern", ""
+                ),
             ),
             requirement_id=RequirementIdPattern(
                 **data.get("requirement_id", {})
@@ -436,6 +459,9 @@ class DocumentProfile:
                     "revision_history_heading_pattern",
                     r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$",
                 ),
+            ),
+            revhist_table_header_pattern=data.get(
+                "revhist_table_header_pattern", ""
             ),
             toc_detection=TocDetection(
                 **data.get("toc_detection", {})

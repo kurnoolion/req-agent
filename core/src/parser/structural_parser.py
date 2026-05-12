@@ -326,6 +326,13 @@ class GenericStructuralParser:
             if profile.revision_history_label_pattern
             else None
         )
+        # Table-header fallback for revhist (bare-table-at-the-top docs,
+        # no introducing heading). Tested against ` | `.join(table.headers).
+        self._revhist_table_header_re = (
+            re.compile(profile.revhist_table_header_pattern)
+            if profile.revhist_table_header_pattern
+            else None
+        )
         # TOC entry detection (FR-34) — compiled once; None if disabled
         self._toc_re = (
             re.compile(profile.toc_detection_pattern)
@@ -377,6 +384,15 @@ class GenericStructuralParser:
         self._definitions_section_re = (
             re.compile(profile.heading_detection.definitions_section_pattern)
             if profile.heading_detection.definitions_section_pattern
+            else None
+        )
+        # Table-header fallback for the glossary (no introducing heading).
+        # Tested against ` | `.join(table.headers); a matching table is
+        # treated as the definitions section even when no preceding
+        # heading matched ``definitions_section_pattern``.
+        self._definitions_table_header_re = (
+            re.compile(profile.heading_detection.definitions_table_header_pattern)
+            if profile.heading_detection.definitions_table_header_pattern
             else None
         )
         self._definitions_entry_re = (
@@ -760,7 +776,7 @@ class GenericStructuralParser:
         Empty when ``revision_history_label_pattern`` is unset or no
         matching label is found.
         """
-        if self._revhist_re is None:
+        if self._revhist_re is None and self._revhist_table_header_re is None:
             return set()
 
         indices: set[int] = set()
@@ -776,9 +792,22 @@ class GenericStructuralParser:
                 # never matches the end-anchored revhist regex on
                 # DOCX corpora.
                 if (
-                    b.type in (BlockType.PARAGRAPH, BlockType.HEADING)
+                    self._revhist_re is not None
+                    and b.type in (BlockType.PARAGRAPH, BlockType.HEADING)
                     and b.text
                     and self._revhist_re.match(self._heading_title_text(b))
+                ):
+                    indices.add(b.position.index)
+                    consuming = True
+                # Table-header fallback: bare-table-at-the-top docs with
+                # no introducing heading. Match against ` | `.join(headers).
+                elif (
+                    self._revhist_table_header_re is not None
+                    and b.type == BlockType.TABLE
+                    and b.headers
+                    and self._revhist_table_header_re.search(
+                        " | ".join(h.strip() for h in b.headers)
+                    )
                 ):
                     indices.add(b.position.index)
                     consuming = True
@@ -1098,6 +1127,25 @@ class GenericStructuralParser:
                 and block.type in (BlockType.PARAGRAPH, BlockType.HEADING)
                 and block.text
                 and self._revhist_re.match(self._heading_title_text(block))
+            ):
+                self._parse_stats.revhist_blocks_dropped += 1
+                self._dropped_entries.append(
+                    (block.position.index, block.position.page, "revhist")
+                )
+                revhist_active = True
+                continue
+
+            # Table-header fallback for revhist (bare-table-at-the-top
+            # docs with no introducing heading). Match against the joined
+            # column headers; drop the table and arm the same consume
+            # state the label path uses so continuation slices also drop.
+            if (
+                self._revhist_table_header_re is not None
+                and block.type == BlockType.TABLE
+                and block.headers
+                and self._revhist_table_header_re.search(
+                    " | ".join(h.strip() for h in block.headers)
+                )
             ):
                 self._parse_stats.revhist_blocks_dropped += 1
                 self._dropped_entries.append(
@@ -1859,15 +1907,42 @@ class GenericStructuralParser:
         acronym_entries is a list of (acronym, expansion, source) where source
         is "body_text" or "table". When no section matches, returns ({}, "", "", []).
         """
-        if self._definitions_section_re is None:
+        if (
+            self._definitions_section_re is None
+            and self._definitions_table_header_re is None
+        ):
             logger.debug("definitions: pattern unset — extraction disabled")
             return {}, "", "", [], []
 
         target: Requirement | None = None
-        for s in sections:
-            if s.title and self._definitions_section_re.search(s.title):
-                target = s
-                break
+        if self._definitions_section_re is not None:
+            for s in sections:
+                if s.title and self._definitions_section_re.search(s.title):
+                    target = s
+                    break
+
+        # Table-header fallback when no section title matched (bare-table
+        # glossary, no introducing heading). Walk every section's tables
+        # and use the first whose joined headers match. The "section" we
+        # attribute the find to is the one that contained the table.
+        if target is None and self._definitions_table_header_re is not None:
+            for s in sections:
+                for tbl in (s.tables or []):
+                    headers = getattr(tbl, "headers", None) or []
+                    if not headers:
+                        continue
+                    joined = " | ".join(h.strip() for h in headers)
+                    if self._definitions_table_header_re.search(joined):
+                        target = s
+                        logger.info(
+                            "definitions: matched by table-header fallback "
+                            "(section=%r headers=%r)",
+                            s.title, headers,
+                        )
+                        break
+                if target is not None:
+                    break
+
         if target is None:
             # Diagnostic: surfaces *why* defs is zero. Lists the first
             # few section titles so the user can see what's being
@@ -1878,7 +1953,7 @@ class GenericStructuralParser:
             logger.info(
                 "definitions: no section matched pattern=%r in %d sections; "
                 "sample titles=%r",
-                self._definitions_section_re.pattern,
+                self._definitions_section_re.pattern if self._definitions_section_re else None,
                 len(sections),
                 sample_titles,
             )

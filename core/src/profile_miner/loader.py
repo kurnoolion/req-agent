@@ -122,6 +122,8 @@ def load_corrections(
                     block_idx=idx,
                     pages=str(entry.get("pages", "")),
                     block_text=_block_text(block),
+                    block_type=block.type.value,
+                    table_headers=list(block.headers or []) if block.type == BlockType.TABLE else [],
                     neighbour_texts=[t for t in neighbours if t],
                     comment=entry.get("comment", "") or "",
                 ))

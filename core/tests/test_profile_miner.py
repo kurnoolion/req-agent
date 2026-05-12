@@ -226,6 +226,64 @@ def test_miner_tolerates_garbage_llm_output(caplog):
     assert patch.unmapped == []
 
 
+def test_miner_routes_table_revhist_to_table_header_field():
+    corrections = [EnrichedCorrection(
+        doc_id="DOC1", kind="missed", expected_reason="revhist",
+        block_idx=5, pages="1", block_text="Rev. | Author | Date",
+        block_type="table",
+        table_headers=["Rev.", "Author", "Description of Changes", "Date"],
+    )]
+    llm = _ScriptedLLM([
+        '{"pattern": "(?i)rev\\\\..*author.*date",'
+        ' "rationale": "matches the revhist column header signature",'
+        ' "confidence": 0.85}',
+    ])
+    patch = mine_patterns(corrections, llm)
+    assert len(patch.field_patches) == 1
+    fp = patch.field_patches[0]
+    assert fp.profile_field == "revhist_table_header_pattern"
+    # Example previews should be the joined headers (matching target),
+    # not the BLOCK text — that's what the regex will be tested against.
+    assert fp.example_previews[0].startswith("Rev. | Author")
+
+
+def test_miner_routes_table_glossary_to_table_header_field():
+    corrections = [EnrichedCorrection(
+        doc_id="DOC1", kind="missed", expected_reason="glossary",
+        block_idx=12, pages="2", block_text="Acronym | Definition",
+        block_type="table",
+        table_headers=["Acronym", "Definition"],
+    )]
+    llm = _ScriptedLLM([
+        '{"pattern": "(?i)acronym\\\\s*\\\\|\\\\s*definition",'
+        ' "rationale": "x", "confidence": 0.9}',
+    ])
+    patch = mine_patterns(corrections, llm)
+    assert len(patch.field_patches) == 1
+    assert patch.field_patches[0].profile_field == (
+        "heading_detection.definitions_table_header_pattern"
+    )
+
+
+def test_miner_prompt_carries_matching_target_hint():
+    corrections = [EnrichedCorrection(
+        doc_id="DOC1", kind="missed", expected_reason="revhist",
+        block_idx=5, pages="1", block_text="not used",
+        block_type="table",
+        table_headers=["Rev.", "Author", "Description of Changes", "Date"],
+    )]
+    llm = _ScriptedLLM([
+        '{"pattern": "x", "rationale": "y", "confidence": 0.5}',
+    ])
+    mine_patterns(corrections, llm)
+    sent = llm.calls[0]["prompt"]
+    # The prompt must tell the LLM what it'll match against and show
+    # the joined-header form of each example.
+    assert "MATCHING TARGET:" in sent
+    assert "table.headers" in sent
+    assert "Rev. | Author | Description of Changes | Date" in sent
+
+
 def test_miner_redacts_before_prompting():
     corrections = [_ec(
         "DOC1", "revhist", 1,

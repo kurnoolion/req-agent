@@ -27,28 +27,41 @@ logger = logging.getLogger(__name__)
 # expected_reason → (profile field dotted path, is_list_field)
 # ---------------------------------------------------------------------------
 
-_REASON_TO_FIELD: dict[str, tuple[str, bool]] = {
-    "revhist":              ("revision_history_label_pattern",                  False),
-    "dropped_revhist":      ("revision_history_label_pattern",                  False),
-    "glossary":             ("heading_detection.definitions_section_pattern",   False),
-    "dropped_toc":          ("toc_detection_pattern",                           False),
-    "toc":                  ("toc_detection_pattern",                           False),
-    "reference_list":       ("reference_list_section_pattern",                  False),
-    "reference_list_entry": ("reference_list_entry_pattern",                    False),
-    "reference_intra_doc":  ("cross_reference_patterns.internal_section_refs",  False),
-    "reference_spec":       ("cross_reference_patterns.standards_citations",    True),
+# (reason, is_table) → (profile field, is_list_field). A "table-shaped"
+# correction (annotated on a TABLE block) routes revhist/glossary to the
+# *_table_header_pattern field; everything else routes to the
+# heading/paragraph-shaped field.
+_REASON_TO_FIELD: dict[tuple[str, bool], tuple[str, bool]] = {
+    ("revhist",              False): ("revision_history_label_pattern",                       False),
+    ("revhist",              True):  ("revhist_table_header_pattern",                         False),
+    ("dropped_revhist",      False): ("revision_history_label_pattern",                       False),
+    ("dropped_revhist",      True):  ("revhist_table_header_pattern",                         False),
+    ("glossary",             False): ("heading_detection.definitions_section_pattern",        False),
+    ("glossary",             True):  ("heading_detection.definitions_table_header_pattern",   False),
+    ("dropped_toc",          False): ("toc_detection_pattern",                                False),
+    ("toc",                  False): ("toc_detection_pattern",                                False),
+    ("reference_list",       False): ("reference_list_section_pattern",                       False),
+    ("reference_list_entry", False): ("reference_list_entry_pattern",                         False),
+    ("reference_intra_doc",  False): ("cross_reference_patterns.internal_section_refs",       False),
+    ("reference_spec",       False): ("cross_reference_patterns.standards_citations",         True),
 }
-"""``reference_cross_doc`` is intentionally absent — see ``_resolve_field``."""
 
 
-def _resolve_field(reason: str) -> tuple[str, bool, bool]:
-    """Return (profile_field, is_list_field, is_mapped). For unmapped
-    reasons the patch is emitted to the ``unmapped`` list so the reviewer
-    can place it manually."""
-    if reason in _REASON_TO_FIELD:
-        field, is_list = _REASON_TO_FIELD[reason]
+def _resolve_field(reason: str, is_table: bool) -> tuple[str, bool, bool]:
+    """Return (profile_field, is_list_field, is_mapped)."""
+    key = (reason, is_table)
+    if key in _REASON_TO_FIELD:
+        field, is_list = _REASON_TO_FIELD[key]
         return field, is_list, True
-    return f"<unmapped:{reason}>", False, False
+    # Try the other shape — some reasons (toc, reference_*) only make
+    # sense for one block-type and we don't want to spuriously route
+    # them to <unmapped:> just because the user mis-annotated a table.
+    other = (reason, not is_table)
+    if other in _REASON_TO_FIELD:
+        field, is_list = _REASON_TO_FIELD[other]
+        return field, is_list, True
+    suffix = ":table" if is_table else ""
+    return f"<unmapped:{reason}{suffix}>", False, False
 
 
 # ---------------------------------------------------------------------------
@@ -59,11 +72,12 @@ _SYSTEM = """You are a regex-mining assistant for a document parser.
 
 The parser is profile-driven: each Mobile Network Operator (MNO) ships
 documents in a slightly different style, and the parser is configured
-per-corpus with regex patterns that detect section headings, references,
-and other landmarks. When the parser misses a landmark, a human marks
-the surrounding text block as a correction. Your job is to look at one
-or more such corrections (all sharing the same correction kind) and
-propose ONE Python-flavoured regex that would have caught them.
+per-corpus with regex patterns that detect section headings, tables,
+references, and other landmarks. When the parser misses a landmark, a
+human marks the surrounding text block as a correction. Your job is to
+look at one or more such corrections (all sharing the same correction
+kind and block type) and propose ONE Python-flavoured regex that would
+have caught them.
 
 Rules:
 - The patterns will be compiled with re.IGNORECASE.
@@ -73,6 +87,10 @@ Rules:
   verbatim. Operator names and plan identifiers are pre-redacted to
   ``<MNO0>``, ``<PLAN0>``, etc — leave those placeholders intact if they
   appear in the example.
+- The MATCHING TARGET line in each prompt tells you exactly what the
+  parser will test the regex against. Generalise across the examples
+  shown — if examples vary in case, word order, or punctuation, account
+  for that in the regex.
 - Return STRICT JSON with no surrounding prose:
   {
     "pattern":    "<your regex>",
@@ -82,16 +100,47 @@ Rules:
 """
 
 
-def _build_prompt(reason: str, cluster: list[EnrichedCorrection]) -> str:
+def _matching_target_hint(reason: str, is_table: bool) -> str:
+    """One-line hint about what string the proposed regex will be
+    tested against at parse time. Lets the LLM produce something
+    shaped right for the actual matching surface."""
+    if is_table:
+        return (
+            "MATCHING TARGET: \" | \".join(table.headers)  "
+            "— the joined column-header row of a TABLE block."
+        )
+    if reason in ("revhist", "dropped_revhist", "glossary",
+                  "reference_list"):
+        return (
+            "MATCHING TARGET: the .strip()'d text of a HEADING / "
+            "PARAGRAPH block (typically the section label)."
+        )
+    if reason in ("dropped_toc", "toc"):
+        return "MATCHING TARGET: the .strip()'d text of a PARAGRAPH block."
+    return "MATCHING TARGET: the .strip()'d text of the BLOCK shown."
+
+
+def _example_target(c: EnrichedCorrection, is_table: bool) -> str:
+    """Render the example in the shape the regex will be tested against
+    (joined headers for tables; block text otherwise)."""
+    if is_table and c.table_headers:
+        return " | ".join(h.strip() for h in c.table_headers)
+    return c.block_text
+
+
+def _build_prompt(reason: str, is_table: bool,
+                  cluster: list[EnrichedCorrection]) -> str:
     lines: list[str] = [
         f"Correction kind: {reason}",
+        f"Block type: {'table' if is_table else 'heading/paragraph'}",
+        _matching_target_hint(reason, is_table),
         f"Number of examples: {len(cluster)}",
         "",
         "Examples (one per correction):",
     ]
     for i, c in enumerate(cluster, 1):
         lines.append(f"--- example {i} (block_idx={c.block_idx}, pages={c.pages}) ---")
-        lines.append(f"BLOCK: {c.block_text}")
+        lines.append(f"TARGET: {_example_target(c, is_table)}")
         if c.neighbour_texts:
             joined = " ⏎ ".join(c.neighbour_texts)
             lines.append(f"CONTEXT: {joined[:400]}")
@@ -131,9 +180,13 @@ def mine_patterns(
     Caller is responsible for splitting corrections by ``doc_id`` if it
     wants one patch per doc (see ``profile_miner_cli``).
     """
-    by_reason: dict[str, list[EnrichedCorrection]] = defaultdict(list)
+    # Cluster by (reason, is_table). Table-shaped corrections produce
+    # *_table_header_pattern proposals; everything else stays on the
+    # paragraph/heading-shaped fields.
+    by_cluster: dict[tuple[str, bool], list[EnrichedCorrection]] = defaultdict(list)
     for c in corrections:
-        by_reason[c.expected_reason].append(c)
+        is_table = c.block_type == "table"
+        by_cluster[(c.expected_reason, is_table)].append(c)
 
     doc_ids = sorted({c.doc_id for c in corrections})
     patch = ProfilePatch(
@@ -141,15 +194,15 @@ def mine_patterns(
         generated_at=datetime.now().isoformat(timespec="seconds"),
     )
 
-    for reason, cluster in by_reason.items():
+    for (reason, is_table), cluster in by_cluster.items():
         if not reason:
             continue
 
         redactor = Redactor()
-        # Redact each example's text + neighbours in-place before
-        # prompting. We allocate a fresh redactor per cluster so token
-        # indices are local to the cluster (less confusing for the LLM
-        # than carrying global state across unrelated reasons).
+        # Redact each example's text + neighbours + table-headers in-place
+        # before prompting. Fresh redactor per cluster so placeholder
+        # indices are local to one prompt — less confusing for the LLM
+        # than carrying global state across unrelated reasons.
         redacted: list[EnrichedCorrection] = []
         for c in cluster:
             redacted.append(EnrichedCorrection(
@@ -159,11 +212,13 @@ def mine_patterns(
                 block_idx=c.block_idx,
                 pages=c.pages,
                 block_text=redactor.redact(c.block_text),
+                block_type=c.block_type,
+                table_headers=[redactor.redact(h) for h in c.table_headers],
                 neighbour_texts=[redactor.redact(t) for t in c.neighbour_texts],
                 comment=redactor.redact(c.comment) if c.comment else "",
             ))
 
-        prompt = _build_prompt(reason, redacted)
+        prompt = _build_prompt(reason, is_table, redacted)
         try:
             raw = llm.complete(
                 prompt=prompt,
@@ -172,18 +227,21 @@ def mine_patterns(
                 max_tokens=512,
             )
         except Exception as exc:
-            logger.error("LLM call failed for reason=%s: %s", reason, exc)
+            logger.error(
+                "LLM call failed for reason=%s is_table=%s: %s",
+                reason, is_table, exc,
+            )
             continue
 
         parsed = _parse_llm_response(raw)
         if parsed is None:
             logger.warning(
-                "LLM returned unparseable JSON for reason=%s — raw=%r",
-                reason, raw[:200],
+                "LLM returned unparseable JSON for reason=%s is_table=%s — raw=%r",
+                reason, is_table, raw[:200],
             )
             continue
 
-        field, is_list, mapped = _resolve_field(reason)
+        field, is_list, mapped = _resolve_field(reason, is_table)
         fp = ProfileFieldPatch(
             profile_field=field,
             list_field=is_list,
@@ -192,10 +250,15 @@ def mine_patterns(
             rationale=str(parsed.get("rationale", "")).strip(),
             confidence=float(parsed.get("confidence", 0.0) or 0.0),
             example_block_idxs=[c.block_idx for c in cluster],
-            example_previews=[c.block_text[:80] for c in cluster],
+            example_previews=[
+                _example_target(c, is_table)[:80] for c in cluster
+            ],
         )
         if not fp.proposed_pattern:
-            logger.warning("LLM emitted empty pattern for reason=%s", reason)
+            logger.warning(
+                "LLM emitted empty pattern for reason=%s is_table=%s",
+                reason, is_table,
+            )
             continue
 
         (patch.field_patches if mapped else patch.unmapped).append(fp)

@@ -22,6 +22,11 @@ class EnrichedCorrection:
     block_idx: int
     pages: str
     block_text: str  # full block text from IR
+    block_type: str = ""  # "heading" | "paragraph" | "table" | "image"; from IR
+    table_headers: list[str] = field(default_factory=list)
+    """For table blocks: the column headers. The miner uses these
+    directly when emitting a *_table_header_pattern proposal — the
+    regex will be tested against ' | '.join(headers) at parse time."""
     neighbour_texts: list[str] = field(default_factory=list)
     comment: str = ""  # user rationale, optional
 
