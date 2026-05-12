@@ -45,9 +45,9 @@ def _build_llm(args: argparse.Namespace) -> LLMProvider:
     else:
         hw = detect_hardware()
         choice = pick_model(hw)
-        model = choice.model_id
+        model = choice.model
         logger.info(
-            "Auto-picked Ollama model %s (hw=%s)", model, hw,
+            "Auto-picked Ollama model %s (%s)", model, choice.reason,
         )
     return OllamaProvider(model=model, base_url=args.ollama_url)
 
