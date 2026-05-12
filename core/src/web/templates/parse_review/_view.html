@@ -150,7 +150,7 @@
            id="rv-{{ block.idx }}"
            data-idx="{{ block.idx }}"
            data-page="{{ block.page }}"
-           data-anns="{{ block.annotations | tojson | e }}">
+           data-anns='{{ block.annotations | tojson }}'>
 
           <span class="block-pg">p{{ block.page }}</span>
 
@@ -280,9 +280,9 @@
     <div class="ctx-menu-item" data-reason="__cancel"><i class="bi bi-x"></i>Cancel</div>
 </div>
 
-<!-- Serialize existing review state for JS -->
-<script>
-window._prDocId    = {{ doc_id | tojson }};
-window._prReview   = {{ review | tojson }};
-window._prLog      = {{ log | tojson }};
-</script>
+<!-- Serialize existing review state for JS. Uses application/json so the
+     payload survives innerHTML injection (regular <script> doesn't execute
+     through innerHTML). initParseReview() reads from these elements. -->
+<script id="pr-state-docid" type="application/json">{{ doc_id | tojson }}</script>
+<script id="pr-state-review" type="application/json">{{ review | tojson }}</script>
+<script id="pr-state-log" type="application/json">{{ log | tojson }}</script>

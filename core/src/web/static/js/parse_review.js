@@ -28,9 +28,23 @@
         _status = {};
         _added  = {};
 
-        // Restore any existing review state from the serialised review JSON
-        const existing = window._prReview || {};
-        _restoreFromReview(existing);
+        // Restore any existing review state from <script type="application/json">
+        // nodes embedded by _view.html. We use textContent + JSON.parse because
+        // inline <script> tags don't execute when injected via innerHTML.
+        const _readJson = function (elId, fallback) {
+            const el = document.getElementById(elId);
+            if (!el) return fallback;
+            try {
+                return JSON.parse(el.textContent || 'null') ?? fallback;
+            } catch (e) {
+                console.error('Failed to parse ' + elId + ':', e);
+                return fallback;
+            }
+        };
+        window._prDocId  = _readJson('pr-state-docid',  docId);
+        window._prReview = _readJson('pr-state-review', {});
+        window._prLog    = _readJson('pr-state-log',    {});
+        _restoreFromReview(window._prReview);
 
         _bindSyncScroll();
         _bindContextMenu();
@@ -435,8 +449,23 @@
      * --------------------------------------------------------------------- */
     window.prSave = function () {
         const payload = _buildReviewPayload();
+        const btn = document.getElementById('btn-save');
         const indicator = document.getElementById('save-indicator');
-        if (indicator) indicator.textContent = 'Saving…';
+
+        const setBtnState = function (cls, label) {
+            if (!btn) return;
+            btn.classList.remove('btn-primary', 'btn-success', 'btn-danger', 'btn-warning');
+            btn.classList.add(cls);
+            btn.innerHTML = label;
+        };
+        const setIndicator = function (text, cls) {
+            if (!indicator) return;
+            indicator.className = 'small ' + (cls || 'text-muted');
+            indicator.textContent = text || '';
+        };
+
+        setBtnState('btn-warning', '<i class="bi bi-hourglass-split me-1"></i>Saving…');
+        setIndicator('Saving…', 'text-warning');
 
         fetch(_root + '/parse-review/' + encodeURIComponent(_docId) + '/save', {
             method: 'POST',
@@ -445,13 +474,27 @@
         })
         .then(r => r.json())
         .then(function (data) {
-            if (indicator) indicator.textContent = data.ok ? '✓ Saved' : '✗ ' + data.error;
+            if (data.ok) {
+                setBtnState('btn-success', '<i class="bi bi-check-lg me-1"></i>Saved');
+                const corrPath = data.corrections_path || '';
+                setIndicator(
+                    '✓ Saved · corrections → ' + corrPath,
+                    'text-success',
+                );
+            } else {
+                setBtnState('btn-danger', '<i class="bi bi-x-lg me-1"></i>Failed');
+                setIndicator('✗ ' + (data.error || 'save failed'), 'text-danger');
+            }
             setTimeout(function () {
-                if (indicator) indicator.textContent = '';
+                setBtnState('btn-primary', '<i class="bi bi-save me-1"></i>Save');
             }, 3000);
         })
         .catch(function (err) {
-            if (indicator) indicator.textContent = '✗ ' + err;
+            setBtnState('btn-danger', '<i class="bi bi-x-lg me-1"></i>Failed');
+            setIndicator('✗ ' + err, 'text-danger');
+            setTimeout(function () {
+                setBtnState('btn-primary', '<i class="bi bi-save me-1"></i>Save');
+            }, 3000);
         });
     };
 

@@ -292,12 +292,30 @@ async def parse_review_view(request: Request, doc_id: str):
 async def parse_review_save(request: Request, doc_id: str):
     from core.src.web.app import config
     body = await request.json()
+    env_dir = config.env_dir_path()
     log_dir = _parse_log_dir(config)
     review_path = log_dir / f"{doc_id}_parse_review.json"
+    corrections_path = env_dir / "corrections" / f"{doc_id}_corrections.json"
     try:
         review_path.parent.mkdir(parents=True, exist_ok=True)
         review_path.write_text(json.dumps(body, indent=2, ensure_ascii=False), encoding="utf-8")
-        return {"ok": True, "path": review_path.name}
+        # Also emit a corrections-only artifact for the Phase 3 regex-mining CLI.
+        corrections_payload = {
+            "doc_id": body.get("doc_id", doc_id),
+            "reviewer": body.get("reviewer", ""),
+            "review_date": body.get("review_date", ""),
+            "corrections": body.get("corrections", {}),
+        }
+        corrections_path.parent.mkdir(parents=True, exist_ok=True)
+        corrections_path.write_text(
+            json.dumps(corrections_payload, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return {
+            "ok": True,
+            "review_path": str(review_path.relative_to(env_dir)),
+            "corrections_path": str(corrections_path.relative_to(env_dir)),
+        }
     except Exception as exc:
         logger.error("Save review failed %s: %s", review_path, exc)
         return {"ok": False, "error": str(exc)}
