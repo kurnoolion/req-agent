@@ -57,18 +57,31 @@
     function _restoreFromReview(review) {
         const corr = (review.corrections) || {};
 
-        // Prefer block_idx (unambiguous IR-block reference) when present.
-        // Legacy corrections files without block_idx fall back to a
-        // page-based lookup, which only finds the *first* block on the
-        // page and so collapses multi-correction pages onto one block.
+        // Resolve a saved correction back to a DOM block via block_idx.
+        // We no longer fall back to a page-based lookup when block_idx
+        // is missing — that fallback silently put badges on the first
+        // block of the page (typically FRONT_MATTER), which is more
+        // confusing than just dropping the entry. Legacy corrections
+        // files without block_idx need to be re-saved once.
         const _resolveIdx = function (entry) {
             if (typeof entry.block_idx === 'number') {
                 const el = document.querySelector(
                     '#pane-3-body [data-idx="' + entry.block_idx + '"]'
                 );
                 if (el) return entry.block_idx;
+                console.warn(
+                    'parse_review: saved correction references block_idx=' +
+                    entry.block_idx + ' but no such block in the current ' +
+                    'view. Skipping.'
+                );
+                return null;
             }
-            return _findBlockIdxByPage(entry.pages);
+            console.warn(
+                'parse_review: saved correction is missing block_idx ' +
+                '(legacy format). Skipping. Re-save the review to heal.',
+                entry,
+            );
+            return null;
         };
 
         // False-positive drops were rejected
@@ -90,15 +103,6 @@
                 );
             }
         }
-    }
-
-    /** Find first block on a given page string ("5" or "5-7"). Returns idx or null.
-     *  Fallback for legacy corrections without block_idx. */
-    function _findBlockIdxByPage(pageStr) {
-        if (!pageStr) return null;
-        const startPage = parseInt(String(pageStr).split('-')[0], 10);
-        const el = document.querySelector(`#pane-3-body [data-page="${startPage}"]`);
-        return el ? parseInt(el.dataset.idx, 10) : null;
     }
 
     /* -----------------------------------------------------------------------
