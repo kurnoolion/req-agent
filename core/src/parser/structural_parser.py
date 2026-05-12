@@ -214,9 +214,18 @@ class RequirementTree:
     Consumed by the pipeline parse stage to write the separate
     parse_log/<doc_id>_parse_log.json audit file."""
 
+    parse_summary: Any = field(default=None)
+    """Per-doc ``DocSummary`` (parse_summary.py) — captures the
+    *evidence* the parser found for each profile-driven detection
+    (which pattern fired, what text matched, what table headers
+    accompanied it). Pipeline parse stage aggregates these into
+    ``<env_dir>/reports/parse_summary.json``. Not serialized to the
+    tree JSON — debugging side-channel only."""
+
     def to_dict(self) -> dict[str, Any]:
         d = asdict(self)
         d.pop("parse_log", None)  # not embedded in tree JSON — written separately
+        d.pop("parse_summary", None)  # debugging side-channel only
         return d
 
     def save_json(self, path: Path) -> None:
@@ -524,6 +533,7 @@ class GenericStructuralParser:
             definitions_section_number,
             definitions_section_title,
             acronym_entries,
+            glossary_table_headers,
         ) = self._extract_definitions(sections)
         self._parse_stats.defs_extracted = len(definitions_map)
         if not self.profile.embed_glossary and definitions_section_number:
@@ -549,6 +559,16 @@ class GenericStructuralParser:
             acronym_entries,
         )
 
+        # 10. Build parse summary (debugging side-channel). Captures
+        #     the evidence that profile-driven detection found — which
+        #     pattern matched, what label text triggered it, what
+        #     table headers accompanied. Pipeline parse stage
+        #     aggregates these into reports/parse_summary.json.
+        parse_summary = self._build_parse_summary(
+            doc, plan_meta, definitions_section_title,
+            glossary_table_headers, definitions_map,
+        )
+
         tree = RequirementTree(
             mno=doc.mno,
             release=doc.release,
@@ -565,6 +585,7 @@ class GenericStructuralParser:
             reference_list_section_number=reference_list_section_number,
             embed_glossary=self.profile.embed_glossary,
             parse_log=parse_log,
+            parse_summary=parse_summary,
         )
 
         logger.info(
@@ -1700,9 +1721,98 @@ class GenericStructuralParser:
             )
         return kept
 
+    def _build_parse_summary(
+        self,
+        doc: DocumentIR,
+        plan_meta: dict[str, str],
+        definitions_section_title: str,
+        glossary_table_headers: list[str],
+        definitions_map: dict[str, str],
+    ) -> "DocSummary":
+        """Build the per-doc summary record for the corpus-level
+        parse_summary.json artifact.
+
+        Pulls data already captured during the parse pass:
+          * Revhist evidence from ``self._frontmatter_revhist_indices``
+            (the pre-pass's accepted block-index set).
+          * Glossary evidence from ``_extract_definitions`` returns +
+            ``self._parse_stats.defs_extracted``.
+          * Format-error counts from ``self._toc_pair_misses``.
+
+        The format-error sub-counters (``empty_runs_heading``,
+        ``concatenated_run_heading``) are derived from log records —
+        for now we surface only the toc_pair_miss count which is
+        already on parse_stats. The runs-fallback counters will be
+        promoted to parse_stats in a future pass when the user starts
+        filtering on them.
+        """
+        from core.src.parser.parse_summary import (
+            DocSummary, RevhistMatch, GlossaryMatch,
+        )
+
+        # Revhist evidence — find the label block (first paragraph/
+        # heading in the indices set) and the following table.
+        revhist_match: RevhistMatch | None = None
+        if self._frontmatter_revhist_indices:
+            sorted_idx = sorted(self._frontmatter_revhist_indices)
+            label_block = None
+            table_block = None
+            for idx in sorted_idx:
+                if idx >= len(doc.content_blocks):
+                    continue
+                b = doc.content_blocks[idx]
+                if (
+                    label_block is None
+                    and b.type in (BlockType.PARAGRAPH, BlockType.HEADING)
+                ):
+                    label_block = b
+                elif table_block is None and b.type == BlockType.TABLE:
+                    table_block = b
+            if label_block is not None:
+                revhist_match = RevhistMatch(
+                    pattern_id="configured",
+                    matched_text=self._heading_title_text(label_block)[:120],
+                    label_block_index=label_block.position.index,
+                    table_headers=(
+                        list(getattr(table_block, "headers", []) or [])
+                        if table_block else []
+                    ),
+                )
+
+        # Glossary evidence — set whenever ``_extract_definitions``
+        # found a matching section, regardless of how many entries
+        # finally landed in the map.
+        glossary_match: GlossaryMatch | None = None
+        glossary_sections = 0
+        if definitions_section_title:
+            glossary_sections = 1
+            glossary_match = GlossaryMatch(
+                pattern_id="configured",
+                matched_heading=definitions_section_title[:120],
+                table_headers=list(glossary_table_headers or []),
+                entries_extracted=len(definitions_map),
+            )
+
+        format_errors = {
+            "toc_pair_miss": self._parse_stats.toc_pair_misses,
+        }
+
+        return DocSummary(
+            plan_name=plan_meta.get("plan_name", "") or doc.mno or "",
+            plan_id=plan_meta.get("plan_id", ""),
+            doc_id=Path(doc.source_file).stem if doc.source_file else "",
+            source_file=doc.source_file or "",
+            toc_entries=len(self._toc_block_indices),
+            revhist_sections=1 if revhist_match else 0,
+            revhist_match=revhist_match,
+            glossary_sections=glossary_sections,
+            glossary_match=glossary_match,
+            format_errors=format_errors,
+        )
+
     def _extract_definitions(
         self, sections: list[Requirement]
-    ) -> tuple[dict[str, str], str, str, list[tuple[str, str, str]]]:
+    ) -> tuple[dict[str, str], str, str, list[tuple[str, str, str]], list[str]]:
         """FR-35 [D-032]: extract `term -> expansion` pairs and the
         section number of the definitions / acronyms / glossary section.
 
@@ -1738,7 +1848,7 @@ class GenericStructuralParser:
         """
         if self._definitions_section_re is None:
             logger.debug("definitions: pattern unset — extraction disabled")
-            return {}, "", "", []
+            return {}, "", "", [], []
 
         target: Requirement | None = None
         for s in sections:
@@ -1759,7 +1869,7 @@ class GenericStructuralParser:
                 len(sections),
                 sample_titles,
             )
-            return {}, "", "", []
+            return {}, "", "", [], []
 
         logger.info(
             "definitions: matched section=%r section_number=%r tables=%d body_len=%d",
@@ -1825,7 +1935,20 @@ class GenericStructuralParser:
                 len(defs) - kept_before,
             )
 
-        return defs, target.section_number, target.title or "", acronym_entries
+        # First table's headers go to the parse summary so the
+        # debug page can show what column shape the glossary
+        # detector saw.
+        first_table_headers: list[str] = []
+        if target.tables:
+            first_table_headers = list(getattr(target.tables[0], "headers", []) or [])
+
+        return (
+            defs,
+            target.section_number,
+            target.title or "",
+            acronym_entries,
+            first_table_headers,
+        )
 
     def _extract_reference_list(
         self, sections: list[Requirement]

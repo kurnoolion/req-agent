@@ -202,6 +202,11 @@ def run_parse(ctx: PipelineContext) -> StageResult:
     stats = {"docs": 0, "reqs": 0, "max_depth": 0, "toc": 0, "struck": 0, "cascade": 0, "revhist": 0, "defs": 0, "user_removes": 0, "toc_pair_misses": 0, "frontmatter": 0}
     tree_paths: list[str] = []
     warnings: list[str] = []
+    # Per-doc parse summaries accumulated across the parse pass; emitted
+    # as the consolidated <env_dir>/reports/parse_summary.json at end of
+    # the stage for the Parse Review web UI to surface profile-detector
+    # gaps (revhist_sections=0 / glossary_sections=0 rows).
+    per_doc_summaries: list = []
     # Derive env_dir from stage layout (works in both from_env and standalone mode).
     # ctx.stage_output("parse") == <env_dir>/out/parse → parent.parent == <env_dir>
     _env_dir = ctx.stage_output("parse").parent.parent
@@ -239,8 +244,26 @@ def run_parse(ctx: PipelineContext) -> StageResult:
             stats["defs"] += tree.parse_stats.defs_extracted
             stats["toc_pair_misses"] += tree.parse_stats.toc_pair_misses
             stats["frontmatter"] += tree.parse_stats.frontmatter_blocks_dropped
+            if tree.parse_summary is not None:
+                per_doc_summaries.append(tree.parse_summary)
         except Exception as e:
             warnings.append(f"PRS-E001: {f.name}: {e}")
+
+    # Consolidated parse summary — feeds the Parse Review Summary tab.
+    if per_doc_summaries:
+        try:
+            from core.src.parser.parse_summary import build_corpus_summary
+            from datetime import datetime, timezone
+            corpus = build_corpus_summary(
+                per_doc_summaries,
+                generated_at=datetime.now(timezone.utc).isoformat(),
+            )
+            summary_path = _env_dir / "reports" / "parse_summary.json"
+            corpus.save_json(summary_path)
+            stats["docs_missing_revhist"] = corpus.docs_without_revhist
+            stats["docs_missing_glossary"] = corpus.docs_without_glossary
+        except Exception as e:
+            warnings.append(f"PRS-W005: parse_summary write failed: {e}")
 
     ctx.state["tree_paths"] = tree_paths
     return StageResult(stage=stage, status="WARN" if warnings else "OK",

@@ -237,6 +237,39 @@ async def parse_review_index(request: Request):
     })
 
 
+@router.get("/summary", response_class=HTMLResponse)
+async def parse_review_summary(request: Request):
+    """Summary tab — corpus-level rollup of profile-driven detection
+    evidence (which patterns matched on each doc, plus the row/col
+    headers for revhist + glossary tables). Sourced from
+    ``<env_dir>/reports/parse_summary.json``, written by the parse
+    stage. Sortable table with the missing-detection rows surfaced
+    first so the architect can spot profile-rule gaps.
+    """
+    from core.src.web.app import _template_response, config
+    from core.src.parser.parse_summary import CorpusSummary
+
+    summary_path = config.env_dir_path() / "reports" / "parse_summary.json"
+    corpus = None
+    error = None
+    if not summary_path.exists():
+        error = (
+            f"No parse_summary.json at {summary_path}. Run the parse stage "
+            "(this artifact is emitted at the end of every parse run)."
+        )
+    else:
+        try:
+            corpus = CorpusSummary.load_json(summary_path)
+        except Exception as exc:
+            error = f"Could not load parse_summary.json: {exc}"
+
+    return _template_response(request, "parse_review/_summary.html", {
+        "corpus": corpus,
+        "error": error,
+        "summary_path": str(summary_path),
+    })
+
+
 @router.get("/{doc_id}/view", response_class=HTMLResponse)
 async def parse_review_view(request: Request, doc_id: str):
     from core.src.web.app import _template_response, config
