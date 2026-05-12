@@ -30,7 +30,6 @@
   <table class="table table-sm table-hover small">
     <thead>
       <tr>
-        <th>Plan</th>
         <th>Doc</th>
         <th class="text-end">TOC</th>
         <th class="text-end">Revhist</th>
@@ -49,8 +48,7 @@
             data-bs-toggle="collapse"
             data-bs-target="#{{ row_id }}-detail"
             aria-expanded="false">
-          <td><code>{{ d.plan_name or d.plan_id or "?" }}</code></td>
-          <td class="text-muted">{{ d.doc_id }}</td>
+          <td><code>{{ d.doc_id }}</code></td>
           <td class="text-end">{{ d.toc_entries }}</td>
           <td class="text-end">
             {% if d.revhist_sections %}
@@ -71,7 +69,7 @@
           </td>
         </tr>
         <tr class="collapse" id="{{ row_id }}-detail">
-          <td colspan="6" class="p-3 bg-light">
+          <td colspan="5" class="p-3 bg-light">
             <div class="row g-3">
               <div class="col-md-6">
                 <strong>Revhist evidence</strong>
