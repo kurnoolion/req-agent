@@ -520,6 +520,46 @@ class TestFrontMatterCutoff:
         assert tree.parse_stats.toc_blocks_dropped == 0
         assert len(tree.requirements) == 1
 
+    def test_docx_heading_styled_revhist_with_trailing_req_id_detected(self):
+        """Real work-PC corpus shape (commit 6298333 era): the revhist
+        label is a DOCX ``Heading 1`` block whose text appends a
+        trailing req_id run, e.g. ``REVISION HISTORY <MNO>_REQ_..._1234``.
+        Earlier code matched ``b.text.strip()`` against a regex
+        anchored with ``\\s*$`` — the trailing req_id broke the match.
+        Plus the PARAGRAPH-only type filter excluded HEADING blocks
+        entirely. Fix uses ``_heading_title_text`` (strips the
+        trailing req_id run when ``anchor=last_run``) and accepts
+        both block types."""
+        revhist_heading = ContentBlock(
+            type=BlockType.HEADING,
+            position=Position(page=1, index=10),
+            text="REVISION HISTORY VZ_REQ_FOO_1234",
+            level=1,
+            style="Heading 1",
+            font_info=FontInfo(size=14.0, bold=True),
+            runs=[
+                TextRun(text="REVISION HISTORY", struck=False),
+                TextRun(text=" ", struck=False),
+                TextRun(text="VZ_REQ_FOO_1234", struck=False),
+            ],
+        )
+        blocks = [
+            _toc_para(0, "1\tSection One VZ_REQ_FOO_5\t5", depth=1),
+            revhist_heading,
+            _table(11),  # the revhist table itself
+            _heading(12, 1, "Section One ", "VZ_REQ_FOO_5"),
+            _para(13, "body"),
+        ]
+        tree = _parse(blocks)
+        # Revhist label + table both dropped — 2 blocks.
+        assert tree.parse_stats.revhist_blocks_dropped == 2
+        # Body heading still produces a Requirement.
+        section_ids = {r.req_id for r in tree.requirements}
+        assert "VZ_REQ_FOO_5" in section_ids
+        # The revhist heading's own req_id (VZ_REQ_FOO_1234) is not
+        # promoted because the heading is dropped before classification.
+        assert "VZ_REQ_FOO_1234" not in section_ids
+
     def test_heading_after_revhist_table_not_swept_into_revhist(self):
         """Regression guard: when the next block after the revhist table
         is ``BlockType.HEADING`` (DOCX extractor's typing for Word

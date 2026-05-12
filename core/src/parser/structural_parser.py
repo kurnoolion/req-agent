@@ -746,10 +746,18 @@ class GenericStructuralParser:
         consuming = False
         for b in doc.content_blocks:
             if not consuming:
+                # Detect the revhist label on PARAGRAPH-typed blocks
+                # (PDF extractor / numbering corpora) AND HEADING-typed
+                # blocks (DOCX extractor's Word ``Heading N`` style).
+                # ``_heading_title_text`` strips the trailing req_id
+                # run from the title when ``anchor=last_run`` — without
+                # this, a heading like "REVISION HISTORY <MNO>_REQ_..."
+                # never matches the end-anchored revhist regex on
+                # DOCX corpora.
                 if (
-                    b.type == BlockType.PARAGRAPH
+                    b.type in (BlockType.PARAGRAPH, BlockType.HEADING)
                     and b.text
-                    and self._revhist_re.match(b.text.strip())
+                    and self._revhist_re.match(self._heading_title_text(b))
                 ):
                     indices.add(b.position.index)
                     consuming = True
@@ -1066,9 +1074,9 @@ class GenericStructuralParser:
 
             if (
                 self._revhist_re is not None
-                and block.type == BlockType.PARAGRAPH
+                and block.type in (BlockType.PARAGRAPH, BlockType.HEADING)
                 and block.text
-                and self._revhist_re.match(block.text.strip())
+                and self._revhist_re.match(self._heading_title_text(block))
             ):
                 self._parse_stats.revhist_blocks_dropped += 1
                 self._dropped_entries.append(
