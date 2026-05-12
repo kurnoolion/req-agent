@@ -265,8 +265,17 @@ class WeaviateIngester:
     # ── Schema management ──────────────────────────────────────────────────────
 
     def ensure_collections(self, recreate: bool = False) -> None:
-        """Create all 6 collections in dependency order; optionally recreate."""
+        """Create all 6 collections; optionally recreate.
+
+        Two-pass approach required because cross-references are circular
+        (Standards → RequirementRelease → Requirement → Standards).
+        Weaviate 1.23+ rejects reference properties to non-existent collections.
+
+        Pass 1 — create all collections without any cross-references.
+        Pass 2 — add cross-references to each collection.
+        """
         assert self._client is not None, "Call connect() first"
+        import weaviate.classes as wvc
 
         if recreate:
             # Delete in reverse order (referencing before referenced)
@@ -275,16 +284,46 @@ class WeaviateIngester:
                     logger.info("Deleting collection '%s'", name)
                     self._client.collections.delete(name)
 
+        # ── Pass 1: create collections without references ─────────────────────
+        refs_by_name: dict[str, list] = {}
         for name in CREATION_ORDER:
+            schema_fn = SCHEMAS[name]
+            kwargs = schema_fn()
+            refs = kwargs.pop("references", [])
+            refs_by_name[name] = refs
+
             if not self._client.collections.exists(name):
-                logger.info("Creating collection '%s'", name)
-                schema_fn = SCHEMAS[name]
-                kwargs = schema_fn()
-                # Separate references from properties for the v4 API
-                refs = kwargs.pop("references", [])
-                self._client.collections.create(**kwargs, references=refs)
+                logger.info("Creating collection '%s' (no refs)", name)
+                self._client.collections.create(**kwargs)
             else:
-                logger.info("Collection '%s' already exists — skipping", name)
+                logger.info("Collection '%s' already exists — skipping create", name)
+
+        # ── Pass 2: add cross-references now that all collections exist ───────
+        for name, refs in refs_by_name.items():
+            if not refs:
+                continue
+            collection = self._client.collections.get(name)
+            existing_refs = {
+                r.name
+                for r in collection.config.get().references
+            }
+            for ref in refs:
+                if ref.name in existing_refs:
+                    logger.debug(
+                        "Reference '%s.%s' already exists — skipping",
+                        name, ref.name,
+                    )
+                    continue
+                logger.info(
+                    "Adding reference '%s' → '%s' on '%s'",
+                    ref.name, ref.target_collection, name,
+                )
+                collection.config.add_reference(
+                    wvc.config.ReferenceProperty(
+                        name=ref.name,
+                        target_collection=ref.target_collection,
+                    )
+                )
 
     # ── Main entry point ───────────────────────────────────────────────────────
 
