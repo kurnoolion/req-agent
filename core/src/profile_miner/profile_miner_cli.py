@@ -8,9 +8,14 @@ Usage:
     python -m core.src.profile_miner.profile_miner_cli \\
         --env-dir <env_dir> --doc LTEDATARETRY
 
-    # Force a specific Ollama model instead of the auto-picked one
+    # Override the LLM provider / model resolved from config + env
     python -m core.src.profile_miner.profile_miner_cli \\
-        --env-dir <env_dir> --ollama-model llama3:8b
+        --env-dir <env_dir> \\
+        --llm-provider openai-compatible --llm-model gpt-4o-mini
+
+Provider / model resolution follows the project-wide chain (D-044):
+CLI flag > config/llm.json > matching NORA_LLM_* env var > built-in
+default. Same path the pipeline runner and web UI use.
 
 The CLI emits one patch file per document at
 ``<env_dir>/reports/profile_patch_<doc_id>.json``. A human reviews each
@@ -27,9 +32,13 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+from core.src.env.config import (
+    resolve_llm_model,
+    resolve_llm_provider,
+    resolve_llm_timeout,
+)
 from core.src.llm.base import LLMProvider
-from core.src.llm.model_picker import detect_hardware, pick_model
-from core.src.llm.ollama_provider import OllamaProvider
+from core.src.pipeline.runner import PipelineContext
 from core.src.profile_miner.loader import load_corrections
 from core.src.profile_miner.miner import mine_patterns
 
@@ -37,19 +46,26 @@ logger = logging.getLogger(__name__)
 
 
 def _build_llm(args: argparse.Namespace) -> LLMProvider:
-    """Resolve which LLM provider to use. Defaults to Ollama with
-    hardware-aware model auto-picking (matches the existing pipeline
-    convention from the collaboration protocol)."""
-    if args.ollama_model:
-        model = args.ollama_model
-    else:
-        hw = detect_hardware()
-        choice = pick_model(hw)
-        model = choice.model
-        logger.info(
-            "Auto-picked Ollama model %s (%s)", model, choice.reason,
-        )
-    return OllamaProvider(model=model, base_url=args.ollama_url)
+    """Resolve LLM provider + model via the project-wide chain (D-044)
+    so envvars and config/llm.json actually take effect. CLI flags
+    win, then config/llm.json, then NORA_LLM_* env vars, then defaults."""
+    provider_name = resolve_llm_provider(cli_value=args.llm_provider)
+    model = resolve_llm_model(cli_value=args.llm_model)
+    timeout = resolve_llm_timeout(cli_value=args.llm_timeout)
+    ctx = PipelineContext(
+        documents_dir=Path("."),
+        corrections_dir=None,
+        eval_dir=None,
+        verbose=args.verbose,
+        model_provider=provider_name,
+        model_name=model,
+        model_timeout=timeout,
+    )
+    logger.info(
+        "Resolved LLM: provider=%s model=%s timeout=%ss",
+        provider_name, model, timeout,
+    )
+    return ctx.create_llm_provider(require_real=True)
 
 
 def main() -> None:
@@ -65,12 +81,16 @@ def main() -> None:
         help="Doc id to process (default: every *_corrections.json found)",
     )
     p.add_argument(
-        "--ollama-url", default="http://localhost:11434",
-        help="Ollama server URL (default: %(default)s)",
+        "--llm-provider", default=None,
+        help="Override resolved LLM provider (ollama | openai-compatible | mock)",
     )
     p.add_argument(
-        "--ollama-model", default=None,
-        help="Force a specific Ollama model (default: auto-pick for hardware)",
+        "--llm-model", default=None,
+        help="Override resolved LLM model name",
+    )
+    p.add_argument(
+        "--llm-timeout", default=None, type=int,
+        help="Override resolved LLM request timeout in seconds",
     )
     p.add_argument("--verbose", "-v", action="store_true")
     args = p.parse_args()
