@@ -227,6 +227,32 @@
 <!-- Report output -->
 <div id="report-output" class="mt-2"></div>
 
+<!-- Comment prompt (shared, hidden). Shown after the user picks an
+     annotation kind from the context menu — captures an optional free-
+     text note that lands on the saved review JSON alongside the kind.
+     Useful for the correction→regex CLI: the comment carries human
+     intent ("matched 'Document Version History' instead of standard
+     'Revision History'") which the LLM consumes when deriving a regex. -->
+<div id="pr-comment-prompt" class="ctx-menu d-none" style="min-width:280px; max-width:340px;">
+    <div class="ctx-menu-hdr">
+        Add comment <span class="text-muted small">(optional)</span>
+    </div>
+    <div class="px-2 py-2">
+        <div class="small text-muted mb-1" id="pr-comment-kind">…</div>
+        <textarea id="pr-comment-text" class="form-control form-control-sm"
+                  rows="3" placeholder="Why this correction? (Esc to skip)"
+                  style="font-size:.8rem;"></textarea>
+        <div class="d-flex gap-1 mt-2">
+            <button type="button" class="btn btn-sm btn-primary" id="pr-comment-save">
+                Save
+            </button>
+            <button type="button" class="btn btn-sm btn-outline-secondary" id="pr-comment-skip">
+                Skip
+            </button>
+        </div>
+    </div>
+</div>
+
 <!-- Context menu (shared, hidden).
      Grouped: (1) drops parsed by FR-33/34, (2) section flags the
      parser should have detected (D-032/D-059), (3) reference-tagging

@@ -49,12 +49,17 @@
             if (idx !== null) _setStatus(idx, 'rejected');
         }
 
-        // User-added drops
+        // User-added drops — apply the full visual treatment (badge,
+        // superseded-strikethrough on parser badges, 💬 marker for
+        // comments) so reload-after-save matches the just-clicked
+        // experience. Previously only set ``_status``/``_added``, which
+        // left the badge invisible on reload.
         for (const md of (corr.missed_drops || [])) {
             const idx = _findBlockIdxByPage(md.pages);
             if (idx !== null) {
-                _added[idx] = { reason: md.expected_reason };
-                _setStatus(idx, 'added');
+                _applyAddedAnnotation(
+                    idx, md.expected_reason, md.comment || "",
+                );
             }
         }
     }
@@ -133,13 +138,21 @@
         menu.querySelectorAll('.ctx-menu-item').forEach(function (item) {
             const clone = item.cloneNode(true);
             item.parentNode.replaceChild(clone, item);
-            clone.addEventListener('click', function () {
+            clone.addEventListener('click', function (ev) {
                 const reason = clone.dataset.reason;
                 _hideCtxMenu();
                 if (reason === '__clear') {
                     _clearAnnotation(_ctxTargetIdx);
                 } else if (reason && reason !== '__cancel') {
-                    _applyAddedAnnotation(_ctxTargetIdx, reason);
+                    // Promote into the comment prompt before committing.
+                    // Existing comment (if user is re-editing) prefills
+                    // the textarea so they can refine instead of retype.
+                    const existing = _added[_ctxTargetIdx];
+                    _showCommentPrompt(
+                        ev.clientX, ev.clientY,
+                        _ctxTargetIdx, reason,
+                        existing && existing.reason === reason ? existing.comment : "",
+                    );
                 }
             });
         });
@@ -150,9 +163,66 @@
         if (menu) menu.classList.add('d-none');
     }
 
-    function _applyAddedAnnotation(idx, reason) {
+    /* -----------------------------------------------------------------------
+     * Optional comment prompt — runs between context-menu click and the
+     * actual annotation apply. User can save with text, skip (empty
+     * comment), or Esc out (cancel entirely).
+     * --------------------------------------------------------------------- */
+    function _showCommentPrompt(x, y, idx, reason, prefill) {
+        const panel = document.getElementById('pr-comment-prompt');
+        const text  = document.getElementById('pr-comment-text');
+        const kind  = document.getElementById('pr-comment-kind');
+        const save  = document.getElementById('pr-comment-save');
+        const skip  = document.getElementById('pr-comment-skip');
+        if (!panel || !text || !kind || !save || !skip) return;
+
+        kind.textContent =
+            'Kind: ' + reason.replace(/_/g, '-').toUpperCase();
+        text.value = prefill || '';
+        panel.classList.remove('d-none');
+        // Position near the click; clamp to viewport. Reuses the
+        // context-menu style so it visually belongs to the same flow.
+        const vw = window.innerWidth, vh = window.innerHeight;
+        const pw = 340, ph = 180;
+        panel.style.left = Math.min(x, vw - pw) + 'px';
+        panel.style.top  = Math.min(y, vh - ph) + 'px';
+        text.focus();
+
+        // Replace old listeners to avoid duplicate dispatch.
+        const newSave = save.cloneNode(true);
+        const newSkip = skip.cloneNode(true);
+        save.parentNode.replaceChild(newSave, save);
+        skip.parentNode.replaceChild(newSkip, skip);
+
+        function _commit(comment) {
+            panel.classList.add('d-none');
+            text.removeEventListener('keydown', _onKey);
+            _applyAddedAnnotation(idx, reason, comment);
+        }
+        function _bail() {
+            panel.classList.add('d-none');
+            text.removeEventListener('keydown', _onKey);
+        }
+        function _onKey(e) {
+            if (e.key === 'Escape') { _bail(); }
+            // Ctrl+Enter saves; plain Enter inserts a newline so users
+            // can write multi-line notes without committing accidentally.
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                _commit(text.value.trim());
+            }
+        }
+        text.addEventListener('keydown', _onKey);
+        newSave.addEventListener('click', function () {
+            _commit(text.value.trim());
+        });
+        newSkip.addEventListener('click', function () {
+            _commit("");
+        });
+    }
+
+    function _applyAddedAnnotation(idx, reason, comment) {
         if (idx === null || idx === undefined) return;
-        _added[idx] = { reason };
+        _added[idx] = { reason, comment: comment || "" };
         _setStatus(idx, 'added');
 
         // Insert a small badge into the block if it doesn't already
@@ -162,9 +232,9 @@
         const el = document.getElementById('rv-' + idx);
         if (el) {
             const cls = 'ann-badge-added-' + reason;
-            const existing = el.querySelector('.' + cls);
-            if (!existing) {
-                const badge = document.createElement('span');
+            let badge = el.querySelector('.' + cls);
+            if (!badge) {
+                badge = document.createElement('span');
                 badge.className = 'ann-badge ann-badge-added me-1 ' + cls;
                 badge.style.background = '#f59e0b';
                 badge.style.color = '#fff';
@@ -172,6 +242,20 @@
                 // Insert before the block content (after page badge and existing badges)
                 const ref = el.querySelector('p, .table-responsive, span.text-muted');
                 el.insertBefore(badge, ref || null);
+            }
+            // Append a 💬 marker when the user supplied a comment;
+            // hover-tooltip surfaces the comment text. The marker is
+            // a child of the badge so it sticks together visually and
+            // gets removed with the badge on clear.
+            const oldNote = badge.querySelector('.ann-comment-marker');
+            if (oldNote) oldNote.remove();
+            if (comment) {
+                const note = document.createElement('span');
+                note.className = 'ann-comment-marker ms-1';
+                note.textContent = '💬';
+                note.title = comment;
+                note.style.cursor = 'help';
+                badge.appendChild(note);
             }
             // Strike through the parser's original ``ann-badge-*``
             // labels on this block to signal "the parser said X, but
@@ -285,10 +369,18 @@
             }
 
             if (status === 'added' && _added[idx]) {
-                missedDrops.push({
+                const entry = {
                     pages: page,
                     expected_reason: _added[idx].reason,
-                });
+                };
+                // Carry the user comment when present so the
+                // correction→regex CLI can read the rationale per
+                // entry. Empty string is omitted to keep the saved
+                // JSON small for the common-case (no-comment) flow.
+                if (_added[idx].comment) {
+                    entry.comment = _added[idx].comment;
+                }
+                missedDrops.push(entry);
             }
         });
 
