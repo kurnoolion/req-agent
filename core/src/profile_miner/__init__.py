@@ -23,6 +23,13 @@ Public surface:
   (``python -m core.src.profile_miner.profile_miner_cli``).
 """
 
+from core.src.profile_miner.apply_patch import (
+    ApplyReport,
+    FieldChange,
+    apply_patch,
+    apply_patch_files,
+    merge_regex,
+)
 from core.src.profile_miner.records import (
     EnrichedCorrection,
     ProfileFieldPatch,
@@ -33,10 +40,15 @@ from core.src.profile_miner.loader import load_corrections
 from core.src.profile_miner.miner import mine_patterns
 
 __all__ = [
+    "ApplyReport",
     "EnrichedCorrection",
+    "FieldChange",
     "ProfileFieldPatch",
     "ProfilePatch",
     "Redactor",
+    "apply_patch",
+    "apply_patch_files",
     "load_corrections",
+    "merge_regex",
     "mine_patterns",
 ]
