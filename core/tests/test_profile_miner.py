@@ -13,6 +13,7 @@ Covers:
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 import pytest
@@ -282,6 +283,82 @@ def test_miner_prompt_carries_matching_target_hint():
     assert "MATCHING TARGET:" in sent
     assert "table.headers" in sent
     assert "Rev. | Author | Description of Changes | Date" in sent
+
+
+def test_miner_safety_net_includes_literal_when_llm_misses_example():
+    """LLM emits a pattern that matches one example but not the other.
+    The safety net OR's in re.escape(<missed example>) so the regex
+    is guaranteed to match both."""
+    corrections = [
+        EnrichedCorrection(
+            doc_id="DOC1", kind="missed", expected_reason="revhist",
+            block_idx=5, pages="1", block_text="hdr1",
+            block_type="table",
+            table_headers=["Rev.", "Author", "Date"],
+        ),
+        EnrichedCorrection(
+            doc_id="DOC2", kind="missed", expected_reason="revhist",
+            block_idx=7, pages="1", block_text="hdr2",
+            block_type="table",
+            table_headers=["Rev", "Author", "Date"],  # NO dot
+        ),
+    ]
+    # LLM produces a regex that requires a literal dot — matches DOC1
+    # but not DOC2.
+    llm = _ScriptedLLM([
+        '{"pattern": "Rev\\\\.\\\\s*\\\\|\\\\s*Author",'
+        ' "rationale": "x", "confidence": 0.7}',
+    ])
+    patch = mine_patterns(corrections, llm)
+    assert len(patch.field_patches) == 1
+    pat = patch.field_patches[0].proposed_pattern
+
+    # The final pattern must match BOTH header forms, even though the
+    # LLM only matched one.
+    compiled = re.compile(pat)
+    assert compiled.search("Rev. | Author | Date")
+    assert compiled.search("Rev | Author | Date")
+
+
+def test_miner_safety_net_no_op_when_llm_already_covers_examples():
+    corrections = [
+        EnrichedCorrection(
+            doc_id="DOC1", kind="missed", expected_reason="revhist",
+            block_idx=5, pages="1", block_text="hdr",
+            block_type="table",
+            table_headers=["Rev.", "Author"],
+        ),
+    ]
+    llm = _ScriptedLLM([
+        '{"pattern": "(?i)rev",'
+        ' "rationale": "x", "confidence": 0.9}',
+    ])
+    patch = mine_patterns(corrections, llm)
+    pat = patch.field_patches[0].proposed_pattern
+    # No need to OR in escaped literal — LLM regex already matches.
+    # Expect the compact (?i)<body> form, not (?i)(?:<body>|...).
+    assert pat == "(?i)rev"
+
+
+def test_miner_safety_net_handles_uncompilable_llm_regex():
+    corrections = [
+        EnrichedCorrection(
+            doc_id="DOC1", kind="missed", expected_reason="revhist",
+            block_idx=5, pages="1", block_text="hdr",
+            block_type="table",
+            table_headers=["Rev.", "Author"],
+        ),
+    ]
+    # Malformed regex (unclosed group). Safety net must fall back to a
+    # literal-escape-only pattern so the patch is still usable.
+    llm = _ScriptedLLM([
+        '{"pattern": "(?i)(rev",'
+        ' "rationale": "x", "confidence": 0.7}',
+    ])
+    patch = mine_patterns(corrections, llm)
+    pat = patch.field_patches[0].proposed_pattern
+    compiled = re.compile(pat)
+    assert compiled.search("Rev. | Author")
 
 
 def test_miner_redacts_before_prompting():

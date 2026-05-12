@@ -154,6 +154,66 @@ def _build_prompt(reason: str, is_table: bool,
 _JSON_OBJ = re.compile(r"\{.*\}", re.DOTALL)
 
 
+def _strip_leading_iflag(pat: str) -> str:
+    return pat[4:] if pat.startswith("(?i)") else pat
+
+
+def _safety_net_pattern(
+    llm_regex: str,
+    cluster: list[EnrichedCorrection],
+    is_table: bool,
+) -> str:
+    """Compose the final proposed pattern as
+    ``(?i)(?:<llm_body>|<re.escape(ex1)>|<re.escape(ex2)>|...)`` so the
+    regex is GUARANTEED to match its own examples even if the LLM
+    overgeneralised (e.g. emitted ``Rev\\.`` when one of the examples
+    was a plain ``Rev``).
+
+    Compile-tests the LLM regex against every example. Examples that
+    already match aren't escape-added (would just bloat the regex);
+    examples that don't are appended as literal-escaped branches.
+    Outer ``(?i)`` is applied once and any inline leading ``(?i)`` on
+    branches is stripped to avoid Python 3.11+ mid-pattern flag warnings.
+    """
+    branches: list[str] = []
+    seen: set[str] = set()
+
+    # Verify the LLM regex compiles before including it as a branch.
+    # An uncompilable branch would poison the whole alternation.
+    try:
+        rx = re.compile(llm_regex, re.IGNORECASE) if llm_regex else None
+    except re.error as exc:
+        logger.warning(
+            "LLM regex doesn't compile (%s) — using literal-only fallback",
+            exc,
+        )
+        rx = None
+
+    llm_body = _strip_leading_iflag(llm_regex).strip()
+    if llm_body and rx is not None:
+        branches.append(llm_body)
+        seen.add(llm_body)
+
+    for c in cluster:
+        target = _example_target(c, is_table)
+        if not target:
+            continue
+        if rx is not None and rx.search(target):
+            continue  # LLM regex already covers this example
+        lit = re.escape(target)
+        if lit in seen:
+            continue
+        branches.append(lit)
+        seen.add(lit)
+
+    if not branches:
+        return ""
+    if len(branches) == 1 and branches[0] == llm_body:
+        # LLM regex covered all examples — no fallbacks needed.
+        return f"(?i){llm_body}" if llm_body else ""
+    return f"(?i)(?:{'|'.join(branches)})"
+
+
 def _parse_llm_response(text: str) -> dict | None:
     """Tolerate code fences or stray prose. Returns None on parse
     failure; caller logs and synthesises a low-confidence fallback."""
@@ -242,11 +302,17 @@ def mine_patterns(
             continue
 
         field, is_list, mapped = _resolve_field(reason, is_table)
+        llm_regex = str(parsed.get("pattern", "")).strip()
+        # Belt-and-suspenders: if the LLM regex doesn't match every
+        # example, OR in re.escape()'d literals for the uncovered ones.
+        # Use the redacted examples — placeholders like <MNO0> survive
+        # the escape and stay portable across MNOs/plans.
+        final_pattern = _safety_net_pattern(llm_regex, redacted, is_table)
         fp = ProfileFieldPatch(
             profile_field=field,
             list_field=is_list,
             expected_reason=reason,
-            proposed_pattern=str(parsed.get("pattern", "")).strip(),
+            proposed_pattern=final_pattern,
             rationale=str(parsed.get("rationale", "")).strip(),
             confidence=float(parsed.get("confidence", 0.0) or 0.0),
             example_block_idxs=[c.block_idx for c in cluster],
