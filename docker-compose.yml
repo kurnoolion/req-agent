@@ -1,0 +1,33 @@
+# Weaviate local development instance for NORA
+#
+# Usage:
+#   docker compose up -d          # start in background
+#   docker compose down           # stop (data persists in volume)
+#   docker compose down -v        # stop + wipe all data (full reset)
+#
+# Ports:
+#   8080  — HTTP / REST API  (weaviate-client default)
+#   50051 — gRPC             (weaviate-client v4 default)
+#
+# No vectorizer modules loaded — NORA uses Vectorizer.none() and
+# supplies vectors externally (or runs BM25-only queries).
+
+services:
+  weaviate:
+    image: cr.weaviate.io/semitechnologies/weaviate:1.25.2
+    ports:
+      - "8080:8080"
+      - "50051:50051"
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      DEFAULT_VECTORIZER_MODULE: "none"
+      ENABLE_MODULES: ""
+      CLUSTER_HOSTNAME: "node1"
+      QUERY_DEFAULTS_LIMIT: 100
+    volumes:
+      - weaviate_data:/var/lib/weaviate
+    restart: unless-stopped
+
+volumes:
+  weaviate_data:
