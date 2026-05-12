@@ -17,7 +17,7 @@ services:
     image: cr.weaviate.io/semitechnologies/weaviate:1.37.3
     ports:
       - "5002:8080"    # host:5002 → container:8080 (avoids conflict with corp services)
-      - "50051:50051"
+      - "50054:50051"   # host:50054 → container:50051 (avoids corp port conflict)
     environment:
       AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
       PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
