@@ -57,9 +57,23 @@
     function _restoreFromReview(review) {
         const corr = (review.corrections) || {};
 
+        // Prefer block_idx (unambiguous IR-block reference) when present.
+        // Legacy corrections files without block_idx fall back to a
+        // page-based lookup, which only finds the *first* block on the
+        // page and so collapses multi-correction pages onto one block.
+        const _resolveIdx = function (entry) {
+            if (typeof entry.block_idx === 'number') {
+                const el = document.querySelector(
+                    '#pane-3-body [data-idx="' + entry.block_idx + '"]'
+                );
+                if (el) return entry.block_idx;
+            }
+            return _findBlockIdxByPage(entry.pages);
+        };
+
         // False-positive drops were rejected
         for (const fp of (corr.false_positive_drops || [])) {
-            const idx = _findBlockIdxByPage(fp.pages);
+            const idx = _resolveIdx(fp);
             if (idx !== null) _setStatus(idx, 'rejected');
         }
 
@@ -69,7 +83,7 @@
         // experience. Previously only set ``_status``/``_added``, which
         // left the badge invisible on reload.
         for (const md of (corr.missed_drops || [])) {
-            const idx = _findBlockIdxByPage(md.pages);
+            const idx = _resolveIdx(md);
             if (idx !== null) {
                 _applyAddedAnnotation(
                     idx, md.expected_reason, md.comment || "",
@@ -78,7 +92,8 @@
         }
     }
 
-    /** Find first block on a given page string ("5" or "5-7"). Returns idx or null. */
+    /** Find first block on a given page string ("5" or "5-7"). Returns idx or null.
+     *  Fallback for legacy corrections without block_idx. */
     function _findBlockIdxByPage(pageStr) {
         if (!pageStr) return null;
         const startPage = parseInt(String(pageStr).split('-')[0], 10);
