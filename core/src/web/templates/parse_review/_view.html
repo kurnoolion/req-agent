@@ -227,13 +227,28 @@
 <!-- Report output -->
 <div id="report-output" class="mt-2"></div>
 
-<!-- Context menu (shared, hidden) -->
+<!-- Context menu (shared, hidden).
+     Grouped: (1) drops parsed by FR-33/34, (2) section flags the
+     parser should have detected (D-032/D-059), (3) reference-tagging
+     for body text (D-059's 5-way taxonomy). Each ``data-reason``
+     value lands verbatim in the saved review JSON so the
+     correction-to-regex CLI tool can map each kind to its prompt /
+     redaction shape. -->
 <div id="pr-ctx-menu" class="ctx-menu d-none">
-    <div class="ctx-menu-hdr">Annotate block</div>
+    <div class="ctx-menu-hdr">Drop / Reclassify</div>
     <div class="ctx-menu-item" data-reason="text_strikethrough"><i class="bi bi-dash-circle text-danger"></i>Drop: Struck through</div>
     <div class="ctx-menu-item" data-reason="toc"><i class="bi bi-list-ol text-primary"></i>Drop: TOC</div>
     <div class="ctx-menu-item" data-reason="revhist"><i class="bi bi-clock-history" style="color:#8b5cf6"></i>Drop: Revision History</div>
     <div class="ctx-menu-item" data-reason="cascade"><i class="bi bi-arrow-down-short text-warning"></i>Drop: Cascade</div>
+    <div class="ctx-menu-divider"></div>
+    <div class="ctx-menu-hdr">Mark section</div>
+    <div class="ctx-menu-item" data-reason="definitions"><i class="bi bi-book text-info"></i>Mark: Glossary / Definitions</div>
+    <div class="ctx-menu-item" data-reason="reference_list"><i class="bi bi-list-task" style="color:#0ea5e9"></i>Mark: References / Bibliography</div>
+    <div class="ctx-menu-divider"></div>
+    <div class="ctx-menu-hdr">Tag reference (D-059)</div>
+    <div class="ctx-menu-item" data-reason="reference_intra_doc"><i class="bi bi-arrow-return-left" style="color:#10b981"></i>Tag: Intra-doc reference</div>
+    <div class="ctx-menu-item" data-reason="reference_cross_doc"><i class="bi bi-arrow-left-right" style="color:#10b981"></i>Tag: Cross-doc reference</div>
+    <div class="ctx-menu-item" data-reason="reference_spec"><i class="bi bi-bookmark" style="color:#10b981"></i>Tag: Spec reference (3GPP/GSMA)</div>
     <div class="ctx-menu-divider"></div>
     <div class="ctx-menu-item" data-reason="__cancel"><i class="bi bi-x"></i>Cancel</div>
 </div>

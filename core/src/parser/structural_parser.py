@@ -1797,8 +1797,21 @@ class GenericStructuralParser:
             "toc_pair_miss": self._parse_stats.toc_pair_misses,
         }
 
+        # Cap plan_name length. A poorly-anchored ``plan_name`` regex
+        # in the profile (e.g. ``Plan\s+Name:\s*(.+?)(?:\n|Plan\s+Id|$)``
+        # over space-joined first-page text where neither delimiter
+        # appears) can match the entire rest of page-1 — the Summary
+        # tab then renders an unusable full-doc dump in the Plan
+        # column. Truncate at 80 chars for the summary; the underlying
+        # tree's ``plan_name`` field is untouched so downstream
+        # consumers still see whatever the regex captured.
+        raw_name = plan_meta.get("plan_name", "") or doc.mno or ""
+        display_name = (
+            raw_name[:77] + "…" if len(raw_name) > 80 else raw_name
+        )
+
         return DocSummary(
-            plan_name=plan_meta.get("plan_name", "") or doc.mno or "",
+            plan_name=display_name,
             plan_id=plan_meta.get("plan_id", ""),
             doc_id=Path(doc.source_file).stem if doc.source_file else "",
             source_file=doc.source_file or "",
