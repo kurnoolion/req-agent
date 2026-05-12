@@ -366,6 +366,19 @@
         const fpDrops = [];
         const missedDrops = [];
 
+        // Strip page-tag, action-buttons, and annotation badges from a
+        // review-block, returning only the block's prose / table text
+        // (collapsed whitespace, truncated). Used to embed a short
+        // human-readable preview alongside the block_idx the regex-mining
+        // CLI will use to look up the full block from the IR.
+        const _previewText = function (el, maxLen) {
+            const clone = el.cloneNode(true);
+            clone.querySelectorAll('.block-pg, .block-actions, .ann-badge')
+                .forEach(function (n) { n.remove(); });
+            const txt = (clone.textContent || '').replace(/\s+/g, ' ').trim();
+            return txt.length > maxLen ? txt.slice(0, maxLen) + '…' : txt;
+        };
+
         // Walk pane-3 blocks
         document.querySelectorAll('#pane-3-body .review-block').forEach(function (el) {
             const idx  = parseInt(el.dataset.idx, 10);
@@ -375,9 +388,15 @@
 
             if (status === 'rejected' && anns.length > 0) {
                 // Each annotation on this block is a false positive
+                const preview = _previewText(el, 120);
                 anns.forEach(function (ann) {
                     if (ann.type.startsWith('dropped_')) {
-                        fpDrops.push({ pages: page, reason: ann.reason || ann.type.replace('dropped_', '') });
+                        fpDrops.push({
+                            pages: page,
+                            block_idx: idx,
+                            block_text_preview: preview,
+                            reason: ann.reason || ann.type.replace('dropped_', ''),
+                        });
                     }
                 });
             }
@@ -385,6 +404,8 @@
             if (status === 'added' && _added[idx]) {
                 const entry = {
                     pages: page,
+                    block_idx: idx,
+                    block_text_preview: _previewText(el, 120),
                     expected_reason: _added[idx].reason,
                 };
                 // Carry the user comment when present so the
