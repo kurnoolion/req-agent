@@ -68,6 +68,31 @@ class TextRun:
 
 
 @dataclass
+class MergedCell:
+    """A horizontally and/or vertically merged cell inside a table block.
+
+    Captured by the DOCX extractor when a `<w:tc>` carries `<w:gridSpan
+    w:val="N">` (horizontal merge) or participates in a `<w:vMerge>`
+    chain (vertical merge). The merge ANCHOR cell (the one with
+    `gridSpan>1` or the first cell in a `vMerge` chain) is recorded;
+    continuation cells are suppressed from `headers`/`rows` to keep
+    those matrices rectangular.
+
+    Useful for detection logic that looks for "label-inside-merged-cell"
+    layouts — common in revision-history and glossary tables that lack
+    an introducing heading paragraph (e.g. row 0 of the table is a
+    single merged cell containing the text "Revision History"). The
+    text is also concatenated into the joined-headers form by some
+    parser scoring paths.
+    """
+    row: int  # 0 = header row; 1+ = body row index (matches `rows[row-1]`)
+    col: int  # 0-based column index of the merge anchor
+    rowspan: int = 1
+    colspan: int = 1
+    text: str = ""
+
+
+@dataclass
 class ContentBlock:
     """A single content block in the normalized intermediate representation."""
     type: BlockType
@@ -95,6 +120,12 @@ class ContentBlock:
     # legacy IRs; consumers fall back to the merged string forms.
     header_runs: list[list[TextRun]] = field(default_factory=list)
     row_runs: list[list[list[TextRun]]] = field(default_factory=list)
+
+    # Merged-cell metadata for tables. Each entry describes one merge
+    # anchor; continuation cells are NOT listed (they're suppressed from
+    # ``headers`` / ``rows`` to keep those rectangular). Empty for
+    # non-merged tables and for extractors that don't surface merges.
+    merged_cells: list[MergedCell] = field(default_factory=list)
 
     # Image content
     image_path: str = ""
@@ -253,6 +284,7 @@ class DocumentIR:
                 [[TextRun(**r) for r in cell] for cell in row]
                 for row in b.get("row_runs", [])
             ]
+            merged_cells = [MergedCell(**mc) for mc in b.get("merged_cells", [])]
             blocks.append(ContentBlock(
                 type=BlockType(b["type"]),
                 position=pos,
@@ -265,6 +297,7 @@ class DocumentIR:
                 rows=b.get("rows", []),
                 header_runs=header_runs,
                 row_runs=row_runs,
+                merged_cells=merged_cells,
                 image_path=b.get("image_path", ""),
                 surrounding_text=b.get("surrounding_text", ""),
                 object_type=b.get("object_type", ""),

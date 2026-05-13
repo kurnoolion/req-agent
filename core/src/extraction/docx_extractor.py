@@ -24,6 +24,7 @@ from core.src.models.document import (
     ContentBlock,
     DocumentIR,
     FontInfo,
+    MergedCell,
     Position,
     TextRun,
 )
@@ -289,14 +290,42 @@ class DOCXExtractor(BaseExtractor):
     # ------------------------------------------------------------------
 
     def _table_block(self, tbl: DocxTable, page: int) -> ContentBlock | None:
+        # Walk every (row, col) cell position. python-docx's row.cells
+        # returns the SAME Cell object (same underlying ``CT_Tc`` element)
+        # for every (row, col) position inside a merged region — we use
+        # that element identity to find merge anchors and record
+        # continuation positions as empty in the rectangular matrix.
+        # Hash by the CT_Tc element itself (hashable, identity-stable
+        # across the lifetime of the open document).
+        seen_tcs: dict = {}
         rows_text: list[list[str]] = []
         rows_runs: list[list[list[TextRun]]] = []
-        for row in tbl.rows:
+
+        for r_idx, row in enumerate(tbl.rows):
             cells_text: list[str] = []
             cells_runs: list[list[TextRun]] = []
-            for c in row.cells:
-                cells_text.append((c.text or "").strip())
-                cells_runs.append(self._cell_runs(c))
+            for c_idx, c in enumerate(row.cells):
+                tc = c._tc
+                if tc in seen_tcs:
+                    anchor = seen_tcs[tc]
+                    anchor["colspan"] = max(
+                        anchor["colspan"], c_idx - anchor["col"] + 1,
+                    )
+                    anchor["rowspan"] = max(
+                        anchor["rowspan"], r_idx - anchor["row"] + 1,
+                    )
+                    cells_text.append("")
+                    cells_runs.append([])
+                else:
+                    text = (c.text or "").strip()
+                    runs = self._cell_runs(c)
+                    seen_tcs[tc] = {
+                        "row": r_idx, "col": c_idx,
+                        "rowspan": 1, "colspan": 1,
+                        "text": text,
+                    }
+                    cells_text.append(text)
+                    cells_runs.append(runs)
             rows_text.append(cells_text)
             rows_runs.append(cells_runs)
 
@@ -314,6 +343,18 @@ class DOCXExtractor(BaseExtractor):
         if len(non_empty_headers) <= 1 and total_cells == 0:
             return None
 
+        # Build merged_cells list — only entries that actually span >1.
+        merged_cells = [
+            MergedCell(
+                row=info["row"], col=info["col"],
+                rowspan=info["rowspan"], colspan=info["colspan"],
+                text=info["text"],
+            )
+            for info in seen_tcs.values()
+            if info["rowspan"] > 1 or info["colspan"] > 1
+        ]
+        merged_cells.sort(key=lambda m: (m.row, m.col))
+
         block = ContentBlock(
             type=BlockType.TABLE,
             position=Position(page=page, index=0, bbox=None),
@@ -321,6 +362,7 @@ class DOCXExtractor(BaseExtractor):
             rows=body_rows,
             header_runs=header_runs,
             row_runs=body_row_runs,
+            merged_cells=merged_cells,
         )
 
         # Whole-table strike [D-060]: header AND every body row fully
