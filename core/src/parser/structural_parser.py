@@ -333,6 +333,20 @@ class GenericStructuralParser:
             if profile.revhist_table_header_pattern
             else None
         )
+        # Signal-based revhist detection — third path after label and
+        # regex-header. Pre-compile cell-content fingerprint regexes
+        # once so the body pass doesn't re-compile per block.
+        rd = profile.revhist_detection
+        self._revhist_score_enabled = bool(rd.enabled)
+        self._revhist_score_cfg = rd
+        self._revhist_cell_res = [re.compile(p) for p in rd.cell_patterns]
+        # Lowercased token set for vocab matching (case-insensitive
+        # word-boundary lookup).
+        self._revhist_vocab_lower = [t.lower() for t in rd.vocab_tokens]
+        # Populated by ``_find_revhist_block_indices`` to surface the
+        # active detection path + (for scoring) per-signal breakdown
+        # in the parse_summary diagnostics.
+        self._frontmatter_revhist_match_info: dict = {}
         # TOC entry detection (FR-34) — compiled once; None if disabled
         self._toc_re = (
             re.compile(profile.toc_detection_pattern)
@@ -759,6 +773,88 @@ class GenericStructuralParser:
             )
         return index, toc_blocks
 
+    def _score_revhist_table(
+        self,
+        block: ContentBlock,
+        total_blocks: int,
+    ) -> tuple[float, dict[str, float]]:
+        """Score a TABLE block against the revhist signal mix.
+
+        Returns ``(combined_score, per_signal_dict)``. Combined score is
+        compared against ``RevhistDetection.threshold`` by the caller.
+        Per-signal dict is included for parse-time diagnostics — the
+        Summary tab can surface "why didn't this score" without
+        re-running the scorer.
+
+        Returns ``(0.0, {})`` when scoring is disabled or the block is
+        not a TABLE — keeps the call site free of pre-flight checks.
+        """
+        if not self._revhist_score_enabled or block.type != BlockType.TABLE:
+            return 0.0, {}
+        cfg = self._revhist_score_cfg
+
+        # 1. Position score — 1.0 if the table is within the leading
+        #    `max_position_fraction` of the document by block index.
+        position_score = 0.0
+        if total_blocks > 0:
+            frac = block.position.index / max(total_blocks - 1, 1)
+            if frac <= cfg.max_position_fraction:
+                position_score = 1.0
+
+        # 2. Vocabulary score — sum unique-token hits from (a) the joined
+        #    column headers and (b) every merged-cell anchor text.
+        joined_headers = " | ".join(h.strip() for h in (block.headers or []))
+        merged_text = " | ".join(
+            mc.text for mc in (block.merged_cells or []) if mc.text
+        )
+        haystack = (joined_headers + " || " + merged_text).lower()
+        hit_tokens: set[str] = set()
+        for tok in self._revhist_vocab_lower:
+            if not tok:
+                continue
+            # Word-boundary match so 'ver' doesn't match 'version' and
+            # vice versa, while still matching 'Ver.' (`\b` handles
+            # punctuation boundaries).
+            if re.search(r"\b" + re.escape(tok) + r"\b", haystack):
+                hit_tokens.add(tok)
+        vocab_raw = min(len(hit_tokens), cfg.vocab_score_cap)
+        vocab_score = vocab_raw / cfg.vocab_score_cap if cfg.vocab_score_cap else 0.0
+
+        # 3. Cell-content fingerprint — count columns where ≥
+        #    cell_min_match_fraction of body rows match any pattern.
+        rows = block.rows or []
+        n_cols = max((len(r) for r in rows), default=0)
+        cell_columns_matched = 0
+        if n_cols and rows:
+            for col_idx in range(n_cols):
+                col_values = [
+                    (row[col_idx] if col_idx < len(row) else "")
+                    for row in rows
+                ]
+                col_values = [v for v in col_values if v and v.strip()]
+                if not col_values:
+                    continue
+                for rx in self._revhist_cell_res:
+                    matches = sum(1 for v in col_values if rx.match(v))
+                    if matches / len(col_values) >= cfg.cell_min_match_fraction:
+                        cell_columns_matched += 1
+                        break  # one matching pattern per column is enough
+        cell_raw = min(cell_columns_matched, cfg.cell_score_cap)
+        cell_score = cell_raw / cfg.cell_score_cap if cfg.cell_score_cap else 0.0
+
+        combined = (
+            position_score * cfg.position_weight
+            + vocab_score * cfg.vocab_weight
+            + cell_score * cfg.cell_weight
+        )
+        return combined, {
+            "position": position_score,
+            "vocab": vocab_score,
+            "cell": cell_score,
+            "combined": combined,
+            "threshold": cfg.threshold,
+        }
+
     def _find_revhist_block_indices(self, doc: DocumentIR) -> set[int]:
         """Return the block indices that constitute the revision-history
         section (label paragraph + its trailing tables/images, up to but
@@ -776,11 +872,21 @@ class GenericStructuralParser:
         Empty when ``revision_history_label_pattern`` is unset or no
         matching label is found.
         """
-        if self._revhist_re is None and self._revhist_table_header_re is None:
+        if (
+            self._revhist_re is None
+            and self._revhist_table_header_re is None
+            and not self._revhist_score_enabled
+        ):
             return set()
 
+        # Track which detection path fired and (for scoring) the
+        # per-signal breakdown. The body-pass uses ``indices`` for the
+        # drop semantics; ``_build_parse_summary`` reads
+        # ``_frontmatter_revhist_match_info`` to surface diagnostics.
+        self._frontmatter_revhist_match_info = {}
         indices: set[int] = set()
         consuming = False
+        total_blocks = len(doc.content_blocks)
         for b in doc.content_blocks:
             if not consuming:
                 # Detect the revhist label on PARAGRAPH-typed blocks
@@ -799,8 +905,11 @@ class GenericStructuralParser:
                 ):
                     indices.add(b.position.index)
                     consuming = True
-                # Table-header fallback: bare-table-at-the-top docs with
-                # no introducing heading. Match against ` | `.join(headers).
+                    if not self._frontmatter_revhist_match_info:
+                        self._frontmatter_revhist_match_info = {
+                            "pattern_id": "label",
+                        }
+                # Table-header regex fallback (legacy, narrower).
                 elif (
                     self._revhist_table_header_re is not None
                     and b.type == BlockType.TABLE
@@ -811,6 +920,24 @@ class GenericStructuralParser:
                 ):
                     indices.add(b.position.index)
                     consuming = True
+                    if not self._frontmatter_revhist_match_info:
+                        self._frontmatter_revhist_match_info = {
+                            "pattern_id": "table_header_regex",
+                        }
+                # Signal-based scoring fallback.
+                elif (
+                    self._revhist_score_enabled
+                    and b.type == BlockType.TABLE
+                ):
+                    score, breakdown = self._score_revhist_table(b, total_blocks)
+                    if score >= self._revhist_score_cfg.threshold:
+                        indices.add(b.position.index)
+                        consuming = True
+                        if not self._frontmatter_revhist_match_info:
+                            self._frontmatter_revhist_match_info = {
+                                "pattern_id": "score",
+                                "score_breakdown": breakdown,
+                            }
                 continue
             # Consuming: drop non-paragraph blocks (tables, images)
             # until the next paragraph OR heading, either of which
@@ -1153,6 +1280,22 @@ class GenericStructuralParser:
                 )
                 revhist_active = True
                 continue
+
+            # Signal-based revhist scoring — fires only when the label
+            # and regex-header paths above didn't. Combines position +
+            # column-vocabulary + cell-content fingerprints.
+            if (
+                self._revhist_score_enabled
+                and block.type == BlockType.TABLE
+            ):
+                score, _ = self._score_revhist_table(block, len(doc.content_blocks))
+                if score >= self._revhist_score_cfg.threshold:
+                    self._parse_stats.revhist_blocks_dropped += 1
+                    self._dropped_entries.append(
+                        (block.position.index, block.position.page, "revhist")
+                    )
+                    revhist_active = True
+                    continue
 
             if block.type in (BlockType.PARAGRAPH, BlockType.HEADING):
                 # DOCX extractors emit heading-styled paragraphs as
@@ -1816,15 +1959,28 @@ class GenericStructuralParser:
                     label_block = b
                 elif table_block is None and b.type == BlockType.TABLE:
                     table_block = b
+            info = self._frontmatter_revhist_match_info or {}
+            pid = info.get("pattern_id") or "configured"
             if label_block is not None:
                 revhist_match = RevhistMatch(
-                    pattern_id="configured",
+                    pattern_id=pid,
                     matched_text=self._heading_title_text(label_block)[:120],
                     label_block_index=label_block.position.index,
                     table_headers=(
                         list(getattr(table_block, "headers", []) or [])
                         if table_block else []
                     ),
+                    score_breakdown=info.get("score_breakdown", {}) or {},
+                )
+            elif table_block is not None and pid in ("table_header_regex", "score"):
+                # Scoring / regex-header path with no preceding label —
+                # use the table itself as the anchor for the evidence row.
+                revhist_match = RevhistMatch(
+                    pattern_id=pid,
+                    matched_text="(no label — table-shape match)",
+                    label_block_index=table_block.position.index,
+                    table_headers=list(getattr(table_block, "headers", []) or []),
+                    score_breakdown=info.get("score_breakdown", {}) or {},
                 )
 
         # Glossary evidence — set whenever ``_extract_definitions``

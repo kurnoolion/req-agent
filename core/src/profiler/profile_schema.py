@@ -205,6 +205,104 @@ class TocDetection:
 
 
 @dataclass
+class RevhistDetection:
+    """Signal-based revision-history TABLE detection.
+
+    Designed for the long tail of revhist variants that regex over the
+    joined-header string can't enumerate cleanly: varying column count,
+    varying column order, varying header vocabulary (Rev/Revision/Ver,
+    Change/Changes/Description of Changes, Author/Owner/Editor, ...),
+    and the case where the "Revision History" LABEL lives inside a
+    merged cell at the top or bottom of the table rather than in a
+    heading paragraph above it.
+
+    Runs AFTER the label and regex-header paths so it never alters
+    existing profile behaviour unless ``enabled=True``. When it fires,
+    drops the table and arms the same consume-until-next-paragraph
+    state both other paths use.
+
+    Score formula:
+        position_score   * position_weight    +
+        vocab_score      * vocab_weight       +
+        cell_score       * cell_weight
+            >=  threshold  →  revhist
+    Each sub-score is normalized to [0, 1].
+    """
+
+    enabled: bool = False
+
+    # ── Position signal ────────────────────────────────────────────
+    max_position_fraction: float = 0.15
+    """A table at block-index fraction ≤ this contributes a full
+    position score (1.0); beyond that, 0.0. Set to 1.0 to disable
+    position gating (any table eligible)."""
+
+    position_weight: float = 0.25
+
+    # ── Column-vocabulary signal ──────────────────────────────────
+    vocab_tokens: list[str] = field(default_factory=lambda: [
+        "rev", "revision", "version", "ver",
+        "change", "changes", "history", "log",
+        "author", "owner", "editor", "by",
+        "date", "datetime", "released", "release",
+        "description", "comment", "comments", "notes", "summary",
+        "approver", "approved",
+    ])
+    """Case-insensitive tokens looked up in: (a) joined column headers,
+    (b) every merged-cell text on the table. Each unique matching token
+    contributes one point, capped at ``vocab_score_cap``, then
+    normalized to [0, 1]."""
+
+    vocab_score_cap: int = 4
+    vocab_weight: float = 0.5
+
+    # ── Cell-content fingerprint signal ───────────────────────────
+    cell_patterns: list[str] = field(default_factory=lambda: [
+        r"^\s*v?\d+(\.\d+)+\s*$",                 # version: 1.0, v2.0, 1.2.3
+        r"^\s*\d{1,2}[/.-]\d{1,2}[/.-]\d{2,4}\s*$",  # date: 11-01-23, 5/10/2017
+        r"^\s*\d{4}[/.-]\d{1,2}[/.-]\d{1,2}\s*$",    # ISO date: 2026-01-01
+        r"^\s*\d{1,2}\s+\w+\s+\d{4}\s*$",         # date: 11 January 2023
+    ])
+    """Per-cell regexes. For each pattern, count columns where ≥
+    ``cell_min_match_fraction`` of body cells match. Sum across
+    patterns, cap at ``cell_score_cap``, normalize to [0, 1]."""
+
+    cell_min_match_fraction: float = 0.5
+    cell_score_cap: int = 2
+    cell_weight: float = 0.25
+
+    # ── Threshold ──────────────────────────────────────────────────
+    threshold: float = 0.55
+    """A table whose combined score ≥ this is classified as revhist.
+    Default 0.55 chosen so that: position-only (0.25) is not enough;
+    position + meaningful vocab (0.25 + ~0.4) clears; even a clean
+    vocab-only hit (0.5) on a non-front-matter table clears."""
+
+
+def _load_revhist_detection(data: dict) -> RevhistDetection:
+    """Build a RevhistDetection with per-field defaults preserved when
+    keys are absent (caller passes ``data.get('revhist_detection', {})``)."""
+    default = RevhistDetection()
+    return RevhistDetection(
+        enabled=data.get("enabled", default.enabled),
+        max_position_fraction=data.get(
+            "max_position_fraction", default.max_position_fraction
+        ),
+        position_weight=data.get("position_weight", default.position_weight),
+        vocab_tokens=list(data.get("vocab_tokens", default.vocab_tokens)),
+        vocab_score_cap=data.get("vocab_score_cap", default.vocab_score_cap),
+        vocab_weight=data.get("vocab_weight", default.vocab_weight),
+        cell_patterns=list(data.get("cell_patterns", default.cell_patterns)),
+        cell_min_match_fraction=data.get(
+            "cell_min_match_fraction", default.cell_min_match_fraction
+        ),
+        cell_score_cap=data.get("cell_score_cap", default.cell_score_cap),
+        cell_weight=data.get("cell_weight", default.cell_weight),
+        threshold=data.get("threshold", default.threshold),
+    )
+
+
+@dataclass
 class DocumentProfile:
     """Complete document structure profile (TDD 5.2.3).
 
@@ -329,7 +427,21 @@ class DocumentProfile:
     bare revision-history table and no introducing heading — common in
     cover-page-style docs. The corrections-driven profile_miner emits
     proposals against this field when the user annotates a table block
-    as ``revhist``."""
+    as ``revhist``.
+
+    Largely superseded by ``revhist_detection`` (signal-based scoring,
+    same paragraph-label gate) which handles the long tail of
+    column-order / vocabulary / merged-cell variants without regex
+    enumeration. Kept for back-compat and for corpora where a single
+    crisp regex already exists."""
+
+    revhist_detection: RevhistDetection = field(default_factory=lambda: RevhistDetection())
+    """Signal-based revhist table detection. When enabled, runs as a
+    third detection path AFTER ``revision_history_label_pattern`` and
+    ``revhist_table_header_pattern`` so existing profiles keep their
+    behaviour. Combines position + column-vocabulary + cell-content
+    fingerprints into a single score; threshold decides. See
+    ``RevhistDetection`` for the per-signal contract."""
 
     # ── Style-driven TOC detection (generic-rules pivot) ─────────
     toc_detection: TocDetection = field(default_factory=TocDetection)
@@ -462,6 +574,9 @@ class DocumentProfile:
             ),
             revhist_table_header_pattern=data.get(
                 "revhist_table_header_pattern", ""
+            ),
+            revhist_detection=_load_revhist_detection(
+                data.get("revhist_detection", {}) or {}
             ),
             toc_detection=TocDetection(
                 **data.get("toc_detection", {})

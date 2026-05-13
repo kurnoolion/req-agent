@@ -36,10 +36,13 @@ class RevhistMatch:
     """
 
     pattern_id: str = ""
-    """Identifier of the profile pattern that matched. Currently always
-    ``"configured"`` — the active value of
-    ``profile.revision_history_label_pattern``. Reserved for multi-pattern
-    futures where the user might run several candidate regexes."""
+    """Identifier of the detection path that matched. One of:
+    ``"label"`` — ``profile.revision_history_label_pattern`` matched a
+    heading/paragraph; ``"table_header_regex"`` — legacy
+    ``revhist_table_header_pattern`` matched the joined headers;
+    ``"score"`` — signal-based ``revhist_detection`` cleared its
+    threshold. Helps the user see *which* path is doing the work on
+    each doc."""
 
     matched_text: str = ""
     """The runs-aware title text that matched the pattern (i.e., the
@@ -55,6 +58,12 @@ class RevhistMatch:
     """Column headers of the table that follows the label (if any).
     Useful for designing column-aware filters when extending the
     revhist detector."""
+
+    score_breakdown: dict[str, float] = field(default_factory=dict)
+    """Per-signal score breakdown when ``pattern_id == "score"``.
+    Keys: ``position`` / ``vocab`` / ``cell`` / ``combined`` /
+    ``threshold``. Each in [0, 1]. Empty when label or regex-header
+    path was the matcher."""
 
 
 @dataclass

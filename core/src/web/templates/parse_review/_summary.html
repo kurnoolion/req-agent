@@ -85,12 +85,22 @@
                         <span class="text-muted">(no table)</span>
                       {% endif %}
                     </li>
+                    {% if d.revhist_match.score_breakdown %}
+                    <li>score breakdown:
+                      pos=<code>{{ "%.2f"|format(d.revhist_match.score_breakdown.position or 0) }}</code>
+                      · vocab=<code>{{ "%.2f"|format(d.revhist_match.score_breakdown.vocab or 0) }}</code>
+                      · cell=<code>{{ "%.2f"|format(d.revhist_match.score_breakdown.cell or 0) }}</code>
+                      · <strong>combined=<code>{{ "%.2f"|format(d.revhist_match.score_breakdown.combined or 0) }}</code></strong>
+                      (threshold <code>{{ "%.2f"|format(d.revhist_match.score_breakdown.threshold or 0) }}</code>)
+                    </li>
+                    {% endif %}
                   </ul>
                 {% else %}
                   <div class="text-muted small mt-1">
-                    No revhist detected. Check the source-doc's
-                    revhist-label heading text and update
-                    <code>revision_history_label_pattern</code>.
+                    No revhist detected. Either set
+                    <code>revision_history_label_pattern</code>,
+                    <code>revhist_table_header_pattern</code>, or enable
+                    <code>revhist_detection</code> (signal-based scoring).
                   </div>
                 {% endif %}
               </div>
