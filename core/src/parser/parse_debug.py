@@ -83,6 +83,10 @@ def cmd_revhist(args: argparse.Namespace) -> int:
     total = len(ir.content_blocks)
     print(f"# parse_debug revhist — doc={args.doc!r}")
     print(f"profile: {profile_path}")
+    print(f"  revision_history_label_pattern = "
+          f"{profile.revision_history_label_pattern!r}")
+    print(f"  requirement_id.anchor = "
+          f"{profile.requirement_id.anchor!r}")
     print(f"  revhist_detection.enabled = {rd.enabled}")
     print(f"  threshold = {rd.threshold:.2f}  "
           f"weights: position={rd.position_weight} vocab={rd.vocab_weight} "
@@ -94,6 +98,44 @@ def cmd_revhist(args: argparse.Namespace) -> int:
     print()
     print(f"total content blocks: {total}")
     print()
+
+    # --- Label-path candidates ---
+    # Walk every HEADING/PARAGRAPH block whose text looks like it might
+    # be a revhist label. Show raw text, the normalized title that the
+    # body pass actually tests, and whether the regex matches.
+    print("[label-path candidates — text contains 'history' or 'log']")
+    label_hits = 0
+    for b in ir.content_blocks:
+        if b.type not in (BlockType.PARAGRAPH, BlockType.HEADING):
+            continue
+        t = (b.text or "").lower()
+        if not any(k in t for k in ("history", "change log", "revision log",
+                                    "version log", "document log")):
+            continue
+        normalized = parser._heading_title_text(b)
+        matches = bool(
+            parser._revhist_re
+            and parser._revhist_re.match(normalized)
+        )
+        flag = "✓ MATCH" if matches else "  miss "
+        if matches:
+            label_hits += 1
+        print(f"{flag}  idx={b.position.index:>4d}  "
+              f"type={b.type.value:9s}")
+        print(f"        raw:        {(b.text or '')[:120]!r}")
+        print(f"        normalized: {normalized[:120]!r}")
+        if b.runs:
+            run_summary = " | ".join(
+                f"{r.text[:30]!r}" for r in b.runs[:4]
+            )
+            print(f"        runs ({len(b.runs)}): {run_summary}")
+        print()
+    if label_hits == 0:
+        print("  (no label-path matches — fall through to table scoring)")
+        print()
+    else:
+        print(f"  total label-path matches: {label_hits}")
+        print()
 
     n_tables = 0
     n_pass = 0
