@@ -2102,7 +2102,7 @@ class GenericStructuralParser:
             plan_id=plan_meta.get("plan_id", ""),
             doc_id=Path(doc.source_file).stem if doc.source_file else "",
             source_file=doc.source_file or "",
-            toc_entries=len(self._toc_block_indices),
+            toc_entries=self._parse_stats.toc_blocks_dropped,
             revhist_sections=1 if revhist_match else 0,
             revhist_match=revhist_match,
             glossary_sections=glossary_sections,
