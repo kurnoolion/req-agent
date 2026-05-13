@@ -51,6 +51,13 @@ _REQ_ID_WHITESPACE_RE = re.compile(r"\s+")
 # carry no inline section number.
 _DOCX_HEADING_STYLE_RE = re.compile(r"(?i)^Heading\s+(\d+)$")
 
+# Word's canonical TOC paragraph styles — ``TOC 1``, ``TOC 2``, … — are
+# universally TOC entries. Recognised independent of profile config so
+# downstream label matchers (revhist label, glossary section title,
+# reference list) never accidentally see a TOC entry as a real
+# section heading. Compared with ``block.style`` via match().
+_WORD_TOC_STYLE_RE = re.compile(r"(?i)^toc\s+\d+$")
+
 
 # Title-normalization for TOC ↔ body heading pairing. Collapses runs of
 # whitespace + lowercases so cosmetic differences ("LTE/IMS", "lte / ims")
@@ -1257,6 +1264,20 @@ class GenericStructuralParser:
                         (block.position.index, block.position.page, "cascade")
                     )
                     continue
+
+            # Word's canonical TOC styles (``TOC 1``, ``TOC 2``, ...).
+            # Independent of profile config — these styles are
+            # unambiguously TOC entries by Word's convention. Skipping
+            # them here prevents a TOC entry like "Glossary ... 5" from
+            # being mis-classified as the actual Glossary section
+            # heading by ``_extract_definitions`` / similar text-match
+            # paths later in the pipeline.
+            if block.style and _WORD_TOC_STYLE_RE.match(block.style):
+                self._parse_stats.toc_blocks_dropped += 1
+                self._dropped_entries.append(
+                    (block.position.index, block.position.page, "toc")
+                )
+                continue
 
             # FR-34: drop entire-page TOC content (any block type) and any
             # block that matches the TOC entry pattern.

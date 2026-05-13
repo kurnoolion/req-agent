@@ -177,6 +177,40 @@ def test_definitions_table_header_fallback_extracts_when_no_section_title():
     assert tree.definitions_map["IMS"] == "IP Multimedia Subsystem"
 
 
+def test_word_toc_style_paragraphs_skipped_before_glossary_match():
+    """A paragraph with Word's canonical ``toc N`` style is structurally
+    a TOC entry. Glossary section-title matching (and any other
+    text-based matcher) must not see it — otherwise the TOC's
+    "Glossary ........ 5" line gets mis-classified as the real
+    Glossary section heading."""
+    blocks = [
+        # TOC entry naming Glossary — must be dropped pre-classification.
+        ContentBlock(
+            type=BlockType.PARAGRAPH,
+            position=Position(page=1, index=0),
+            text="Glossary ........ 5",
+            style="toc 1",
+            font_info=FontInfo(size=11.0),
+        ),
+        # Real Heading 1 for the section that follows.
+        _heading(1, "1 Introduction"),
+        # Real glossary section + table.
+        _heading(2, "2 Glossary"),
+        _table(
+            3,
+            headers=["Acronym", "Definition"],
+            rows=[["GPP", "Generalized Pretend Protocol"]],
+        ),
+    ]
+    profile = _profile(definitions_section_pattern=r"(?i)glossary")
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    # Glossary entries extracted from the real section's table, not
+    # from the TOC entry that mentions "Glossary".
+    assert "GPP" in tree.definitions_map
+    # TOC drop count incremented for the TOC-styled entry.
+    assert tree.parse_stats.toc_blocks_dropped >= 1
+
+
 def test_definitions_table_header_fallback_only_when_section_lookup_fails():
     """When a section title DOES match, the label path wins and the
     table-header fallback is not consulted (avoids picking up a
