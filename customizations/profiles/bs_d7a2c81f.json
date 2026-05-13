@@ -13,7 +13,7 @@
     "notes": "Replaces the previously-committed leaky profile (removed in this commit + history rewrite). All proprietary tokens replaced with placeholders per D-062. Real values live in customizations/mappings/bs_d7a2c81f.json (owned by Cline; pushed to company-internal git only — public-mirror leak prevented by sync-work.sh pre-push hook)."
   },
   "heading_detection": {
-    "method": "numbering_pattern",
+    "method": "docx_styles",
     "levels": [],
     "numbering_pattern": "^(\\d+(?:\\.\\d+)*)\\s+\\S",
     "max_observed_depth": 6,
@@ -82,6 +82,10 @@
   "enable_table_anchored_extraction": true,
   "toc_detection_pattern": "",
   "toc_page_threshold": 0.7,
+  "toc_detection": {
+    "style_pattern": "(?i)^toc\\s+(\\d+)$",
+    "entry_pattern": "^(?P<num>[\\w.]+)\\t(?P<body>.+?)\\t(?P<page>\\d+)\\s*$"
+  },
   "revision_history_label_pattern": "(?i)^\\s*(?:\\S+\\s+)*(revision|change|version|document)\\s+(history|log)\\s*$",
   "revhist_detection": {
     "enabled": true
