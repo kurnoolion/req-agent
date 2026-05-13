@@ -409,7 +409,7 @@ class DocumentProfile:
 
     # ── Revision/version history omission (FR-34) ────────────────
     revision_history_label_pattern: str = (
-        r"(?i)^\s*(revision|change|version|document)\s+(history|log)\s*$"
+        r"(?i)^\s*(?:\S+\s+)*(revision|change|version|document)\s+(history|log)\s*$"
     )
     """Regex matched against the *text* of any paragraph or heading
     block. When a block matches AND the immediately-following block is
@@ -419,11 +419,14 @@ class DocumentProfile:
     label can be either heading-styled or a plain paragraph. Empty
     string disables. The default covers common labels across MNOs
     ('Revision History', 'Change History', 'Version History', 'Document
-    History', 'Change Log', 'Revision Log'); the profiler narrows it to
-    the specific phrasing observed in a corpus (whitespace-tolerant),
-    and the corrections workflow can override per-MNO. The
-    table-following gate prevents spurious matches in body prose that
-    happens to mention 'revision history'."""
+    History', 'Change Log', 'Revision Log'), with an optional
+    ``(?:\\S+\\s+)*`` prefix that absorbs section-number-style
+    prefixes ('1 Revision History', '1.1 Revision History',
+    'A. Revision History', '. Revision History'). The ``$`` anchor
+    still prevents body-prose matches. The profiler narrows the regex
+    to the specific phrasing observed in a corpus
+    (whitespace-tolerant), and the corrections workflow can override
+    per-MNO."""
 
     revhist_table_header_pattern: str = ""
     """Table-header fallback for the revision-history drop: when a TABLE
