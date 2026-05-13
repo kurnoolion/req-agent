@@ -1,6 +1,6 @@
 # MAP
 
-Generated 2026-05-09 by regen-map. Do not hand-edit.
+Generated 2026-05-13 by regen-map. Do not hand-edit.
 
 ## Modules
 
@@ -15,6 +15,7 @@ Generated 2026-05-09 by regen-map. Do not hand-edit.
 | [models](../../core/src/models/MODULE.md) | Shared document intermediate representation. |
 | [parser](../../core/src/parser/MODULE.md) | Generic, profile-driven structural parser. |
 | [pipeline](../../core/src/pipeline/MODULE.md) | Staged, re-runnable pipeline that drives the nine-stage offline flow: `extract → profile → parse → resolve → taxonomy → standards → graph → vectorstore → eval`. |
+| [profile_miner](../../core/src/profile_miner/MODULE.md) | Convert human-supplied parse corrections (from the Web UI Review tab) into proposed `DocumentProfile` regex patches. |
 | [profiler](../../core/src/profiler/MODULE.md) | Standalone, LLM-free document-structure profiler. |
 | [query](../../core/src/query/MODULE.md) | Online query pipeline (TDD §7). |
 | [resolver](../../core/src/resolver/MODULE.md) | Deterministic cross-reference resolver (TDD §5.5, Methods 1 & 2). |
@@ -36,6 +37,7 @@ flowchart TD
     m_models[models]
     m_parser[parser]
     m_pipeline[pipeline]
+    m_profile_miner[profile_miner]
     m_profiler[profiler]
     m_query[query]
     m_resolver[resolver]
@@ -72,6 +74,10 @@ flowchart TD
     m_pipeline --> m_standards
     m_pipeline --> m_taxonomy
     m_pipeline --> m_vectorstore
+    m_profile_miner --> m_llm
+    m_profile_miner --> m_models
+    m_profile_miner --> m_parser
+    m_profile_miner --> m_profiler
     m_profiler --> m_extraction
     m_profiler --> m_models
     m_query --> m_env
