@@ -112,6 +112,22 @@ def run_profile(ctx: PipelineContext) -> StageResult:
     out_dir.mkdir(parents=True, exist_ok=True)
     profile_out = out_dir / "profile.json"
 
+    # Explicit --profile <path> override (set by PipelineContext.standalone
+    # when the CLI gets --profile). Short-circuit the stage entirely:
+    # copy the supplied profile into the standard location so downstream
+    # stages find it where they expect, but don't run the profiler and
+    # don't honor the corrections/profile.json overlay (the CLI flag is
+    # the authoritative choice when it's set).
+    explicit_profile = ctx.state.get("profile_path")
+    if explicit_profile and Path(explicit_profile).exists() and Path(explicit_profile) != profile_out:
+        shutil.copy2(explicit_profile, profile_out)
+        ctx.state["profile_path"] = str(profile_out)
+        return StageResult(
+            stage=stage, status="OK", elapsed_seconds=time.time() - t0,
+            stats={"source": "explicit --profile", "path": str(explicit_profile)},
+            warnings=[],
+        )
+
     # Check for correction override
     correction = ctx.correction("profile.json")
     if correction:
