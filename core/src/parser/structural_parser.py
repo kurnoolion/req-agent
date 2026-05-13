@@ -627,20 +627,53 @@ class GenericStructuralParser:
     # ── Plan metadata ───────────────────────────────────────────────
 
     def _extract_plan_metadata(self, doc: DocumentIR) -> dict[str, str]:
-        """Extract plan-level metadata using profile patterns."""
-        first_page_text = " ".join(
-            b.text
-            for b in doc.blocks_by_type(BlockType.PARAGRAPH)
-            if b.position.page == 1
-        )
+        """Extract plan-level metadata using profile patterns.
 
-        meta = {}
+        Matched **per-paragraph** (first hit wins) so no regex can
+        accidentally span multiple paragraphs. The previous joined-blob
+        approach concatenated every page-1 paragraph with " " (no
+        newlines), which broke `(.+?)(?:\\n|Plan\\s+Id|$)`-style
+        terminators: when neither alternation matched in the doc, the
+        regex fell through to ``$`` (end of joined blob) and gobbled
+        the entire TOC + body into ``plan_name``.
+
+        DOCX docs without explicit ``<w:br w:type="page"/>`` markers
+        report every paragraph as ``page=1``; that's the corpus we
+        encounter most often and it's where the leak surfaced.
+        Per-paragraph scoping is robust against that.
+
+        Returns ``{}`` (empty per field, not key-absent) when a pattern
+        is unset or matches nothing — downstream code reads via
+        ``meta.get(field_name, "")`` so missing == "".
+        """
+        page1_paragraphs = [
+            b.text for b in doc.blocks_by_type(BlockType.PARAGRAPH)
+            if b.position.page == 1 and b.text
+        ]
+
+        meta: dict[str, str] = {}
         for field_name in ["plan_name", "plan_id", "version", "release_date"]:
             mf = getattr(self.profile.plan_metadata, field_name)
-            if mf.pattern:
-                m = re.search(mf.pattern, first_page_text)
-                if m:
-                    meta[field_name] = m.group(1).strip()
+            if not mf.pattern:
+                continue
+            try:
+                rx = re.compile(mf.pattern)
+            except re.error as exc:
+                logger.warning(
+                    "plan_metadata.%s pattern doesn't compile (%s) — skipping",
+                    field_name, exc,
+                )
+                continue
+            for p_text in page1_paragraphs:
+                m = rx.search(p_text)
+                if not m:
+                    continue
+                # Prefer capture group 1; fall back to full match for
+                # legacy patterns without a group.
+                value = (m.group(1) if m.groups() else m.group(0)).strip()
+                if value:
+                    meta[field_name] = value
+                    break
 
         logger.info(f"Plan metadata: {meta}")
         return meta
