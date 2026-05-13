@@ -1259,6 +1259,7 @@ class GenericStructuralParser:
                     self._dropped_entries.append(
                         (block.position.index, block.position.page, "revhist")
                     )
+                    self._frontmatter_revhist_indices.add(block.position.index)
                     continue
 
             if (
@@ -1271,6 +1272,9 @@ class GenericStructuralParser:
                 self._dropped_entries.append(
                     (block.position.index, block.position.page, "revhist")
                 )
+                self._frontmatter_revhist_indices.add(block.position.index)
+                if not self._frontmatter_revhist_match_info:
+                    self._frontmatter_revhist_match_info = {"pattern_id": "label"}
                 revhist_active = True
                 continue
 
@@ -1290,6 +1294,11 @@ class GenericStructuralParser:
                 self._dropped_entries.append(
                     (block.position.index, block.position.page, "revhist")
                 )
+                self._frontmatter_revhist_indices.add(block.position.index)
+                if not self._frontmatter_revhist_match_info:
+                    self._frontmatter_revhist_match_info = {
+                        "pattern_id": "table_header_regex",
+                    }
                 revhist_active = True
                 continue
 
@@ -1300,12 +1309,20 @@ class GenericStructuralParser:
                 self._revhist_score_enabled
                 and block.type == BlockType.TABLE
             ):
-                score, _ = self._score_revhist_table(block, len(doc.content_blocks))
+                score, breakdown = self._score_revhist_table(
+                    block, len(doc.content_blocks)
+                )
                 if score >= self._revhist_score_cfg.threshold:
                     self._parse_stats.revhist_blocks_dropped += 1
                     self._dropped_entries.append(
                         (block.position.index, block.position.page, "revhist")
                     )
+                    self._frontmatter_revhist_indices.add(block.position.index)
+                    if not self._frontmatter_revhist_match_info:
+                        self._frontmatter_revhist_match_info = {
+                            "pattern_id": "score",
+                            "score_breakdown": breakdown,
+                        }
                     revhist_active = True
                     continue
 
