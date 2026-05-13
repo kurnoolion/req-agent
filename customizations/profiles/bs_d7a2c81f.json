@@ -82,7 +82,10 @@
   "enable_table_anchored_extraction": true,
   "toc_detection_pattern": "",
   "toc_page_threshold": 0.7,
-  "revision_history_heading_pattern": "(?i)^\\s*(revision|change|version|document)\\s+(history|log)\\s*$",
+  "revision_history_label_pattern": "(?i)^\\s*(?:\\S+\\s+)*(revision|change|version|document)\\s+(history|log)\\s*$",
+  "revhist_detection": {
+    "enabled": true
+  },
   "reference_list_section_pattern": "(?i)^(references|bibliography|normative\\s+references)$",
   "reference_list_entry_pattern": "^\\s*[\\[\\(]?(\\d+)[\\]\\)\\.]?\\s+(.+?)\\s*$"
 }
