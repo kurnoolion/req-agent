@@ -215,6 +215,48 @@ def test_score_disabled_by_default():
 # Consume continuation
 # ---------------------------------------------------------------------------
 
+def test_default_position_cutoff_covers_30_percent():
+    """Real-corpus regression: a revhist at frac=0.23 (past the old
+    0.15 cutoff but within the new 0.30 default) should clear position."""
+    blocks = []
+    # 22 filler blocks before the revhist table at index 22 (frac=0.23 of 96).
+    for i in range(22):
+        blocks.append(_para(i, f"front {i}"))
+    blocks.append(_table(22,
+        headers=["Author", "Description of Changes", "", "Date"],
+        rows=[["Alice", "Initial", "", "2026-01-01"]]))
+    for i in range(23, 96):
+        blocks.append(_heading(i, f"{i} Section") if i % 8 == 0
+                      else _para(i, f"body {i}"))
+    tree = _parser(_profile()).parse(_doc(blocks))
+    assert tree.parse_stats.revhist_blocks_dropped == 1
+
+
+def test_vocab_scans_body_cells_for_reversed_table():
+    """Reversed-table layout: data rows on top, column headers buried in
+    a body row, 'Revision History' label in the last (merged) row. The
+    score path's body-cell vocab scan should catch this even though
+    `headers` looks like garbage."""
+    blocks = [
+        _table(0,
+               # The extractor's "headers" = first row = the most-recent
+               # data row (Rev=13). Looks uninformative.
+               headers=["13", "", "2026-04-01", "Alice", "All", ""],
+               rows=[
+                   ["12", "", "2026-03-01", "Bob",   "All", "Edit"],
+                   ["11", "", "2026-02-01", "Carol", "All", "Edit"],
+                   # The REAL column-header row, buried as a body row.
+                   ["Rev", "ECO", "Date", "Initiator/Doc Control",
+                    "Pages", "Description"],
+                   # Footer-merged "Revision History" label row.
+                   ["Revision History"] * 6,
+               ]),
+        _heading(1, "1 Introduction"),
+    ]
+    tree = _parser(_profile()).parse(_doc(blocks))
+    assert tree.parse_stats.revhist_blocks_dropped == 1
+
+
 def test_score_armed_revhist_consumes_following_tables():
     """Once the scorer fires, the same consume-until-next-paragraph
     state activates — subsequent table slices also drop."""

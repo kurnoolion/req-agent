@@ -232,10 +232,13 @@ class RevhistDetection:
     enabled: bool = False
 
     # ── Position signal ────────────────────────────────────────────
-    max_position_fraction: float = 0.15
+    max_position_fraction: float = 0.30
     """A table at block-index fraction ≤ this contributes a full
     position score (1.0); beyond that, 0.0. Set to 1.0 to disable
-    position gating (any table eligible)."""
+    position gating (any table eligible). Default 0.30 covers most
+    front-matter revhists; some corpora put the revhist after a long
+    multi-page TOC or after a sub-document boundary, pushing the
+    revhist past a tight 0.15 cutoff."""
 
     position_weight: float = 0.25
 
@@ -249,9 +252,14 @@ class RevhistDetection:
         "approver", "approved",
     ])
     """Case-insensitive tokens looked up in: (a) joined column headers,
-    (b) every merged-cell text on the table. Each unique matching token
-    contributes one point, capped at ``vocab_score_cap``, then
-    normalized to [0, 1]."""
+    (b) every merged-cell text on the table, (c) every body-row cell.
+    Each unique matching token contributes one point, capped at
+    ``vocab_score_cap``, then normalized to [0, 1].
+
+    Body-cell scan handles reversed-order tables (column-header row
+    buried below data rows; "Revision History" label in a footer-merged
+    cell) and any layout where the indicative vocabulary doesn't live
+    in row 0."""
 
     vocab_score_cap: int = 4
     vocab_weight: float = 0.5

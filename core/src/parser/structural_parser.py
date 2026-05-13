@@ -802,12 +802,24 @@ class GenericStructuralParser:
                 position_score = 1.0
 
         # 2. Vocabulary score — sum unique-token hits from (a) the joined
-        #    column headers and (b) every merged-cell anchor text.
+        #    column headers, (b) every merged-cell anchor text, and
+        #    (c) every body-row cell. Body-cell scan handles the case
+        #    where the real column-header row is buried in body rows
+        #    (reversed table layout) or where a label like "Revision
+        #    History" sits in a footer-merged cell that we may not have
+        #    populated into ``merged_cells`` (pre-9ee028c IRs).
         joined_headers = " | ".join(h.strip() for h in (block.headers or []))
         merged_text = " | ".join(
             mc.text for mc in (block.merged_cells or []) if mc.text
         )
-        haystack = (joined_headers + " || " + merged_text).lower()
+        body_text = " || ".join(
+            " | ".join(str(c).strip() for c in row if c)
+            for row in (block.rows or [])
+            if row
+        )
+        haystack = (
+            joined_headers + " || " + merged_text + " || " + body_text
+        ).lower()
         hit_tokens: set[str] = set()
         for tok in self._revhist_vocab_lower:
             if not tok:
