@@ -157,8 +157,14 @@ def find_mapping_file(
     """Locate the mapping JSON for *profile_path*, in priority order:
 
     1. ``customizations/mappings/<profile_stem>.json`` — per-bootstrap snapshot.
-    2. ``<env_dir>/state/cline-mapping.json`` — Cline's live mapping.
-    3. None — substitution will be a no-op.
+    2. ``customizations/mappings/<_provenance.bootstrap_id>.json`` —
+       same snapshot, looked up by the bootstrap_id embedded in the
+       profile content. Needed when the active profile has been copied
+       to a generic name (e.g. the pipeline copies
+       ``corrections/profile.json`` → ``out/profile/profile.json``;
+       the stem becomes ``"profile"`` and step 1 misses).
+    3. ``<env_dir>/state/cline-mapping.json`` — Cline's live mapping.
+    4. None — substitution will be a no-op.
 
     Returns the resolved Path or None.
     """
@@ -167,6 +173,22 @@ def find_mapping_file(
         snapshot = project_root / "customizations" / "mappings" / f"{profile_path.stem}.json"
         if snapshot.exists():
             return snapshot
+
+        # Read _provenance.bootstrap_id from the profile content and
+        # retry the snapshot lookup with that name. Tolerates profiles
+        # that have been copied / renamed away from their source name
+        # (the standard pipeline does this).
+        try:
+            data = json.loads(profile_path.read_text(encoding="utf-8"))
+        except Exception:
+            data = None
+        if isinstance(data, dict):
+            prov = data.get("_provenance") or {}
+            boot_id = prov.get("bootstrap_id") if isinstance(prov, dict) else None
+            if isinstance(boot_id, str) and boot_id:
+                by_id = project_root / "customizations" / "mappings" / f"{boot_id}.json"
+                if by_id.exists():
+                    return by_id
 
     if env_dir is not None:
         cline = env_dir / "state" / "cline-mapping.json"

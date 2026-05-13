@@ -218,6 +218,43 @@ class TestFindMappingFile:
         profile_path.write_text("{}")
         assert find_mapping_file(profile_path) is None
 
+    def test_falls_back_to_provenance_bootstrap_id(self, tmp_path):
+        """When the active profile has been copied to a generic name
+        (e.g. pipeline copies corrections/profile.json → out/profile/
+        profile.json), stem-based lookup misses. Fall back to reading
+        ``_provenance.bootstrap_id`` from the profile content."""
+        project = tmp_path / "project"
+        (project / "customizations" / "mappings").mkdir(parents=True)
+        (project / "out" / "profile").mkdir(parents=True)
+        # The mapping file is keyed by bootstrap_id.
+        snapshot = project / "customizations" / "mappings" / "bs_abc.json"
+        snapshot.write_text("{}")
+        # The active profile lives at out/profile/profile.json (generic
+        # stem) but its _provenance carries the bootstrap_id.
+        profile_path = project / "out" / "profile" / "profile.json"
+        profile_path.write_text(
+            '{"_provenance": {"bootstrap_id": "bs_abc"}}'
+        )
+
+        result = find_mapping_file(profile_path, env_dir=None)
+        assert result == snapshot
+
+    def test_stem_lookup_wins_over_provenance(self, tmp_path):
+        """When a mapping snapshot matches BOTH the file stem AND the
+        bootstrap_id, the stem wins (existing behavior preserved)."""
+        project = tmp_path / "project"
+        (project / "customizations" / "mappings").mkdir(parents=True)
+        (project / "customizations" / "profiles").mkdir(parents=True)
+        by_stem = project / "customizations" / "mappings" / "bs_stem.json"
+        by_stem.write_text("{}")
+        by_id = project / "customizations" / "mappings" / "bs_id.json"
+        by_id.write_text("{}")
+        profile_path = project / "customizations" / "profiles" / "bs_stem.json"
+        profile_path.write_text(
+            '{"_provenance": {"bootstrap_id": "bs_id"}}'
+        )
+        assert find_mapping_file(profile_path, env_dir=None) == by_stem
+
 
 # ---------------------------------------------------------------------------
 # load_substituted_profile — end-to-end
