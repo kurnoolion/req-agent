@@ -55,3 +55,6 @@ environments/*.json
 *.swp
 *.swo
 .claude/scheduled_tasks.lock
+
+# COMPACT per-clone session binding (do not commit)
+.compact/
