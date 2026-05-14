@@ -167,6 +167,16 @@ Copy from `templates/` and fill in project-specific bits:
 | `docs/compact/MAP.md` | Placeholder pointing at `regen-map` | Placeholder (regenerated in step 10) |
 | `docs/compact/requirements.md` | Skeleton with FR / NFR / Deferred sections; user populates during requirements phase | Seeded from `design-inputs/` requirements-shaped files if any are present (candidate FR / NFR lines as comments under each section, never as authoritative entries). **Preserve existing IDs verbatim** if the inputs use them (e.g. `REQ-042` stays `REQ-042`); only new additions use `FR-N` / `NFR-N`. Empty skeleton otherwise. |
 | `docs/compact/structure-conventions.md` | Derived from tech-stack answer (topic 2); for common stacks (Rust, Go, Python, TypeScript) produce a first draft; for polyglot or unusual stacks, scaffold with explicit prompts | **Polyglot-aware**: one section per confirmed language (step 3a), each with its own Module definition + Visibility mapping. If only one language, single-section format. |
+| `docs/compact/strands/_archive/` | Empty directory — scaffolds the strand area so new projects are strand-ready from day 1 without needing `/adopt-strands`. `/start-strand` creates active strand folders alongside `_archive/` when work parallelizes. | Same (existing projects can run `/adopt-strands` instead to also seed strands from current STATUS.md in-flight items + stamp a cutover banner). |
+
+**Gitignore for strand binding.** Ensure `.gitignore` at the repo root has a line covering `.compact/`. If `.gitignore` already covers it, do nothing. Otherwise append:
+
+```
+# COMPACT per-clone session binding (do not commit)
+.compact/
+```
+
+If `.gitignore` doesn't exist, create it with the same block. This makes new projects strand-binding-ready without needing `/adopt-strands` later.
 
 ### 8. Seed MODULE.md skeletons (retrofit only)
 
