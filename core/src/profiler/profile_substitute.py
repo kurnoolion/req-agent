@@ -46,13 +46,16 @@ logger = logging.getLogger(__name__)
 GENERIC_PLACEHOLDERS: dict[str, str] = {
     "<DIGITS>": r"\d+",
     "<MNO>": r"[A-Z]{2,4}",
-    # ``<PLAN>`` covers plan-code tokens like LTEOTADM, lteOTADM, VoWiFi.
-    # Real corpora ship mixed-case plan codes (work-PC LTEOTADM corpus has
-    # ``lteOTADM`` headers; VOWIFI corpus has ``VoWiFi``). The full req_id
-    # pattern around this still requires the ``VZ_REQ_`` prefix and ``_\d+``
-    # suffix, so the broader char class doesn't materially increase
-    # false-positive risk on body prose.
-    "<PLAN>": r"[A-Za-z0-9_]+",
+    # ``<PLAN>`` covers plan-code tokens like LTEOTADM, lteOTADM, VoWiFi,
+    # and multi-word forms like "LTE OTADM" / "Voice WiFi". Real corpora
+    # ship all three:
+    #   - all-caps (LTEOTADM)
+    #   - CamelCase / mixed-case (VoWiFi, lteOTADM)
+    #   - space-separated multi-word
+    # The full req_id pattern around this still requires the ``VZ_REQ_``
+    # prefix and ``_\d+`` suffix, so the broader char class doesn't
+    # materially increase false-positive risk on body prose.
+    "<PLAN>": r"[A-Za-z0-9_ ]+",
     "<REL>": r"[A-Za-z0-9-]+",
 }
 
