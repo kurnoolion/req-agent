@@ -6,7 +6,7 @@ Format-aware content extraction. Each format has its own extractor (PDF via pymu
 **Public surface**
 - `BaseExtractor` (base.py) — ABC: `extract(file_path, mno="", release="", doc_type="") -> DocumentIR`
 - `PDFExtractor` (pdf_extractor.py) — text blocks with `FontInfo` (incl. strikethrough via PyMuPDF span flags bit 8), tables via pdfplumber, images; header/footer margin filtering
-- `DOCXExtractor` (docx_extractor.py) — paragraphs (with style/level + strikethrough from `Run.font.strike`), tables, embedded images
+- `DOCXExtractor` (docx_extractor.py) — paragraphs (with style/level + strikethrough from `Run.font.strike`), tables (with merged-cell metadata per D-072 — populates `ContentBlock.merged_cells` with anchor `(row, col, rowspan, colspan, text)` for every `gridSpan>1` / `vMerge` region; continuation positions in `headers`/`rows` are blanked to `""` to keep the matrix rectangular), embedded images
 - `XLSXExtractor` (xlsx_extractor.py) — per-sheet extraction via openpyxl: each non-empty worksheet emits a heading (sheet title) + a table block; cell strikethrough surfaced via `Cell.font.strike` for row-level drop semantics. Page numbers track sheet index (1-based).
 - Registry (registry.py):
   - `supported_extensions() -> set[str]`
