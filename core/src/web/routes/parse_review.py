@@ -138,31 +138,46 @@ def _build_annotated_blocks(
                     "section_title": gs.get("section_title", ""),
                 })
 
-    # Best-effort section-heading annotation from RequirementTree
+    # Section-heading annotations from RequirementTree.
+    # Preferred path: ``Requirement.source_block_idx`` (carried since the
+    # parser-side fix) lets us do an O(1) idx lookup, immune to title
+    # vs. block-text shape mismatches. Legacy tree.json from before the
+    # field was added falls back to the previous title-keyed fuzzy match.
     if tree_path.exists():
         try:
             tree_data = json.loads(tree_path.read_text(encoding="utf-8"))
-            text_to_idx: dict[str, int] = {}
-            for blk in doc.content_blocks:
-                if blk.type in (BlockType.HEADING, BlockType.PARAGRAPH) and blk.text:
-                    key = blk.text.strip()[:100]
-                    if key not in text_to_idx:
-                        text_to_idx[key] = blk.position.index
+            doc_block_idxs = {b.position.index for b in doc.content_blocks}
+            text_to_idx: dict[str, int] | None = None  # built lazily for fallback
             for req in tree_data.get("requirements", []):
                 if not req.get("section_number"):
                     continue
-                title = (req.get("title") or "").strip()
-                if not title:
+                idx = req.get("source_block_idx")
+                if idx is None:
+                    # Legacy tree.json without source_block_idx — fall
+                    # back to title-keyed lookup. Build the map once.
+                    if text_to_idx is None:
+                        text_to_idx = {}
+                        for blk in doc.content_blocks:
+                            if blk.type in (BlockType.HEADING, BlockType.PARAGRAPH) and blk.text:
+                                key = blk.text.strip()[:100]
+                                if key not in text_to_idx:
+                                    text_to_idx[key] = blk.position.index
+                    title = (req.get("title") or "").strip()
+                    if not title:
+                        continue
+                    idx = text_to_idx.get(title[:100])
+                    if idx is None:
+                        continue
+                elif idx not in doc_block_idxs:
+                    # source_block_idx points outside this doc — guard
+                    # against stale tree.json paired with a refreshed IR.
                     continue
-                key = title[:100]
-                if key in text_to_idx:
-                    idx = text_to_idx[key]
-                    if idx not in ann:
-                        ann.setdefault(idx, []).append({
-                            "type": "section_heading",
-                            "section_number": req.get("section_number", ""),
-                            "req_id": req.get("req_id") or "",
-                        })
+                if idx not in ann:
+                    ann.setdefault(idx, []).append({
+                        "type": "section_heading",
+                        "section_number": req.get("section_number", ""),
+                        "req_id": req.get("req_id") or "",
+                    })
         except Exception:
             pass
 

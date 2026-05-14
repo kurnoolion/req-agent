@@ -120,6 +120,14 @@ class Requirement:
     images: list[ImageRef] = field(default_factory=list)
     children: list[str] = field(default_factory=list)  # child req_ids
     cross_references: CrossReferences = field(default_factory=CrossReferences)
+    # ContentBlock.position.index of the heading block that opened this
+    # Requirement. ``None`` for table-anchored Requirements (no heading
+    # block) and for legacy tree.json that pre-dates this field. Web's
+    # parse_review route uses it for O(1) reverse-mapping from a
+    # Requirement to its source block, avoiding the brittle title-text
+    # fuzzy-match path that broke when the parser stripped the title
+    # differently than the IR block text carried.
+    source_block_idx: int | None = None
 
 
 @dataclass
@@ -267,6 +275,7 @@ class RequirementTree:
                     external_plans=xr.get("external_plans", []),
                     standards=standards,
                 ),
+                source_block_idx=r.get("source_block_idx"),
             ))
         ps = data.get("parse_stats", {}) or {}
         return cls(
@@ -1489,6 +1498,7 @@ class GenericStructuralParser:
                             req_id=section_req_id,
                             zone_type=self._classify_zone(section_num),
                             priority=priority,
+                            source_block_idx=block.position.index,
                         )
                         if section_req_id:
                             _record_paragraph_anchor(section_req_id)
