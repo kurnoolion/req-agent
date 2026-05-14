@@ -21,17 +21,29 @@ The name is load-bearing:
 - **Immutable decision log** — `DECISIONS.md` anchors *why* choices were made; entries are superseded, never edited.
 - **Contributors as first-class** — stakeholder interfaces (TPM, QA, domain expert, end user) are captured in `PROJECT.md` Contributors from Day 1 and drive architecture and tech-stack choices; contribution surfaces are modules, not admin-tool afterthoughts.
 
-## The seven sub-skills
+## The twelve sub-skills
+
+**Core workflow**
 
 | Skill | When to invoke |
 |---|---|
 | `session-start` | Auto at session start (via `CLAUDE.md` / `.clinerules`). Hydrates context; asks what you're working on. |
 | `project-init` | Once per project. Runs the 7-topic interview and scaffolds `docs/compact/`. `--retrofit` for existing codebases. |
 | `switch-phase <phase>` | When shifting between `requirements` / `architecture` / `development`. |
-| `close-session` | End of every session. Triages decisions, updates STATUS, proposes commit. Never auto-writes. Emits a soft `drift-check` nudge when layers were touched. |
+| `close-session` | End of every session. Triages decisions, updates STATUS (or strand journal if bound), proposes commit. Never auto-writes. Emits a soft `drift-check` nudge when layers were touched. |
 | `regen-map` | When code structure changes. Updates MODULE.md Structure sections and `MAP.md` from code. |
 | `drift-check <mode>` | When requirements, design, and implementation may have drifted apart. Modes: `requirements` / `design` / `dev-full` / `dev-module <name>` / `all`. Interactive; never auto-fixes. |
-| `doctor` | Audit the scaffold itself for internal consistency. Read-only. Auto-invoked by `close-session` every session. |
+| `doctor` | Audit scaffold + project-runtime consistency. Read-only. Auto-invoked by `close-session` every session. |
+
+**Strands — parallel work primitives**
+
+| Skill | When to invoke |
+|---|---|
+| `start-strand <name>` | Create a new strand: folder under `docs/compact/strands/<name>/` with `STRAND.md` + journal + draft decisions. Does not bind the session. |
+| `switch-strand <name>` | Bind the session to a strand (or pass `none` to unbind). `close-session` and `switch-phase` honor the binding. |
+| `list-strands` | Table of active strands (+ archived with `--include-archived`). Highlights bound strand. Read-only. |
+| `land-strand <name>` | Terminal event — promote draft decisions to canonical `DECISIONS.md`, mark `STRAND.md` landed, move to `_archive/`. Architect-driven; sequential. |
+| `adopt-strands` | One-time retrofit for an existing COMPACT project. Scaffolds `strands/` + `_archive/`, optionally seeds strands from current `STATUS.md` in-flight items. |
 
 ## Standard flow for a new project
 

@@ -5,6 +5,25 @@ description: Close a work session. Recaps work (user-authoritative), captures de
 
 Propose-don't-write throughout: every change is a diff the user approves.
 
+## Strand binding (preflight)
+
+Before step 1, read `.compact/current-strand` if it exists. If it contains a non-empty line:
+
+- Resolve the named strand at `docs/compact/strands/<name>/`. If the directory doesn't exist (binding points at nothing or at an archived strand), warn the user, clear the stale binding, and proceed with `STRAND_BOUND = false`.
+- Otherwise set `STRAND_BOUND = true` and capture `STRAND_NAME = <name>`.
+
+When `STRAND_BOUND` is **true**:
+- Step 2's session journal goes to `docs/compact/strands/<STRAND_NAME>/journal.md` (not STATUS.md).
+- Step 3's drafted decisions go to `docs/compact/strands/<STRAND_NAME>/decisions-draft.md` (not canonical DECISIONS.md).
+- The architect-only canonical files (`STATUS.md` global state, `DECISIONS.md` promotions) are not touched. They change only via direct architect edits or via `/land-strand`.
+
+When `STRAND_BOUND` is **false**: every step below operates on canonical files as before — the strand layer is invisible.
+
+Surface the binding to the user at the start:
+
+> "Strand bound: `<STRAND_NAME>` — journal + draft decisions will route there." (or)
+> "No strand bound — writes go to canonical STATUS.md / DECISIONS.md."
+
 ## Procedure
 
 ### 1. Recap
@@ -17,9 +36,29 @@ Ask:
 
 Long sessions have lossy recall — **treat the user's memory as authoritative.** Incorporate any additions before proceeding.
 
-### 2. Propose STATUS.md update
+### 2. Propose journal / STATUS update
 
-Load current `docs/compact/STATUS.md`. Draft diffs:
+**If `STRAND_BOUND`:** draft an append-only journal entry for `docs/compact/strands/<STRAND_NAME>/journal.md`. Use this template:
+
+```markdown
+## <today's YYYY-MM-DD> — <short session title (auto-gen, user can edit)>
+
+### Done this session
+- <bullet items>
+
+### In progress
+- <bullet items>
+
+### Next
+- <bullet items>
+
+### Flags
+- <only when something is unresolved or noteworthy>
+```
+
+Existing journal content above this entry is untouched — strand journals are append-only, never rewritten. Show the diff (which is purely additive). Wait for approval before writing.
+
+**If not `STRAND_BOUND`:** load current `docs/compact/STATUS.md` and draft diffs:
 
 - Completed items: move **In progress → Done** (add today's date).
 - Add new **In progress** items started mid-session.
@@ -47,9 +86,14 @@ Present candidates as a numbered list with one-line summaries. Ask the user to m
 - "Why this over the alternatives?" → **Why**
 - "What does this force on us?" → **Consequences**
 
-**Never fabricate rationale.** If the user can't answer a field, mark it `TODO` and add the item to STATUS.md Flags.
+**Never fabricate rationale.** If the user can't answer a field, mark it `TODO` and add the item to the session's Flags (strand journal or STATUS.md, per binding).
 
-Assign the next sequential `D-XXX` ID. Show the drafted entry. On approval, append to `docs/compact/DECISIONS.md`.
+**Where the drafted entry lands depends on `STRAND_BOUND`:**
+
+- **If `STRAND_BOUND`:** assign a draft ID — the next `D-DRAFT-N` within `docs/compact/strands/<STRAND_NAME>/decisions-draft.md`. Show the drafted entry. On approval, append. Do **not** touch canonical `DECISIONS.md` — promotion happens at `/land-strand` time, when the architect assigns a real `D-XXX` and the entry is approved one more time.
+- **If not `STRAND_BOUND`:** assign the next sequential canonical `D-XXX` (read `docs/compact/DECISIONS.md` for the highest existing ID, increment). Show the drafted entry. On approval, append to `docs/compact/DECISIONS.md`.
+
+The draft and canonical templates are identical apart from the ID. A draft promoted at landing time keeps its body, gets a real ID, and a `Promoted from strand: <name>` provenance footer.
 
 ### 4. Audit MODULE.md edits
 
@@ -141,6 +185,8 @@ Show the full diff once more. Ask: `commit` / `stage only` / `abort`.
 - Docs-only skill. Never modify code.
 - Never auto-log decisions without user confirmation.
 - Never invent decision rationale — ask the user or mark `TODO`.
-- Never rewrite STATUS.md wholesale — update in place.
+- Never rewrite STATUS.md or strand journals wholesale — STATUS is updated in place, journals are append-only.
 - Never silently accept curated-section changes in MODULE.md.
+- When a strand is bound, never write to canonical STATUS.md / DECISIONS.md — those are reserved for architect-only edits and `/land-strand` promotions.
+- A stale strand binding (pointing at a missing or archived strand) is recovered transparently: warn, clear `.compact/current-strand`, and continue in unbound mode. Do not abort the session over a binding hygiene issue.
 - Output should be PR-quality: a reviewer should be able to skim it.

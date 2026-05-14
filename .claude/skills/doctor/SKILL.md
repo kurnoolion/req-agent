@@ -56,8 +56,10 @@ Count directories with a `SKILL.md` under scaffold root. Cross-reference claims 
 
 - `README.md` — "A set of N skills..." statement and Skills table row count.
 - `compact/SKILL.md` — "The N sub-skills" statement and sub-skills table row count. **Sub-skill count excludes the `compact` entry-point itself** (sub-skills = total - 1).
+- `COMPACT_Overview.md` — Skills-at-a-glance table row count.
+- `COMPACT_Overview.md` — directory layout code block (inside the `.claude/skills/` subtree).
 
-- **Pass:** all sources agree (accounting for the `compact` entry-point exclusion in sub-skill count).
+- **Pass:** all four sources agree (accounting for the `compact` entry-point exclusion in sub-skill count).
 - **Fail:** show actual vs claimed per source.
 
 ### 5. Step monotonicity in multi-step skills
@@ -102,13 +104,14 @@ Ignore `/project-init --re-init` flag syntax and Claude Code built-in slash comm
 
 ### 10. Directory-layout parity
 
-Extract the set of skill names from two sources:
+Extract the set of skill names from three sources:
 
 - `README.md` Skills table (column 1).
-- Actual scaffold directory listing — every immediate child directory of scaffold root that contains a `SKILL.md`.
+- `COMPACT_Overview.md` directory layout code block (entries inside `.claude/skills/`).
+- `COMPACT_Overview.md` Skills-at-a-glance table (column 1).
 
-- **Pass:** identical set across both.
-- **Fail:** show set difference (skills in README missing from disk; directories on disk missing from README).
+- **Pass:** identical set across all three.
+- **Fail:** show set differences per source.
 
 ### 11. Step-reference resolution
 
@@ -128,8 +131,48 @@ Ignore matches inside HTML comments and inside fenced example blocks — those a
 
 `docs/compact/retrofit-snapshot.md` is produced once by `project-init --retrofit` and is archival — no scaffold skill should take an ongoing dependency on it at runtime. Grep scaffold root for `retrofit-snapshot.md`.
 
-- **Pass:** all matches live inside one of: `project-init/SKILL.md` (the file it produces), `project-init/base-prompts/00-swdev-project-customizer.md` (wires phase prompts to read it), `README.md` (documentation), `doctor/SKILL.md` (this check).
+- **Pass:** all matches live inside one of: `project-init/SKILL.md` (the file it produces), `project-init/base-prompts/00-swdev-project-customizer.md` (wires phase prompts to read it), `README.md` / `COMPACT_Overview.md` (documentation), `doctor/SKILL.md` (this check).
 - **Fail:** list `(file:line)` for unexpected references — e.g. `session-start`, `close-session`, or `regen-map` naming retrofit-snapshot as a load target. The retrofit path has then bled into steady-state operation.
+
+### 13. Strand layout & frontmatter health (project context only)
+
+If scaffold root does **not** resolve to a `<project>/.claude/skills/` layout, **skip** — doctor is running in source-repo context where there is no project runtime state to audit.
+
+If `docs/compact/strands/` doesn't exist, **skip** — the project hasn't adopted strands.
+
+Otherwise, for each subdirectory under `docs/compact/strands/` (excluding `_archive`):
+
+- Verify `STRAND.md`, `journal.md`, `decisions-draft.md` all exist.
+- Parse `STRAND.md` for the required fields: `Status`, `Opened`, `Assignees`, `Target modules`. (`Landed`, `Active phase`, `Summary` are also expected but may be blank — don't fail on those.)
+- Verify `Status` is one of: `planning`, `in-flight`, `blocked`, `landed`, `abandoned`. Active (non-`_archive`) strands should usually be `planning`, `in-flight`, or `blocked` — surface a note if you find an active dir with status `landed` / `abandoned` (it should have moved to `_archive/`).
+
+- **Pass:** every active strand has all three files and a parseable STRAND.md.
+- **Fail:** list `(strand-name, missing-files | missing-fields | bad-status)` per problem.
+
+### 14. Strand binding hygiene (project context only)
+
+Skip if running in source-repo context.
+
+If `.compact/current-strand` exists, read it.
+
+- If empty or whitespace-only: pass (an empty binding file is harmless — equivalent to unbound).
+- If points at `docs/compact/strands/<name>/` and that exists: pass.
+- If points at `docs/compact/strands/_archive/<name>/` only: fail — surface "binding points at archived strand `<name>`; run `/switch-strand none` or bind to an active one".
+- If points at a non-existent name: fail — surface "binding points at missing strand `<name>`".
+
+### 15. Strand activity & draft summary (project context only, informational)
+
+Skip if running in source-repo context, or if no active strands exist.
+
+For each active strand, compute:
+- Days since `journal.md` last modified (or since strand `Opened` date if journal is empty).
+- Number of entries in `decisions-draft.md` (count of `### D-DRAFT-` headings).
+
+Report as informational (these are **never** fails — they are signals, not invariants):
+- **Stale strands:** any with >30 days since last activity. List `(strand-name, last-activity-date)`.
+- **Pending promotions:** any with ≥1 draft decision. List `(strand-name, draft-count)` — these are decisions that will be promoted to canonical `DECISIONS.md` at `/land-strand` time.
+
+A summary line: `Strand activity: <N> active, <stale> stale (>30d), <pending> with draft decisions.` Always emit this line when the check runs, even if all counts are zero.
 
 ## Output format
 
@@ -143,10 +186,13 @@ Root: <resolved path>
     Topic 3 label mismatch:
       project-init/SKILL.md:40            → "Stakeholder map & contribution surfaces"
       00-swdev-project-customizer.md:17   → "Team & contribution structure"  (stale)
-✓ 4. Skill inventory parity — 8 skills, 7 sub-skills, all claims consistent
+✓ 4. Skill inventory parity — 13 skills, 12 sub-skills, all claims consistent
 ...
+✓ 13. Strand layout & frontmatter health — 2 active strands, all healthy
+✓ 14. Strand binding hygiene — bound to `llm-upgrade` (active)
+ℹ 15. Strand activity: 2 active, 0 stale (>30d), 1 with draft decisions
 
-Summary: 10 passed, 1 failed. Review failures above.
+Summary: 14 passed, 1 failed, 1 informational. Review failures above.
 ```
 
 Exit status conceptually: failures present → user must address (or defer via `STATUS.md` Flags) before committing scaffold changes.

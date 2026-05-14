@@ -8,13 +8,14 @@ The name captures the core idea: memory-as-contract (a *compact* between human a
 
 ## What this is
 
-A set of 8 skills plus templates that, together, give a team:
+A set of 13 skills plus templates that, together, give a team:
 
 - **A shared ritual** — session-start to hydrate context, close-session to persist progress and decisions.
 - **Phase discipline** — explicit Requirements / Architecture / Development lenses you switch between deliberately.
 - **An auditable code map** — `MODULE.md` files co-located with code, plus a regenerated `MAP.md` so AI-generated code isn't a black box.
 - **A decision log** — ADR-style `DECISIONS.md` where non-obvious choices are anchored; linked from `MODULE.md` for grounded "why" queries.
 - **Drift detection across layers** — `drift-check` surfaces mismatches between requirements, design, and implementation. Interactive resolution; no auto-fix.
+- **Parallel work via strands** — `start-strand` / `switch-strand` / `land-strand` create per-work-item folders that isolate journals and draft decisions so multiple devs can run sessions in parallel without colliding on STATUS.md or DECISIONS.md.
 
 Designed to work identically across Claude Code (Anthropic) and Cline (any model, including team-internal LLMs). Both tools read `.claude/skills/` and share the `SKILL.md` format.
 
@@ -55,7 +56,12 @@ Start a new Claude Code or Cline session. `session-start` will detect the uninit
 | `regen-map` | Regenerate `MODULE.md` Structure sections + rebuild `MAP.md` from code. Phase-aware orphan detection. Self-checking (reverts any curated-section edit). |
 | `project-init` | Run the 7-topic interview, customize 3 phase prompts from base prompts, scaffold `docs/compact/`. `--re-init` regenerates phase prompts without touching state files. `--retrofit` adds a codebase-scan preflight for existing projects: detects languages, seeds MODULE.md skeletons, writes a polyglot-aware `structure-conventions.md`, and produces an initial `MAP.md`. |
 | `drift-check` | Detect and resolve drift across the R/D/I layers: requirements (`requirements.md`) vs design (`MODULE.md` + architecture ADRs) vs implementation (code). Four modes (`requirements` / `design` / `dev-full` / `dev-module`) plus `all`. Interactive — user decides direction per drift. Never auto-fixes, never auto-cascades. Deferred items surfaced separately, not flagged. |
-| `doctor` | Audit scaffold internal consistency: schema authorities (generative from README), stale refs, skill inventory, step monotonicity + step-reference resolution, tool-neutral framing, path canonicalization, cross-file references. Read-only. Auto-invoked by `close-session` every session. |
+| `doctor` | Audit scaffold internal consistency: schema authorities (generative from README), stale refs, skill inventory, step monotonicity + step-reference resolution, tool-neutral framing, path canonicalization, cross-file references. Also audits project-runtime strand state when adopted. Read-only. Auto-invoked by `close-session` every session. |
+| `start-strand` | Scaffold a new strand at `docs/compact/strands/<name>/` with `STRAND.md` + `journal.md` + `decisions-draft.md`. Interviews for summary / target modules / assignees. Does not bind the session — call `/switch-strand` after. |
+| `switch-strand` | Bind the current session to a strand. Writes `.compact/current-strand` (gitignored, per-clone). `close-session` and `switch-phase` honor the binding. Pass `none` to unbind. |
+| `list-strands` | Show active strands as a table — status, assignees, target modules, last activity. Highlights the currently-bound strand. `--include-archived` adds landed/abandoned strands. Read-only. |
+| `land-strand` | Architect-driven terminal event: promotes each entry in `decisions-draft.md` to canonical `DECISIONS.md` with the next sequential `D-XXX`, marks `STRAND.md` landed, moves the folder to `strands/_archive/`. Single-writer — coordinate across clones. |
+| `adopt-strands` | One-time retrofit for an existing COMPACT project. Scaffolds `strands/` + `_archive/`, seeds 0-N strands from `STATUS.md` in-flight items, stamps a cutover banner. |
 
 ## Artifacts produced by `project-init`
 
@@ -112,6 +118,30 @@ Each module has a `MODULE.md` co-located with its code. Curated sections are han
 
 **Deferred** <!-- optional; planned-but-unbuilt behaviors for this module. Written by drift-check or hand-added. -->
 ```
+
+## Strands — parallel work without collision
+
+When multiple team members or multiple in-flight work items run on the same repo, the *journal* surface (STATUS.md + DECISIONS.md as it accumulates draft entries mid-flight) becomes a collision hotspot. Strands solve that by giving each chunk of work its own folder of in-flight state.
+
+```
+docs/compact/strands/
+├── llm-upgrade/
+│   ├── STRAND.md                    # title, status, assignees, target modules, summary
+│   ├── journal.md                   # append-only per-session log
+│   └── decisions-draft.md           # draft decisions awaiting promotion at land time
+├── pipeline-refactor/
+│   └── ...
+└── _archive/
+    └── <previously-landed strands>/
+```
+
+**Lifecycle.** `/start-strand <name>` once → many `/switch-strand <name>` + `/switch-phase` + `/close-session` (writes go to the strand's journal + drafts) → `/land-strand <name>` once when work ships (promotes drafts to canonical `DECISIONS.md` with sequential `D-XXX`, archives the folder).
+
+**Per-clone binding.** `/switch-strand` writes `.compact/current-strand` (gitignored). Each clone has its own binding — two teammates can be in different strands at the same time on the same repo.
+
+**What stays canonical.** `MODULE.md` curated sections, `MAP.md`, `DECISIONS.md` (promoted entries), and architect-owned `STATUS.md` updates. Strands intercept the *journal* surface only; the design layer is unchanged.
+
+**Retrofit.** Existing COMPACT projects adopt strands with a single one-shot `/adopt-strands` run that scaffolds the directory, optionally seeds 0-N strands from current `STATUS.md` in-flight items, and stamps a cutover banner.
 
 ## Design principles
 
