@@ -39,7 +39,18 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _load_profile(env_dir: Path):
-    from core.src.profiler.profile_schema import DocumentProfile
+    """Load the profile through the same substitution chain the parse
+    stage uses (D-062), so placeholder regex fields like
+    ``requirement_id.pattern = "<MNO0>_REQ_<PLAN>_\\d+"`` are resolved
+    to their real values before parse_debug builds compiled regexes.
+
+    Without this, parse_debug would build ``_req_id_anchored_re`` from
+    the literal-placeholder pattern, ``_heading_title_text``'s last-run
+    stripping would never match the real-value runs in the IR, and the
+    label-path candidate output would show spurious 'miss' verdicts
+    that don't reflect what the real parser sees.
+    """
+    from core.src.profiler.profile_substitute import load_substituted_profile
 
     candidates = [
         env_dir / "corrections" / "profile.json",
@@ -47,7 +58,7 @@ def _load_profile(env_dir: Path):
     ]
     for p in candidates:
         if p.exists():
-            return DocumentProfile.load_json(p), p
+            return load_substituted_profile(p, env_dir=env_dir), p
     raise FileNotFoundError(
         f"No profile at {candidates[0]} or {candidates[1]}. "
         "Run the profile stage first."
