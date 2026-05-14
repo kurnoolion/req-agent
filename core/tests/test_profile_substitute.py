@@ -255,6 +255,43 @@ class TestFindMappingFile:
         )
         assert find_mapping_file(profile_path, env_dir=None) == by_stem
 
+    def test_falls_back_to_module_self_root_when_walker_dead_ends(
+        self, tmp_path, monkeypatch
+    ):
+        """When the profile lives outside the project tree (the
+        pipeline's standard case: profile copied to
+        ``<env_dir>/out/profile/profile.json`` with env_dir typically
+        outside the repo), the parent-walk dead-ends without finding
+        ``customizations/``. The module's own location (``__file__``
+        path) is the deterministic fallback for the project root."""
+        # Fake repo at tmp_path/proj/. Place a 4-deep file mimicking
+        # core/src/profiler/profile_substitute.py.
+        proj = tmp_path / "proj"
+        (proj / "customizations" / "mappings").mkdir(parents=True)
+        fake_module_dir = proj / "core" / "src" / "profiler"
+        fake_module_dir.mkdir(parents=True)
+        fake_module = fake_module_dir / "profile_substitute.py"
+        fake_module.write_text("")  # acts as the __file__
+
+        snapshot = proj / "customizations" / "mappings" / "bs_xyz.json"
+        snapshot.write_text("{}")
+
+        # Profile lives OUTSIDE the project tree.
+        env_dir = tmp_path / "env"
+        (env_dir / "out" / "profile").mkdir(parents=True)
+        profile_path = env_dir / "out" / "profile" / "profile.json"
+        profile_path.write_text(
+            '{"_provenance": {"bootstrap_id": "bs_xyz"}}'
+        )
+
+        # Make _project_root_from_profile's `Path(__file__).parents[3]`
+        # resolve to our fake project root.
+        import core.src.profiler.profile_substitute as ps
+        monkeypatch.setattr(ps, "__file__", str(fake_module))
+
+        result = find_mapping_file(profile_path, env_dir=None)
+        assert result == snapshot
+
 
 # ---------------------------------------------------------------------------
 # load_substituted_profile — end-to-end

@@ -139,15 +139,35 @@ def substitute_placeholders(
 # ---------------------------------------------------------------------------
 
 def _project_root_from_profile(profile_path: Path) -> Path | None:
-    """Walk up from the profile path until ``customizations/`` is found.
+    """Resolve the project root that owns ``customizations/`` for *profile_path*.
 
-    Returns the parent of ``customizations/`` (the project root) or None.
+    Two-step lookup:
+
+    1. **Walk up from the profile** until a directory containing
+       ``customizations/`` is found. Works when the profile lives inside
+       the project tree (e.g. ``customizations/profiles/bs_*.json``
+       directly, or a copy somewhere under the repo).
+    2. **Fall back to this module's own location.** ``profile_substitute.py``
+       lives at ``<repo>/core/src/profiler/profile_substitute.py``, so
+       ``Path(__file__).parents[3]`` is the repo root. This catches the
+       common case where the pipeline has copied the profile to
+       ``<env_dir>/out/profile/profile.json`` and ``env_dir`` is
+       *outside* the repo tree — the walker would otherwise dead-end at
+       ``env_dir``'s parent without finding ``customizations/``.
+
+    Returns the project-root Path or None.
     """
     p = profile_path.resolve().parent
     while p != p.parent:
         if (p / "customizations").is_dir():
             return p
         p = p.parent
+
+    # Walker dead-ended. Try this file's own location.
+    self_root = Path(__file__).resolve().parents[3]
+    if (self_root / "customizations").is_dir():
+        return self_root
+
     return None
 
 
