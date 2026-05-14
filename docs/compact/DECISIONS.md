@@ -2848,3 +2848,33 @@ Options considered: (a) preserve the original filename when copying (e.g. `out/p
 - The `profile` stage still copies the explicit profile into `out/profile/profile.json` so downstream stages find it where they expect — no special-casing in the parse stage.
 - Stats report `source: "explicit --profile"` (vs `"correction"` or `"profiler"`) for transparency.
 - No tests added — covered by existing run_cli integration but the path is exercised manually.
+
+## D-077: `_project_root_from_profile` falls back to module self-root when parent-walker dead-ends
+**Status**: Active · **Date**: 2026-05-15.
+**Decision**: When `_project_root_from_profile` cannot locate a `customizations/`-bearing directory by walking up from the profile's parent, it falls back to `Path(__file__).resolve().parents[3]`. The fallback uses the running code's own location — `profile_substitute.py` lives at `<repo>/core/src/profiler/profile_substitute.py`, so `parents[3]` is the repo root. If the fallback root also lacks a `customizations/` directory, the function returns None as before.
+**Why**: D-075 added the `_provenance.bootstrap_id` fallback for `find_mapping_file`, but both lookup mechanisms require a project root first. The parent-walker only finds one when the profile lives **inside** the project tree. The pipeline's standard layout puts the active profile at `<env_dir>/out/profile/profile.json`, and `env_dir` is per-environment runtime state (per D-022) — commonly outside the repo tree. When that happens, the walker traverses `<env_dir>/out/profile/` → `<env_dir>/out/` → `<env_dir>/` → typically a non-repo parent → root, never finding `customizations/`. Mapping lookup silently returns None. Specific placeholders like `<MNO0>` stay literal in the substituted profile. Downstream regex tests (notably `_req_id_anchored_re` inside `_heading_title_text`) can't match the real-value runs in the IR. Symptom: heading "Revision History `<MNO0>_REQ_fooBar_12345`" with `anchor=last_run` failed run-stripping, so the revhist regex's `$` anchor missed on the un-stripped title, so the heading was misclassified as SECTION_HEADING and the following revhist table was never dropped. Same SECTION_HEADING leak D-075 was supposed to close.
+
+Options considered: (a) require callers to pass an explicit `project_root` argument — invasive, every call site needs updating; (b) walk up from the *current working directory* instead — flaky depending on where the CLI is invoked; (c) use a `NORA_PROJECT_ROOT` env var as override — adds configuration surface, easy to forget on the work PC; (d) **chosen**: derive from the running module's own file path. The running code unambiguously knows where it lives inside the repo, and the path math is stable: a project with the standard `core/src/<module>/<file>.py` layout always has `parents[3]` = repo root.
+**Consequences**:
+- `find_mapping_file`'s discovery chain now resolves reliably regardless of the user's `env_dir` placement.
+- Hard dependency on the file's own layout — if `profile_substitute.py` is ever moved (e.g. `core/src/profiler/` → `src/profiler/`), `parents[3]` must change too.
+- Defensive: when the walker DOES find a root, that root wins (no behaviour change for in-tree profiles).
+- 1 new test (`test_falls_back_to_module_self_root_when_walker_dead_ends`) uses `monkeypatch.setattr(ps, "__file__", ...)` to simulate the env-dir-outside-repo layout in tmp_path.
+
+## D-078: Generic `<PLAN>` placeholder widened to `[A-Za-z0-9_ ]+` to cover mixed-case + multi-word plan codes
+**Status**: Active · **Date**: 2026-05-15.
+**Decision**: The `<PLAN>` entry in `GENERIC_PLACEHOLDERS` (D-062's generic-substitution table) changes from `[A-Z0-9_]+` to `[A-Za-z0-9_ ]+`. Specific `<PLAN0>`, `<PLAN1>` etc. continue to substitute their mapped values verbatim (`re.escape`-protected) per D-062.
+**Why**: Real corpora ship plan codes in three orthogonal shapes that the previous default rejected:
+- All-caps (`FOOBAR`) — handled by the old class.
+- Mixed-case / CamelCase (`fooBar`) — rejected; the heading run text didn't match the substituted req_id pattern, so `_heading_title_text` left the run un-stripped and downstream label matching missed.
+- Multi-word with embedded space (`foo Bar`) — same failure mode; the space wasn't in the char class at all.
+
+Closes the 2026-05-09 STATUS flag (`D-062 generic placeholder regex defaults are biased toward all-caps plan codes`) and the matching Next-list entry (`Cross-MNO <PLAN> regex breadth`). The flag captured the dilemma — broaden (looser, more matches) vs. keep strict (tighter, more misses). Real-corpus diagnostic this session showed the choice empirically: mixed-case and spaced plan codes were producing the SECTION_HEADING-leak cascade and were the dominant remaining cause of missed revhist detections after the 2026-05-14 anchor/method/bootstrap_id fixes.
+
+Options considered: (a) keep strict, document the limitation, require corpus owners to override `<PLAN>` per-profile — every new corpus pays a setup tax. (b) Widen char class without space; require space-bearing codes to use an underscored form — fails when the source docs ship the original spelling. (c) **Chosen**: widen to `[A-Za-z0-9_ ]+`. The risk is greedier matching in body prose where multiple req_ids share a line — but the surrounding pattern (`<MNO>_REQ_<PLAN>_\d+`) still anchors with the prefix + `_\d+` suffix, so false positives remain bounded.
+**Consequences**:
+- D-062's generic substitution table changes shape. Every profile that uses `<PLAN>` (specifically: profiles without a more constrained per-corpus override) inherits the wider regex.
+- Test assertions pinning the old `[A-Z0-9_]+` form were updated en masse (5 sites).
+- Regression test `test_plan_generic_matches_mixed_case_and_spaced_plan_codes` covers all three shapes (all-caps, mixed-case, multi-word).
+- Body-prose false-positive risk increases marginally but is bounded by the surrounding pattern anchors. No reports of false positives in audit data so far.
+- Corpora that want stricter matching can override `<PLAN>` to `[A-Z0-9_]+` (or any more constrained class) in their per-corpus profile — generic substitution is the *default*, not a forced choice.
