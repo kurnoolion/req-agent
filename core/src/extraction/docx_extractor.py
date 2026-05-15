@@ -99,6 +99,20 @@ class DOCXExtractor(BaseExtractor):
                 block = self._table_block(tbl, page)
                 if block is not None:
                     all_blocks.append(block)
+                # Walk for tables nested inside cells. Word docs commonly
+                # use an outer 1×1 wrapper around a real content table
+                # (glossary, etc.); the wrapper's `cell.text` only sees
+                # paragraph text, so the nested table would otherwise be
+                # silently lost. Recurse via `cell.tables`; emit each
+                # nested table as its own TABLE block in document order
+                # (parent first, then children). The recursion runs even
+                # when the outer block was dropped — a pure layout
+                # wrapper is empty by intent and the nested content is
+                # still the real signal.
+                for nested in self._iter_nested_tables(tbl):
+                    nested_block = self._table_block(nested, page)
+                    if nested_block is not None:
+                        all_blocks.append(nested_block)
 
         # Assign sequential indices
         for i, b in enumerate(all_blocks):
@@ -380,6 +394,25 @@ class DOCXExtractor(BaseExtractor):
         if whole_struck:
             block.font_info = FontInfo(size=0.0, strikethrough=True)
         return block
+
+    def _iter_nested_tables(self, tbl: DocxTable):
+        """Yield every table nested inside *tbl*'s cells, recursing for
+        arbitrary depth. Dedupes merged regions via ``_tc`` identity so
+        a horizontally-merged cell isn't visited per-column.
+
+        Order: depth-first, document order within each cell — matches
+        the order a reader would encounter the nested content.
+        """
+        seen_tcs: set[int] = set()
+        for row in tbl.rows:
+            for cell in row.cells:
+                tc_id = id(cell._tc)
+                if tc_id in seen_tcs:
+                    continue
+                seen_tcs.add(tc_id)
+                for inner in cell.tables:
+                    yield inner
+                    yield from self._iter_nested_tables(inner)
 
     @staticmethod
     def _cell_runs(cell) -> list[TextRun]:

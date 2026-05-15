@@ -257,6 +257,87 @@ def test_empty_table_still_dropped(tmp_path: Path):
     assert _tables(ir) == []
 
 
+def test_nested_glossary_table_inside_wrapper_emitted_separately(
+    tmp_path: Path,
+):
+    """Real corpus pattern: an outer 1×1 wrapper table whose single
+    cell contains both a nested 2-column glossary table AND a trailing
+    paragraph. Before the nested walk landed, the nested table was
+    invisible — `cell.text` returns only paragraph text, so the
+    acronym/definition rows never reached the IR. The parser then
+    matched the glossary section by title but found no entries.
+
+    After the fix: two TABLE blocks land in the IR — outer wrapper
+    carries the trailing paragraph text (its only readable
+    `cell.text` content), nested carries the actual headers + rows."""
+    doc = Document()
+    doc.add_paragraph("1.1 Glossary")
+    outer = doc.add_table(rows=1, cols=1)
+    outer.style = "Table Grid"
+    cell = outer.rows[0].cells[0]
+    # Nested glossary table at the top of the cell.
+    nested = cell.add_table(rows=3, cols=2)
+    nested.style = "Table Grid"
+    nested.rows[0].cells[0].text = "Acronym/Term"
+    nested.rows[0].cells[1].text = "Definition"
+    nested.rows[1].cells[0].text = "ETWS"
+    nested.rows[1].cells[1].text = "Earthquake and Tsunami Warning System"
+    nested.rows[2].cells[0].text = "APN"
+    nested.rows[2].cells[1].text = "Access Point Name"
+    # Trailing paragraph in the same cell, below the nested table.
+    cell.add_paragraph("Trailing description under the glossary table.")
+
+    p = tmp_path / "nested.docx"
+    doc.save(p)
+    ir = _extract(p)
+    tables = _tables(ir)
+    assert len(tables) == 2
+
+    # Outer wrapper sees only the trailing paragraph in `cell.text`.
+    outer_block = tables[0]
+    assert outer_block.headers == [
+        "Trailing description under the glossary table.",
+    ]
+
+    # Nested glossary table carries the real content.
+    nested_block = tables[1]
+    assert nested_block.headers == ["Acronym/Term", "Definition"]
+    assert nested_block.rows == [
+        ["ETWS", "Earthquake and Tsunami Warning System"],
+        ["APN", "Access Point Name"],
+    ]
+
+
+def test_nested_table_emitted_even_when_outer_is_empty_wrapper(
+    tmp_path: Path,
+):
+    """When the outer 1×1 wrapper is a pure layout container — no
+    surrounding text in the cell, only a nested table — the wrapper
+    block itself is correctly dropped by the empty-table filter, but
+    the nested table must still survive."""
+    doc = Document()
+    outer = doc.add_table(rows=1, cols=1)
+    outer.style = "Table Grid"
+    cell = outer.rows[0].cells[0]
+    # The empty paragraph that python-docx auto-inserts in a new cell
+    # has no text — outer.cell.text is empty.
+    nested = cell.add_table(rows=2, cols=2)
+    nested.style = "Table Grid"
+    nested.rows[0].cells[0].text = "Term"
+    nested.rows[0].cells[1].text = "Definition"
+    nested.rows[1].cells[0].text = "RAT"
+    nested.rows[1].cells[1].text = "Radio Access Technology"
+
+    p = tmp_path / "wrapper_only.docx"
+    doc.save(p)
+    ir = _extract(p)
+    tables = _tables(ir)
+    # Outer wrapper dropped (empty); nested survives.
+    assert len(tables) == 1
+    assert tables[0].headers == ["Term", "Definition"]
+    assert tables[0].rows == [["RAT", "Radio Access Technology"]]
+
+
 def test_sparse_table_with_one_content_cell_preserved(tmp_path: Path):
     """1×N table where only one cell has content — also was dropped by
     the prior filter. Now survives so the parser sees the content."""
