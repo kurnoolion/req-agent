@@ -74,6 +74,57 @@ def _canonicalize_req_id(rid: str) -> str:
     return _REQ_ID_WHITESPACE_RE.sub("_", rid).strip("_")
 
 
+# Glossary-label density gate. The legacy `definitions_section_pattern`
+# (default `(?i)acronym|definition|glossary`) is a substring match — it
+# fires on any title that mentions one of those words ("Section 2.3
+# Acronyms list and notes" → false positive). To suppress these, we
+# require that ≥75% of a candidate title's *meaningful* tokens belong
+# to a narrow keyword set. Stopwords ("and", "the", etc.) and trailing
+# req_ids are stripped before counting so connectives don't dilute the
+# signal. Used by ``StructuralParser._extract_definitions`` as a gate
+# on regex matches; also imported by ``parse_debug`` for diagnostics.
+_GLOSSARY_LABEL_KEYWORDS = frozenset({
+    "glossary",
+    "definition", "definitions",
+    "acronym", "acronyms",
+    "abbreviation", "abbreviations",
+    "term", "terms",
+})
+_GLOSSARY_LABEL_STOPWORDS = frozenset({
+    "and", "or", "the", "with", "for", "of", "a", "an",
+})
+_GLOSSARY_LABEL_TOKEN_SPLIT_RE = re.compile(r"[\s/,&|;()]+")
+_GLOSSARY_LABEL_MIN_DENSITY = 0.75
+
+
+def _glossary_label_density(
+    text: str, req_id_re: re.Pattern | None,
+) -> tuple[int, int, float, list[str]]:
+    """Return ``(keyword_hits, meaningful_token_count, density, hit_tokens)``
+    for *text*.
+
+    Strips any req_id-shaped substring before tokenizing (real corpus
+    titles often carry a trailing ``VZ_REQ_..._\\d+`` that would inflate
+    the denominator). Splits on whitespace + common separators
+    (``/``, ``,``, ``&``, ``|``, ``;``, ``()``). Drops empty tokens and
+    stopwords. Density is 0.0 when no meaningful tokens remain.
+    """
+    if req_id_re is not None:
+        text = req_id_re.sub(" ", text or "")
+    tokens = _GLOSSARY_LABEL_TOKEN_SPLIT_RE.split(text or "")
+    meaningful = [
+        t for t in tokens
+        if t and t.lower() not in _GLOSSARY_LABEL_STOPWORDS
+    ]
+    if not meaningful:
+        return 0, 0, 0.0, []
+    hit_tokens = [t for t in meaningful if t.lower() in _GLOSSARY_LABEL_KEYWORDS]
+    return (
+        len(hit_tokens), len(meaningful),
+        len(hit_tokens) / len(meaningful), hit_tokens,
+    )
+
+
 # ── Output data structures ──────────────────────────────────────────
 
 
@@ -2166,9 +2217,26 @@ class GenericStructuralParser:
         target: Requirement | None = None
         if self._definitions_section_re is not None:
             for s in sections:
-                if s.title and self._definitions_section_re.search(s.title):
-                    target = s
-                    break
+                if not (s.title and self._definitions_section_re.search(s.title)):
+                    continue
+                # Density gate: the regex is a permissive substring
+                # match, so titles like "Section 2.3 Acronyms list and
+                # notes" slip through. Require that ≥75% of the title's
+                # meaningful tokens are glossary keywords (req_id and
+                # stopwords excluded) before accepting the match.
+                hits, total, density, _ = _glossary_label_density(
+                    s.title, self._req_id_re,
+                )
+                if total == 0 or density < _GLOSSARY_LABEL_MIN_DENSITY:
+                    logger.info(
+                        "definitions: regex matched section=%r but rejected by "
+                        "density gate (hits=%d/total=%d, density=%.2f < %.2f)",
+                        s.title, hits, total, density,
+                        _GLOSSARY_LABEL_MIN_DENSITY,
+                    )
+                    continue
+                target = s
+                break
 
         # Table-header fallback when no section title matched (bare-table
         # glossary, no introducing heading). Walk every section's tables

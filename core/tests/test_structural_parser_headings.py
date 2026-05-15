@@ -931,6 +931,58 @@ def test_definitions_first_occurrence_wins():
     }
 
 
+def test_definitions_section_re_match_rejected_by_density_gate():
+    """The default `definitions_section_pattern` is a permissive substring
+    match (matches any title containing acronym/definition/glossary). A
+    section like "2.3 Acronyms list and notes" matches the regex but is
+    NOT a glossary section — the keyword density (1 keyword / 5
+    meaningful tokens = 20%) is well below the 75% threshold. The
+    density gate must reject it so the parser doesn't extract spurious
+    'definitions' from the body of an unrelated section."""
+    profile = _profile()
+    body_table = ContentBlock(
+        type=BlockType.TABLE,
+        position=Position(page=1, index=2),
+        headers=["Column A", "Column B"],
+        rows=[
+            ["foo", "some unrelated value"],
+            ["bar", "another unrelated value"],
+        ],
+        font_info=FontInfo(size=11.0),
+    )
+    blocks = [
+        _block(0, "2 Some Chapter"),
+        _block(1, "2.3 Acronyms list and notes"),  # matches regex; fails density
+        body_table,
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.definitions_map == {}
+    assert tree.definitions_section_number == ""
+    assert tree.parse_stats.defs_extracted == 0
+
+
+def test_definitions_density_gate_strips_req_id_before_counting():
+    """Real corpus titles often carry a trailing req_id token (e.g.
+    'Glossary VZ_REQ_fooBar_12345'). The density gate must strip
+    req_ids before tokenizing so they don't dilute the denominator —
+    otherwise a clearly-glossary title would fail the 75% threshold
+    (1/2 = 50%)."""
+    # Profile with req_id pattern set so _req_id_anchored_re is non-None.
+    profile = _profile()
+    profile.requirement_id.pattern = r"\bVZ_REQ_[A-Za-z0-9_]+_\d+\b"
+    body = "ETWS - Earthquake and Tsunami Warning System"
+    blocks = [
+        _block(0, "1 Top"),
+        _block(1, "1.1 Glossary VZ_REQ_fooBar_12345"),
+        _block(2, body),
+    ]
+    tree = GenericStructuralParser(profile).parse(_doc(blocks))
+    assert tree.definitions_map == {
+        "ETWS": "Earthquake and Tsunami Warning System",
+    }
+    assert tree.definitions_section_number == "1.1"
+
+
 def test_definitions_extracted_from_table_anchored_glossary():
     """OA-corpus convention: the glossary section has a brief intro
     paragraph and the actual term/expansion pairs live in 2-col tables

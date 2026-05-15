@@ -201,35 +201,18 @@ def cmd_revhist(args: argparse.Namespace) -> int:
 # glossary subcommand
 # ---------------------------------------------------------------------------
 
-# Proposed defaults for the to-be-built ``GlossaryDetection`` profile
-# field. Hardcoded here so parse_debug can preview the scorer's
-# behaviour against a real corpus before the profile schema lands.
-# When ``GlossaryDetection`` is built, these will move to the schema
-# as field defaults and this block deletes.
-
-# Narrow keyword set — these are the high-signal label tokens used in
-# real corpora: "Glossary", "Acronyms/Definitions", "Acronyms,
-# Abbreviations & Definitions", "Acronym/Term", etc. Lowercased for
-# case-insensitive comparison.
-_GLOSSARY_KEYWORDS = {
-    "glossary",
-    "definition", "definitions",
-    "acronym", "acronyms",
-    "abbreviation", "abbreviations",
-    "term", "terms",
-}
-
-# Stopwords dropped from the meaningful-token count so titles like
-# "Acronyms And Definitions" or "Definitions Of Terms" score by their
-# substantive content, not their connectives.
-_GLOSSARY_STOPWORDS = {
-    "and", "or", "the", "with", "for", "of", "a", "an",
-}
-
-# Token-split pattern: whitespace + common separators ('/', ',', '&',
-# '|', ';', parentheses, hyphens-with-spaces). Hyphens INSIDE a word
-# (e.g. "well-known") aren't split — only ``\s|/|,|&|\|;|()`` are.
-_GLOSSARY_TOKEN_SPLIT_RE = re.compile(r"[\s/,&|;()]+")
+# The density gate (keywords + stopwords + token split + helper) lives
+# in ``structural_parser`` so the parser and this diagnostic share one
+# implementation. The legacy gate threshold lives there too. Keep the
+# parse_debug-local helpers (col-0 shape, prose heuristic, position
+# scoring) here — they're preview-only scoring signals that haven't
+# landed in the parser yet.
+from core.src.parser.structural_parser import (
+    _GLOSSARY_LABEL_KEYWORDS as _GLOSSARY_KEYWORDS,
+    _GLOSSARY_LABEL_STOPWORDS as _GLOSSARY_STOPWORDS,
+    _GLOSSARY_LABEL_MIN_DENSITY,
+    _glossary_label_density as _glossary_density,
+)
 
 # Col-0 shape: short uppercase / mixed-case acronym tokens. Bounded
 # length so prose doesn't slip in.
@@ -240,40 +223,6 @@ _GLOSSARY_COL0_ACRONYM_RE = re.compile(r"^[A-Z][A-Za-z0-9/_-]{1,15}$")
 def _looks_like_prose(text: str) -> bool:
     s = (text or "").strip()
     return len(s) > 8 and any(c.isspace() for c in s)
-
-
-def _glossary_density(
-    text: str, req_id_re: re.Pattern | None,
-) -> tuple[int, int, float, list[str]]:
-    """Compute the glossary-label density on *text*.
-
-    Returns ``(keyword_hits, meaningful_token_count, density, hit_tokens)``.
-
-    Steps:
-    1. Strip any req_id-shaped substring (per the substituted
-       ``requirement_id.pattern``). Real corpus titles often carry a
-       trailing ``VZ_REQ_..._\\d+`` token that would otherwise inflate
-       the denominator.
-    2. Split on whitespace + common separators (``/``, ``,``, ``&``,
-       ``|``, ``;``, ``()``).
-    3. Filter out empty tokens AND stopwords (``and``, ``or``, ``the``,
-       ``with``, ``for``, ``of``, ``a``, ``an``).
-    4. Count case-insensitive matches against the narrow keyword set.
-
-    Returns density 0.0 when no meaningful tokens remain (empty title /
-    title made entirely of req_id + separators).
-    """
-    if req_id_re is not None:
-        text = req_id_re.sub(" ", text or "")
-    tokens = _GLOSSARY_TOKEN_SPLIT_RE.split(text or "")
-    meaningful = [
-        t for t in tokens
-        if t and t.lower() not in _GLOSSARY_STOPWORDS
-    ]
-    if not meaningful:
-        return 0, 0, 0.0, []
-    hit_tokens = [t for t in meaningful if t.lower() in _GLOSSARY_KEYWORDS]
-    return len(hit_tokens), len(meaningful), len(hit_tokens) / len(meaningful), hit_tokens
 
 
 def _glossary_position_score(frac: float) -> float:
@@ -308,7 +257,9 @@ def cmd_glossary(args: argparse.Namespace) -> int:
           f"{', '.join(sorted(_GLOSSARY_KEYWORDS))}")
     print(f"  stopwords ({len(_GLOSSARY_STOPWORDS)}): "
           f"{', '.join(sorted(_GLOSSARY_STOPWORDS))}")
-    print(f"  density rule: keyword_hits / meaningful_tokens >= 0.75")
+    print(f"  density rule: keyword_hits / meaningful_tokens >= "
+          f"{_GLOSSARY_LABEL_MIN_DENSITY:.2f}  "
+          f"(also enforced in parser._extract_definitions)")
     print(f"  surface: heading/paragraph title OR table joined-headers + merged-cells")
     print(f"  req_id strip: trailing req_id token removed before tokenizing")
     print(f"  col-0 acronym shape: {_GLOSSARY_COL0_ACRONYM_RE.pattern!r}")
@@ -323,10 +274,16 @@ def cmd_glossary(args: argparse.Namespace) -> int:
     # Build a parser instance for ``_heading_title_text`` access.
     from core.src.parser.structural_parser import GenericStructuralParser
     parser = GenericStructuralParser(profile)
-    req_id_re = parser._req_id_anchored_re
+    # Use the non-anchored req_id regex so embedded ids in joined-header
+    # text get stripped (the anchored variant only matches a full string
+    # that *is* a req_id). The label-path input from
+    # ``_heading_title_text`` is already req_id-stripped, so this only
+    # matters for the table-surface scoring below.
+    req_id_re = parser._req_id_re
 
     print("[label-path candidates — heading/paragraph density check]")
-    print("  rule: density(hits / meaningful tokens) >= 0.75 after stripping req_id + stopwords")
+    print(f"  rule: density(hits / meaningful tokens) >= "
+          f"{_GLOSSARY_LABEL_MIN_DENSITY:.2f} after stripping req_id + stopwords")
     print()
     label_hits = 0
     section_re_legacy = (
@@ -344,7 +301,7 @@ def cmd_glossary(args: argparse.Namespace) -> int:
         hits, total_meaningful, density, hit_tokens = _glossary_density(
             normalized, req_id_re,
         )
-        density_match = density >= 0.75
+        density_match = density >= _GLOSSARY_LABEL_MIN_DENSITY
 
         # Also show the legacy regex verdict for comparison.
         legacy_match = bool(section_re_legacy and section_re_legacy.search(normalized))
@@ -366,7 +323,7 @@ def cmd_glossary(args: argparse.Namespace) -> int:
             print(f"        runs ({len(b.runs)}): {run_summary}")
         print()
     if label_hits == 0:
-        print("  (no label-path matches at density >= 0.75)")
+        print("  (no label-path matches at density >= threshold)")
         print()
     else:
         print(f"  total label-path matches (density): {label_hits}")
@@ -425,7 +382,7 @@ def cmd_glossary(args: argparse.Namespace) -> int:
         hits, total_meaningful, density, hit_tokens = _glossary_density(
             label_surface, req_id_re,
         )
-        vocab_score = 1.0 if density >= 0.75 else 0.0
+        vocab_score = 1.0 if density >= _GLOSSARY_LABEL_MIN_DENSITY else 0.0
 
         # Cell fingerprint — col 0 acronym-shape, col 1 prose-shape.
         # Each column contributes 0.5 if its shape gate fires for
