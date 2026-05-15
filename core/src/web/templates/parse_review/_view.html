@@ -1,6 +1,55 @@
-{# 3-pane review view — injected into #review-area by fetch() #}
-{# Renders: original blocks | annotated blocks | review/corrections pane #}
+{% extends "base.html" %}
+{% block title %}Review — {{ doc_id }} — NORA{% endblock %}
+{% block nav_parse_review %}active{% endblock %}
 
+{% block extra_head %}
+<style>
+.review-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; border: 1px solid #dee2e6; border-radius: 4px; }
+.pane-header { padding: 6px 10px; background: #f8f9fa; border-bottom: 1px solid #dee2e6; font-weight: 600; font-size: .8rem; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-footer { flex-shrink: 0; max-height: 220px; overflow-y: auto; background: #fdfdfd; font-size: .8rem; }
+.pane-body { overflow-y: auto; flex: 1; padding: 6px 8px; font-size: .8rem; }
+.review-block { position: relative; padding: 4px 6px; margin-bottom: 3px; border-radius: 3px; border: 1px solid transparent; }
+.review-block:hover { border-color: #ced4da; }
+.block-pg { position: absolute; right: 4px; top: 2px; font-size: .65rem; color: #adb5bd; font-family: monospace; }
+.block-actions { position: absolute; right: 28px; top: 2px; display: none; gap: 2px; }
+.review-block:hover .block-actions { display: flex; }
+.btn-xs { padding: 0 4px; font-size: .7rem; line-height: 1.4; border-radius: 2px; }
+/* Annotation colours */
+.ann-dropped-toc     { background: #dbeafe80; }
+.ann-dropped-revhist { background: #ede9fe80; }
+.ann-dropped-struck  { background: #fee2e280; text-decoration: line-through; color: #6b7280; }
+.ann-dropped-cascade { background: #ffedd580; color: #6b7280; }
+.ann-glossary        { background: #d1fae580; }
+.ann-section-heading { border-left: 3px solid #059669 !important; }
+/* Review state overrides */
+.rev-accepted { border-left: 3px solid #22c55e !important; background: #f0fdf480 !important; }
+.rev-rejected { border-left: 3px solid #ef444480 !important; background: #fff1f180 !important; opacity: .65; }
+.rev-added    { border-left: 3px solid #f59e0b !important; background: #fffbeb80 !important; }
+/* Annotation badges */
+.ann-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: .65rem; font-weight: 600; letter-spacing: .02em; margin-bottom: 2px; }
+.ann-badge-dropped-toc     { background: #3b82f6; color: #fff; }
+.ann-badge-dropped-revhist { background: #8b5cf6; color: #fff; }
+.ann-badge-dropped-struck  { background: #ef4444; color: #fff; }
+.ann-badge-dropped-cascade { background: #f97316; color: #fff; }
+.ann-badge-glossary        { background: #10b981; color: #fff; }
+.ann-badge-section-heading { background: #059669; color: #fff; }
+.ann-badge.ann-badge-superseded { text-decoration: line-through; opacity: 0.45; }
+/* Context menu */
+.ctx-menu { position: fixed; z-index: 9999; background: #fff; border: 1px solid #dee2e6; border-radius: 6px; box-shadow: 0 4px 16px #0002; min-width: 200px; padding: 4px 0; }
+.ctx-menu-hdr { padding: 4px 12px; font-size: .7rem; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
+.ctx-menu-item { padding: 6px 14px; cursor: pointer; font-size: .82rem; display: flex; align-items: center; gap: 6px; }
+.ctx-menu-item:hover { background: #f3f4f6; }
+.ctx-menu-divider { border-top: 1px solid #e5e7eb; margin: 3px 0; }
+/* Table inside blocks */
+.review-block table { font-size: .72rem; }
+/* Sync-scroll highlight on active pane */
+.pane-body.scroll-source { outline: 2px solid #3b82f620; }
+/* Struck-text run rendering (used inside block_text macro) */
+.docx-struck { text-decoration: line-through; color: #6b7280; }
+</style>
+{% endblock %}
+
+{% block content %}
 {% macro block_text(block) %}
   {%- if block.type in ('heading', 'paragraph') -%}
     <p class="mb-0 {% if block.bold %}fw-bold{% endif %}{% if block.italic %} fst-italic{% endif %}{% if block.strikethrough %} text-decoration-line-through text-muted{% endif %}">
@@ -48,6 +97,15 @@
     <span class="text-muted small">[{{ block.type }}]</span>
   {%- endif -%}
 {% endmacro %}
+
+<div class="d-flex align-items-center justify-content-between pt-3 pb-2 mb-2 border-bottom">
+    <div class="d-flex align-items-center gap-2">
+        <a href="{{ root_path }}/parse-review/" class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-arrow-left me-1"></i>Back
+        </a>
+        <h1 class="h5 mb-0"><i class="bi bi-clipboard-check me-2"></i>Review &nbsp;<span class="fw-normal text-muted small">{{ doc_id }}</span></h1>
+    </div>
+</div>
 
 <!-- Toolbar -->
 <div class="d-flex align-items-center gap-2 mb-2 flex-wrap py-1 border-bottom">
@@ -227,12 +285,11 @@
 <!-- Report output -->
 <div id="report-output" class="mt-2"></div>
 
-<!-- Comment prompt (shared, hidden). Shown after the user picks an
-     annotation kind from the context menu — captures an optional free-
-     text note that lands on the saved review JSON alongside the kind.
-     Useful for the correction→regex CLI: the comment carries human
-     intent ("matched 'Document Version History' instead of standard
-     'Revision History'") which the LLM consumes when deriving a regex. -->
+<!-- Comment prompt (shared, hidden). Captures an optional free-text
+     note that lands on the saved review JSON alongside the kind. The
+     correction→regex CLI consumes the comment to carry human intent
+     ("matched 'Document Version History' instead of standard 'Revision
+     History'") into the regex-derivation LLM call. -->
 <div id="pr-comment-prompt" class="ctx-menu d-none" style="min-width:280px; max-width:340px;">
     <div class="ctx-menu-hdr">
         Add comment <span class="text-muted small">(optional)</span>
@@ -253,13 +310,12 @@
     </div>
 </div>
 
-<!-- Context menu (shared, hidden).
-     Grouped: (1) drops parsed by FR-33/34, (2) section flags the
-     parser should have detected (D-032/D-059), (3) reference-tagging
-     for body text (D-059's 5-way taxonomy). Each ``data-reason``
-     value lands verbatim in the saved review JSON so the
-     correction-to-regex CLI tool can map each kind to its prompt /
-     redaction shape. -->
+<!-- Context menu (shared, hidden). Grouped: (1) drops parsed by
+     FR-33/34, (2) section flags the parser should have detected
+     (D-032/D-059), (3) reference-tagging for body text (D-059's 5-way
+     taxonomy). Each ``data-reason`` value lands verbatim in the saved
+     review JSON so the correction-to-regex CLI tool can map each kind
+     to its prompt / redaction shape. -->
 <div id="pr-ctx-menu" class="ctx-menu d-none">
     <div class="ctx-menu-hdr">Drop / Reclassify</div>
     <div class="ctx-menu-item" data-reason="text_strikethrough"><i class="bi bi-dash-circle text-danger"></i>Drop: Struck through</div>
@@ -280,9 +336,21 @@
     <div class="ctx-menu-item" data-reason="__cancel"><i class="bi bi-x"></i>Cancel</div>
 </div>
 
-<!-- Serialize existing review state for JS. Uses application/json so the
-     payload survives innerHTML injection (regular <script> doesn't execute
-     through innerHTML). initParseReview() reads from these elements. -->
+<!-- Serialize existing review state for JS. initParseReview() reads these. -->
 <script id="pr-state-docid" type="application/json">{{ doc_id | tojson }}</script>
 <script id="pr-state-review" type="application/json">{{ review | tojson }}</script>
 <script id="pr-state-log" type="application/json">{{ log | tojson }}</script>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="{{ root_path }}/static/js/parse_review.js?v=20260515a"></script>
+<script>
+(function () {
+    const ROOT = document.body.dataset.rootPath || '';
+    const DOC_ID = {{ doc_id | tojson }};
+    if (window.initParseReview) {
+        window.initParseReview(DOC_ID, ROOT);
+    }
+})();
+</script>
+{% endblock %}

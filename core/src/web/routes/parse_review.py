@@ -1,26 +1,29 @@
-"""Parse routes — Bootstrap (annotation harness) + Review (3-pane post-parse)."""
+"""Parse routes — Summary landing + per-doc Review.
+
+Two surfaces, both server-rendered (no client-side state):
+  * ``GET /parse-review/`` — Summary table over the parsed corpus.
+    Each Doc cell links to its Review page.
+  * ``GET /parse-review/<doc_id>`` — per-doc Review (3-pane annotated
+    view) with a Back link to Summary.
+
+The legacy Bootstrap (annotation harness) tab was deleted on
+2026-05-15 — superseded by the profile_miner CLI loop. See D-079..D-081
+context in DECISIONS.md and STATUS.md.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
-import tempfile
 from datetime import date
 from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi import APIRouter, Request
+from fastapi.responses import HTMLResponse
 
 from core.src.models.document import BlockType, DocumentIR
 from core.src.parser.parse_review import generate_compact_report
-from core.src.web.bootstrap_schema import (
-    AnnotationValidationError,
-    SCHEMA_VERSION,
-    validate_annotation_file,
-)
-from core.src.web.docx_html_render import render_docx_html
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +39,12 @@ def _parse_log_dir(config) -> Path:
 
 
 def _list_docs(env_dir_path: Path) -> list[str]:
-    """Return doc IDs that have at least a parse log OR an IR file."""
+    """Return doc IDs that have at least a parse log OR an IR file.
+
+    Retained for diagnostic / test use; the Summary landing reads
+    docs from ``parse_summary.json`` and per-doc Review accepts any
+    ``<doc_id>`` whose IR or parse_log exists.
+    """
     log_dir = env_dir_path / "reports" / "parse_log"
     ir_dir = env_dir_path / "out" / "extract"
     ids: set[str] = set()
@@ -243,23 +251,11 @@ def _build_annotated_blocks(
 
 @router.get("", response_class=HTMLResponse)
 async def parse_review_index(request: Request):
-    from core.src.web.app import _template_response, config
-    docs = _list_docs(config.env_dir_path())
-    log_dir = _parse_log_dir(config)
-    return _template_response(request, "parse_review/index.html", {
-        "docs": docs,
-        "log_dir_missing": not log_dir.is_dir() and not (config.env_dir_path() / "out" / "extract").is_dir(),
-    })
-
-
-@router.get("/summary", response_class=HTMLResponse)
-async def parse_review_summary(request: Request):
-    """Summary tab — corpus-level rollup of profile-driven detection
-    evidence (which patterns matched on each doc, plus the row/col
-    headers for revhist + glossary tables). Sourced from
+    """Summary landing — corpus-level rollup of profile-driven detection
+    evidence with one row per parsed doc. Each Doc cell links to its
+    per-doc Review page. Sourced from
     ``<env_dir>/reports/parse_summary.json``, written by the parse
-    stage. Sortable table with the missing-detection rows surfaced
-    first so the architect can spot profile-rule gaps.
+    stage.
     """
     from core.src.web.app import _template_response, config
     from core.src.parser.parse_summary import CorpusSummary
@@ -278,15 +274,19 @@ async def parse_review_summary(request: Request):
         except Exception as exc:
             error = f"Could not load parse_summary.json: {exc}"
 
-    return _template_response(request, "parse_review/_summary.html", {
+    return _template_response(request, "parse_review/index.html", {
         "corpus": corpus,
         "error": error,
         "summary_path": str(summary_path),
     })
 
 
-@router.get("/{doc_id}/view", response_class=HTMLResponse)
+@router.get("/{doc_id}", response_class=HTMLResponse)
 async def parse_review_view(request: Request, doc_id: str):
+    """Per-doc Review page — 3-pane annotated view. Reached by clicking
+    a Doc cell on the Summary landing. Includes a Back link to the
+    Summary route.
+    """
     from core.src.web.app import _template_response, config
     env_dir = config.env_dir_path()
     blocks, log, error = _build_annotated_blocks(doc_id, env_dir)
@@ -335,192 +335,6 @@ async def parse_review_save(request: Request, doc_id: str):
         logger.error("Save review failed %s: %s", review_path, exc)
         return {"ok": False, "error": str(exc)}
 
-
-# ---------------------------------------------------------------------------
-# Bootstrap (annotation harness) — sibling tab on the Parse page
-# ---------------------------------------------------------------------------
-
-def _annotations_dir(env_dir_path: Path) -> Path:
-    return env_dir_path / "annotations"
-
-
-def _annotations_path(env_dir_path: Path, doc_id: str) -> Path:
-    return _annotations_dir(env_dir_path) / f"{doc_id}_annotations.json"
-
-
-def _list_docx_inputs(env_dir_path: Path) -> list[dict[str, Any]]:
-    """List DOCX files under <env_dir>/input/<MNO>/<RELEASE>/ available for annotation.
-
-    Each entry reports whether the extract IR exists (required for annotation)
-    and whether an annotation file already exists.
-    """
-    input_dir = env_dir_path / "input"
-    out: list[dict[str, Any]] = []
-    if not input_dir.is_dir():
-        return out
-    ir_dir = env_dir_path / "out" / "extract"
-    ann_dir = _annotations_dir(env_dir_path)
-    for path in sorted(input_dir.rglob("*.docx")):
-        rel = path.relative_to(env_dir_path)
-        doc_id = path.stem
-        ir_exists = (ir_dir / f"{doc_id}_ir.json").exists() if ir_dir.is_dir() else False
-        ann_exists = (ann_dir / f"{doc_id}_annotations.json").exists() if ann_dir.is_dir() else False
-        ann_count = 0
-        if ann_exists:
-            try:
-                data = json.loads((ann_dir / f"{doc_id}_annotations.json").read_text(encoding="utf-8"))
-                ann_count = len(data.get("annotations", []))
-            except Exception:
-                ann_count = 0
-        out.append({
-            "doc_id": doc_id,
-            "rel_path": str(rel),
-            "ir_exists": ir_exists,
-            "annotation_exists": ann_exists,
-            "annotation_count": ann_count,
-        })
-    return out
-
-
-def _resolve_docx_path(env_dir_path: Path, doc_id: str) -> Path | None:
-    input_dir = env_dir_path / "input"
-    if not input_dir.is_dir():
-        return None
-    matches = [p for p in input_dir.rglob(f"{doc_id}.docx")]
-    return matches[0] if matches else None
-
-
-def _atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=f".{path.name}.", dir=str(path.parent))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2, ensure_ascii=False)
-        os.replace(tmp, path)
-    except Exception:
-        try:
-            os.unlink(tmp)
-        except OSError:
-            pass
-        raise
-
-
-@router.get("/bootstrap/docs")
-async def bootstrap_list_docs(request: Request):
-    from core.src.web.app import config
-    env_dir = config.env_dir_path()
-    docs = _list_docx_inputs(env_dir)
-    ann_dir = _annotations_dir(env_dir)
-    return {
-        "docs": docs,
-        "annotations_dir": str(ann_dir),
-    }
-
-
-@router.get("/bootstrap/{doc_id}/view", response_class=HTMLResponse)
-async def bootstrap_view(request: Request, doc_id: str):
-    from core.src.web.app import _template_response, config
-    env_dir = config.env_dir_path()
-    docx_path = _resolve_docx_path(env_dir, doc_id)
-    if docx_path is None:
-        return _template_response(request, "parse_review/_bootstrap_view.html", {
-            "doc_id": doc_id,
-            "error": f"DOCX file for {doc_id!r} not found under <env_dir>/input/.",
-        })
-
-    blocks, _log, ir_error = _build_annotated_blocks(doc_id, env_dir)
-    annotation_path = _annotations_path(env_dir, doc_id)
-    existing: list[dict[str, Any]] = []
-    if annotation_path.exists():
-        try:
-            data = json.loads(annotation_path.read_text(encoding="utf-8"))
-            if isinstance(data, dict):
-                existing = data.get("annotations", []) or []
-        except Exception as exc:
-            logger.warning("Failed to load annotations %s: %s", annotation_path, exc)
-
-    try:
-        docx_html = render_docx_html(docx_path)
-        render_error: str | None = None
-    except Exception as exc:
-        logger.warning("DOCX render failed for %s: %s", docx_path, exc)
-        docx_html = ""
-        render_error = f"DOCX render failed: {exc}"
-
-    return _template_response(request, "parse_review/_bootstrap_view.html", {
-        "doc_id": doc_id,
-        "docx_rel_path": str(docx_path.relative_to(env_dir)) if docx_path else "",
-        "blocks": blocks,
-        "block_count": len(blocks),
-        "ir_error": ir_error,
-        "docx_html": docx_html,
-        "render_error": render_error,
-        "annotation_path_rel": str(annotation_path.relative_to(env_dir)),
-        "annotations": existing,
-    })
-
-
-@router.get("/bootstrap/{doc_id}/annotations")
-async def bootstrap_load_annotations(request: Request, doc_id: str):
-    from core.src.web.app import config
-    env_dir = config.env_dir_path()
-    path = _annotations_path(env_dir, doc_id)
-    if not path.exists():
-        docx_path = _resolve_docx_path(env_dir, doc_id)
-        rel = str(docx_path.relative_to(env_dir)) if docx_path else ""
-        return {
-            "version": SCHEMA_VERSION,
-            "doc_path": f"<env_dir>/{rel}" if rel else "",
-            "annotations": [],
-        }
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            raise ValueError("annotation file is not a JSON object")
-        return data
-    except Exception as exc:
-        logger.error("Annotation load failed %s: %s", path, exc)
-        raise HTTPException(status_code=500, detail=f"load failed: {exc}")
-
-
-@router.post("/bootstrap/{doc_id}/annotations")
-async def bootstrap_save_annotations(request: Request, doc_id: str):
-    from core.src.web.app import config
-    env_dir = config.env_dir_path()
-    path = _annotations_path(env_dir, doc_id)
-    try:
-        body = await request.json()
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=f"invalid JSON: {exc}")
-
-    docx_path = _resolve_docx_path(env_dir, doc_id)
-    if docx_path is not None and not body.get("doc_path"):
-        body["doc_path"] = f"<env_dir>/{docx_path.relative_to(env_dir)}"
-
-    try:
-        sanitized = validate_annotation_file(body)
-    except AnnotationValidationError as exc:
-        return JSONResponse(
-            status_code=400,
-            content={"ok": False, "errors": exc.errors},
-        )
-
-    try:
-        _atomic_write_json(path, sanitized)
-    except Exception as exc:
-        logger.error("Annotation save failed %s: %s", path, exc)
-        raise HTTPException(status_code=500, detail=f"save failed: {exc}")
-
-    return {
-        "ok": True,
-        "path": str(path.relative_to(env_dir)),
-        "count": len(sanitized.get("annotations", [])),
-    }
-
-
-# ---------------------------------------------------------------------------
-# Review (existing; below)
-# ---------------------------------------------------------------------------
 
 @router.post("/{doc_id}/report", response_class=HTMLResponse)
 async def parse_review_report(request: Request, doc_id: str):

@@ -664,6 +664,7 @@ class GenericStructuralParser:
         parse_summary = self._build_parse_summary(
             doc, plan_meta, definitions_section_title,
             glossary_table_headers, definitions_map,
+            sections,
         )
 
         tree = RequirementTree(
@@ -2063,6 +2064,7 @@ class GenericStructuralParser:
         definitions_section_title: str,
         glossary_table_headers: list[str],
         definitions_map: dict[str, str],
+        sections: list[Requirement],
     ) -> "DocSummary":
         """Build the per-doc summary record for the corpus-level
         parse_summary.json artifact.
@@ -2158,12 +2160,26 @@ class GenericStructuralParser:
             raw_name[:77] + "…" if len(raw_name) > 80 else raw_name
         )
 
+        # Cross-reference tallies for the Summary table. Sum across
+        # every Requirement's CrossReferences — duplicates within a
+        # single req count separately (the parser doesn't dedup at
+        # extraction time; the resolver does at a later stage).
+        internal_refs = sum(
+            len(r.cross_references.internal) for r in sections
+        )
+        spec_refs = sum(
+            len(r.cross_references.standards) for r in sections
+        )
+
         return DocSummary(
             plan_name=display_name,
             plan_id=plan_meta.get("plan_id", ""),
             doc_id=Path(doc.source_file).stem if doc.source_file else "",
             source_file=doc.source_file or "",
             toc_entries=self._parse_stats.toc_blocks_dropped,
+            req_count=len(sections),
+            internal_refs=internal_refs,
+            spec_refs=spec_refs,
             revhist_sections=1 if revhist_match else 0,
             revhist_match=revhist_match,
             glossary_sections=glossary_sections,

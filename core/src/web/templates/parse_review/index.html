@@ -2,220 +2,150 @@
 {% block title %}Parse — NORA{% endblock %}
 {% block nav_parse_review %}active{% endblock %}
 
-{% block extra_head %}
-<style>
-.review-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; border: 1px solid #dee2e6; border-radius: 4px; }
-.pane-header { padding: 6px 10px; background: #f8f9fa; border-bottom: 1px solid #dee2e6; font-weight: 600; font-size: .8rem; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.pane-footer { flex-shrink: 0; max-height: 220px; overflow-y: auto; background: #fdfdfd; font-size: .8rem; }
-.pane-body { overflow-y: auto; flex: 1; padding: 6px 8px; font-size: .8rem; }
-.review-block { position: relative; padding: 4px 6px; margin-bottom: 3px; border-radius: 3px; border: 1px solid transparent; }
-.review-block:hover { border-color: #ced4da; }
-.block-pg { position: absolute; right: 4px; top: 2px; font-size: .65rem; color: #adb5bd; font-family: monospace; }
-.block-actions { position: absolute; right: 28px; top: 2px; display: none; gap: 2px; }
-.review-block:hover .block-actions { display: flex; }
-.btn-xs { padding: 0 4px; font-size: .7rem; line-height: 1.4; border-radius: 2px; }
-/* Annotation colours */
-.ann-dropped-toc     { background: #dbeafe80; }
-.ann-dropped-revhist { background: #ede9fe80; }
-.ann-dropped-struck  { background: #fee2e280; text-decoration: line-through; color: #6b7280; }
-.ann-dropped-cascade { background: #ffedd580; color: #6b7280; }
-.ann-glossary        { background: #d1fae580; }
-.ann-section-heading { border-left: 3px solid #059669 !important; }
-/* Review state overrides */
-.rev-accepted { border-left: 3px solid #22c55e !important; background: #f0fdf480 !important; }
-.rev-rejected { border-left: 3px solid #ef444480 !important; background: #fff1f180 !important; opacity: .65; }
-.rev-added    { border-left: 3px solid #f59e0b !important; background: #fffbeb80 !important; }
-/* Annotation badges */
-.ann-badge { display: inline-block; padding: 1px 5px; border-radius: 3px; font-size: .65rem; font-weight: 600; letter-spacing: .02em; margin-bottom: 2px; }
-.ann-badge-dropped-toc     { background: #3b82f6; color: #fff; }
-.ann-badge-dropped-revhist { background: #8b5cf6; color: #fff; }
-.ann-badge-dropped-struck  { background: #ef4444; color: #fff; }
-.ann-badge-dropped-cascade { background: #f97316; color: #fff; }
-.ann-badge-glossary        { background: #10b981; color: #fff; }
-.ann-badge-section-heading { background: #059669; color: #fff; }
-/* Superseded — parser-emitted badge is visually struck-through when
- * the user adds a corrective annotation on the same block. The audit
- * trail (original classification) is preserved; the correction badge
- * sits beside it to make the new intent clear. */
-.ann-badge.ann-badge-superseded { text-decoration: line-through; opacity: 0.45; }
-/* Context menu */
-.ctx-menu { position: fixed; z-index: 9999; background: #fff; border: 1px solid #dee2e6; border-radius: 6px; box-shadow: 0 4px 16px #0002; min-width: 200px; padding: 4px 0; }
-.ctx-menu-hdr { padding: 4px 12px; font-size: .7rem; color: #6b7280; font-weight: 600; text-transform: uppercase; letter-spacing: .05em; }
-.ctx-menu-item { padding: 6px 14px; cursor: pointer; font-size: .82rem; display: flex; align-items: center; gap: 6px; }
-.ctx-menu-item:hover { background: #f3f4f6; }
-.ctx-menu-divider { border-top: 1px solid #e5e7eb; margin: 3px 0; }
-/* Table inside blocks */
-.review-block table { font-size: .72rem; }
-/* Sync-scroll highlight on active pane */
-.pane-body.scroll-source { outline: 2px solid #3b82f620; }
-/* Bootstrap tab styling */
-.bs-pane { display: flex; flex-direction: column; flex: 1; min-width: 0; border: 1px solid #dee2e6; border-radius: 4px; }
-.bs-block { padding: 4px 6px; margin-bottom: 3px; border-radius: 3px; border: 1px solid transparent; cursor: default; position: relative; }
-.bs-block:hover { border-color: #ced4da; background: #f8fafc; }
-.bs-block.bs-selected { border-color: #2563eb; background: #dbeafe40; }
-.bs-block.bs-anchor { border-color: #2563eb; background: #dbeafe; box-shadow: inset 0 0 0 1px #2563eb; }
-.bs-block-actions { position: absolute; right: 4px; top: 2px; display: none; gap: 2px; }
-.bs-block:hover .bs-block-actions { display: flex; }
-.bs-idx { font-family: monospace; font-size: .65rem; color: #94a3b8; margin-right: 4px; }
-.bs-row-pick { cursor: pointer; }
-/* Bootstrap 5 paints the cell background via --bs-table-bg-state on td/th,
-   so a `tr { background: ... }` rule never shows. Override that variable. */
-.bs-row-pick:hover            { --bs-table-bg-state: #f0f9ff; }
-.bs-row-pick.bs-row-selected  { --bs-table-bg-state: #dbeafe; }
-.bs-row-pick.bs-row-anchor    { --bs-table-bg-state: #2563eb; color: #fff; }
-.bs-anns-list { font-size: .78rem; }
-.bs-ann-item { padding: 4px 6px; border-bottom: 1px solid #f1f5f9; cursor: pointer; display: flex; gap: 4px; align-items: start; }
-.bs-ann-item:hover { background: #f8fafc; }
-.bs-ann-kind { font-weight: 600; font-size: .68rem; padding: 1px 5px; border-radius: 3px; background: #e0e7ff; color: #3730a3; white-space: nowrap; }
-.bs-ann-kind-section_heading { background: #d1fae5; color: #065f46; }
-.bs-ann-kind-req_id          { background: #ede9fe; color: #5b21b6; }
-.bs-ann-kind-toc             { background: #dbeafe; color: #1e40af; }
-.bs-ann-kind-strikethrough   { background: #fee2e2; color: #991b1b; }
-.bs-ann-kind-version_history { background: #ffedd5; color: #9a3412; }
-.bs-ann-kind-definitions     { background: #d1fae5; color: #047857; }
-.bs-ann-kind-applicability   { background: #fef3c7; color: #92400e; }
-.bs-ann-kind-priority        { background: #fce7f3; color: #9d174d; }
-.bs-ann-kind-reference_intra_doc   { background: #dbeafe; color: #1e40af; }
-.bs-ann-kind-reference_cross_doc   { background: #c7d2fe; color: #3730a3; }
-.bs-ann-kind-reference_spec        { background: #bfdbfe; color: #1e3a8a; }
-.bs-ann-kind-reference_list        { background: #fef3c7; color: #92400e; }
-.bs-ann-kind-reference_list_entry  { background: #fde68a; color: #a16207; }
-.bs-ann-kind-remove                { background: #fee2e2; color: #991b1b; }
-.bs-ann-region { font-family: monospace; font-size: .68rem; color: #64748b; }
-.bs-ann-meta { font-size: .68rem; color: #475569; }
-.docx-block { margin: 4px 0; padding: 2px 4px; border-radius: 3px; cursor: default; }
-.docx-block:hover { background: #f8fafc; outline: 1px solid #cbd5e1; }
-.docx-block.bs-selected { background: #dbeafe40; outline: 1px solid #2563eb; }
-.docx-block.bs-anchor { background: #dbeafe; outline: 1px solid #2563eb; }
-.docx-bold { font-weight: 600; }
-.docx-italic { font-style: italic; }
-.docx-struck { text-decoration: line-through; color: #6b7280; }
-.docx-table { font-size: .72rem; border-collapse: collapse; width: 100%; }
-.docx-table th, .docx-table td { border: 1px solid #cbd5e1; padding: 2px 5px; vertical-align: top; }
-.docx-table th { background: #f1f5f9; }
-.docx-image { font-size: .7rem; color: #94a3b8; padding: 4px; border: 1px dashed #cbd5e1; text-align: center; }
-.kind-form-row { display: grid; grid-template-columns: max-content 1fr; gap: 4px 8px; align-items: center; font-size: .78rem; }
-.kind-form-row label { white-space: nowrap; color: #475569; }
-.kind-form-row input, .kind-form-row select { font-size: .78rem; padding: 2px 4px; }
-</style>
-{% endblock %}
-
 {% block content %}
 <div class="d-flex align-items-center justify-content-between pt-3 pb-2 mb-2 border-bottom">
     <h1 class="h5 mb-0"><i class="bi bi-clipboard-check me-2"></i>Parse</h1>
 </div>
 
-<ul class="nav nav-tabs mb-2" id="parse-tabs" role="tablist">
-    <li class="nav-item" role="presentation">
-        <button class="nav-link active" id="tab-bootstrap-btn" data-bs-toggle="tab" data-bs-target="#tab-bootstrap" type="button" role="tab">
-            <i class="bi bi-tags me-1"></i>Bootstrap
-        </button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" id="tab-review-btn" data-bs-toggle="tab" data-bs-target="#tab-review" type="button" role="tab">
-            <i class="bi bi-clipboard-check me-1"></i>Review
-        </button>
-    </li>
-    <li class="nav-item" role="presentation">
-        <button class="nav-link" id="tab-summary-btn" data-bs-toggle="tab" data-bs-target="#tab-summary" type="button" role="tab"
-                hx-get="{{ root_path }}/parse-review/summary"
-                hx-target="#tab-summary-body"
-                hx-swap="innerHTML"
-                hx-trigger="click once">
-            <i class="bi bi-bar-chart me-1"></i>Summary
-        </button>
-    </li>
-</ul>
+{% if error %}
+  <div class="alert alert-warning">
+    {{ error }}
+  </div>
+{% elif corpus is none or not corpus.docs %}
+  <div class="alert alert-info">
+    No parse summary data yet. Source: <code>{{ summary_path }}</code>
+  </div>
+{% else %}
+  <div class="d-flex align-items-center gap-3 mb-2">
+    <span class="text-muted small">
+      Generated <code>{{ corpus.generated_at }}</code> ·
+      {{ corpus.total_docs }} docs ·
+      <span class="text-{% if corpus.docs_without_revhist %}danger{% else %}success{% endif %}">
+        {{ corpus.docs_without_revhist }} missing revhist
+      </span> ·
+      <span class="text-{% if corpus.docs_without_glossary %}danger{% else %}success{% endif %}">
+        {{ corpus.docs_without_glossary }} missing glossary
+      </span>
+    </span>
+    <span class="text-muted small ms-auto">
+      <i class="bi bi-info-circle"></i> click a Doc to open its 3-pane Review
+    </span>
+  </div>
 
-<div class="tab-content" id="parse-tab-content">
-
-    <!-- ===== BOOTSTRAP ===== -->
-    <div class="tab-pane fade show active" id="tab-bootstrap" role="tabpanel">
-        <div class="d-flex align-items-center gap-2 mb-2">
-            <div style="max-width:380px; flex:1;">
-                <select id="bs-doc-select" class="form-select form-select-sm">
-                    <option value="">— loading docs —</option>
-                </select>
+  <table class="table table-sm table-hover small">
+    <thead>
+      <tr>
+        <th>Doc</th>
+        <th class="text-end">TOC</th>
+        <th class="text-end">Req count</th>
+        <th class="text-end">Revhist</th>
+        <th class="text-end">Glossary</th>
+        <th class="text-end">Internal Refs</th>
+        <th class="text-end">Specs Refs</th>
+      </tr>
+    </thead>
+    <tbody>
+      {# Sort: docs missing revhist OR glossary float to the top. #}
+      {% set sorted_docs = corpus.docs | sort(
+          attribute='glossary_sections')
+          | sort(attribute='revhist_sections') %}
+      {% for d in sorted_docs %}
+        {% set row_id = "psr-" ~ loop.index %}
+        <tr style="cursor: pointer;"
+            data-bs-toggle="collapse"
+            data-bs-target="#{{ row_id }}-detail"
+            aria-expanded="false">
+          <td>
+            <a href="{{ root_path }}/parse-review/{{ d.doc_id }}"
+               class="text-decoration-none"
+               onclick="event.stopPropagation();"
+               {% if d.plan_name %}title="{{ d.plan_name }}"{% endif %}>
+              {{ d.doc_id }}
+            </a>
+          </td>
+          <td class="text-end">{{ d.toc_entries }}</td>
+          <td class="text-end">{{ d.req_count }}</td>
+          <td class="text-end">
+            {% if d.revhist_sections %}
+              <span class="badge bg-success">{{ d.revhist_sections }}</span>
+            {% else %}
+              <span class="badge bg-danger">0</span>
+            {% endif %}
+          </td>
+          <td class="text-end">
+            {% if d.glossary_sections %}
+              <span class="badge bg-success">{{ d.glossary_sections }}</span>
+            {% else %}
+              <span class="badge bg-danger">0</span>
+            {% endif %}
+          </td>
+          <td class="text-end">{{ d.internal_refs }}</td>
+          <td class="text-end">{{ d.spec_refs }}</td>
+        </tr>
+        <tr class="collapse" id="{{ row_id }}-detail">
+          <td colspan="7" class="p-3 bg-light">
+            <div class="row g-3">
+              <div class="col-md-6">
+                <strong>Revhist evidence</strong>
+                {% if d.revhist_match %}
+                  <ul class="list-unstyled small mb-0 mt-1">
+                    <li>pattern: <code>{{ d.revhist_match.pattern_id }}</code></li>
+                    <li>matched text: <code>{{ d.revhist_match.matched_text or "(empty)" }}</code></li>
+                    <li>label block: <code>{{ d.revhist_match.label_block_index }}</code></li>
+                    <li>table headers:
+                      {% if d.revhist_match.table_headers %}
+                        {% for h in d.revhist_match.table_headers %}<code>{{ h }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+                      {% else %}
+                        <span class="text-muted">(no table)</span>
+                      {% endif %}
+                    </li>
+                    {% if d.revhist_match.score_breakdown %}
+                    <li>score breakdown:
+                      pos=<code>{{ "%.2f"|format(d.revhist_match.score_breakdown.position or 0) }}</code>
+                      · vocab=<code>{{ "%.2f"|format(d.revhist_match.score_breakdown.vocab or 0) }}</code>
+                      · cell=<code>{{ "%.2f"|format(d.revhist_match.score_breakdown.cell or 0) }}</code>
+                      · <strong>combined=<code>{{ "%.2f"|format(d.revhist_match.score_breakdown.combined or 0) }}</code></strong>
+                      (threshold <code>{{ "%.2f"|format(d.revhist_match.score_breakdown.threshold or 0) }}</code>)
+                    </li>
+                    {% endif %}
+                  </ul>
+                {% else %}
+                  <div class="text-muted small mt-1">
+                    No revhist detected. Either set
+                    <code>revision_history_label_pattern</code>,
+                    <code>revhist_table_header_pattern</code>, or enable
+                    <code>revhist_detection</code> (signal-based scoring).
+                  </div>
+                {% endif %}
+              </div>
+              <div class="col-md-6">
+                <strong>Glossary evidence</strong>
+                {% if d.glossary_match %}
+                  <ul class="list-unstyled small mb-0 mt-1">
+                    <li>pattern: <code>{{ d.glossary_match.pattern_id }}</code></li>
+                    <li>matched heading: <code>{{ d.glossary_match.matched_heading or "(empty)" }}</code></li>
+                    <li>table headers:
+                      {% if d.glossary_match.table_headers %}
+                        {% for h in d.glossary_match.table_headers %}<code>{{ h }}</code>{% if not loop.last %} · {% endif %}{% endfor %}
+                      {% else %}
+                        <span class="text-muted">(no table)</span>
+                      {% endif %}
+                    </li>
+                    <li>entries extracted: <strong>{{ d.glossary_match.entries_extracted }}</strong></li>
+                  </ul>
+                {% else %}
+                  <div class="text-muted small mt-1">
+                    No glossary detected. Check the source-doc's
+                    glossary heading text against
+                    <code>definitions_section_pattern</code>.
+                  </div>
+                {% endif %}
+              </div>
             </div>
-            <span id="bs-doc-info" class="text-muted small"></span>
-        </div>
-        <div id="bs-area">
-            <p class="text-muted small">Select a DOCX to start annotating. The dropdown lists files under
-                <code>&lt;env_dir&gt;/input/&lt;MNO&gt;/&lt;RELEASE&gt;/</code> that have an extract IR
-                (run the extract stage first if a doc is missing).</p>
-        </div>
-    </div>
-
-    <!-- ===== REVIEW (existing) ===== -->
-    <div class="tab-pane fade" id="tab-review" role="tabpanel">
-        {% if log_dir_missing %}
-        <div class="alert alert-warning">
-            No parse output found. Run the <strong>extract</strong> and <strong>parse</strong> stages first.
-        </div>
-        {% elif not docs %}
-        <div class="alert alert-info">No parsed documents found.</div>
-        {% else %}
-        <div class="d-flex align-items-center gap-3 mb-2">
-            <div style="max-width:320px; flex:1;">
-                <select id="doc-select" class="form-select form-select-sm">
-                    <option value="">— select document —</option>
-                    {% for doc in docs %}
-                    <option value="{{ doc }}">{{ doc }}</option>
-                    {% endfor %}
-                </select>
-            </div>
-            <span class="text-muted small">Select a document to open the 3-pane review.</span>
-        </div>
-        <div id="review-area">
-            <p class="text-muted small">No document selected.</p>
-        </div>
-        {% endif %}
-    </div>
-
-    <!-- ===== SUMMARY ===== -->
-    <div class="tab-pane fade" id="tab-summary" role="tabpanel">
-        <div id="tab-summary-body">
-            <div class="text-center py-4 text-muted">
-                <div class="spinner-border spinner-border-sm me-2"></div>Click the tab to load…
-            </div>
-        </div>
-    </div>
-
-</div>
-
-{% endblock %}
-
-{% block extra_scripts %}
-<script src="{{ root_path }}/static/js/parse_review.js?v=20260514a"></script>
-<script src="{{ root_path }}/static/js/parse_bootstrap.js?v=20260509e"></script>
-<script>
-(function () {
-    const ROOT = document.body.dataset.rootPath || '';
-    // ----- Review tab wiring -----
-    const sel = document.getElementById('doc-select');
-    if (sel) {
-        sel.addEventListener('change', function () {
-            const docId = this.value;
-            if (!docId) {
-                document.getElementById('review-area').innerHTML = '<p class="text-muted small">No document selected.</p>';
-                return;
-            }
-            document.getElementById('review-area').innerHTML =
-                '<div class="text-center py-4 text-muted"><div class="spinner-border spinner-border-sm me-2"></div>Loading…</div>';
-            fetch(ROOT + '/parse-review/' + encodeURIComponent(docId) + '/view')
-                .then(r => r.text())
-                .then(html => {
-                    document.getElementById('review-area').innerHTML = html;
-                    if (window.initParseReview) window.initParseReview(docId, ROOT);
-                })
-                .catch(err => {
-                    document.getElementById('review-area').innerHTML =
-                        '<div class="alert alert-danger">Failed to load: ' + err + '</div>';
-                });
-        });
-    }
-    // ----- Bootstrap tab wiring -----
-    if (window.initParseBootstrap) window.initParseBootstrap(ROOT);
-})();
-</script>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% endif %}
 {% endblock %}

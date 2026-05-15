@@ -103,6 +103,21 @@ class DocSummary:
     doc_id: str = ""
     source_file: str = ""
     toc_entries: int = 0
+    req_count: int = 0
+    """Total Requirement nodes in the parsed tree — what the Summary
+    table shows in the Req count column. Sourced from
+    ``len(RequirementTree.requirements)`` at the point ``build_doc_summary``
+    runs (so reflects post-filter, post-cascade reality, not raw block
+    count)."""
+    internal_refs: int = 0
+    """Sum across all requirements of ``cross_references.internal``
+    entries (intra-plan req_id citations). Counts every citation
+    occurrence, including duplicates within a single requirement."""
+    spec_refs: int = 0
+    """Sum across all requirements of ``cross_references.standards``
+    entries (3GPP / GSMA / external spec citations). Counts every
+    citation occurrence, including duplicates within a single
+    requirement."""
     revhist_sections: int = 0
     revhist_match: RevhistMatch | None = None
     glossary_sections: int = 0
@@ -147,6 +162,9 @@ class CorpusSummary:
                 doc_id=d.get("doc_id", ""),
                 source_file=d.get("source_file", ""),
                 toc_entries=int(d.get("toc_entries", 0)),
+                req_count=int(d.get("req_count", 0)),
+                internal_refs=int(d.get("internal_refs", 0)),
+                spec_refs=int(d.get("spec_refs", 0)),
                 revhist_sections=int(d.get("revhist_sections", 0)),
                 revhist_match=RevhistMatch(**rh) if rh else None,
                 glossary_sections=int(d.get("glossary_sections", 0)),
