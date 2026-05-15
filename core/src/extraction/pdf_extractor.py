@@ -127,10 +127,15 @@ class PDFExtractor(BaseExtractor):
                     [str(c).strip() if c else "" for c in row]
                     for row in table_data[1:]
                 ]
-                # Skip degenerate tables: single column with empty or near-empty content
-                non_empty_headers = [h for h in headers if h]
-                total_cells = sum(1 for row in rows for c in row if c)
-                if len(non_empty_headers) <= 1 and total_cells == 0:
+                # Drop only when every cell across headers + body is
+                # empty. The 1×1-hallucination filter below catches the
+                # pdfplumber-fabricated single-cell tables; this filter
+                # is just a "no content anywhere" guard. (Loosened
+                # alongside the docx extractor — both shared the same
+                # accidentally-too-tight shape.)
+                non_empty_headers = sum(1 for h in headers if h)
+                non_empty_body = sum(1 for row in rows for c in row if c)
+                if non_empty_headers == 0 and non_empty_body == 0:
                     continue
                 # Skip 1×1 "tables" — pdfplumber commonly hallucinates a
                 # 1-row × 1-column "table" around small column-aligned
@@ -142,7 +147,7 @@ class PDFExtractor(BaseExtractor):
                 if (
                     len(rows) == 1
                     and len(rows[0]) == 1
-                    and len(non_empty_headers) <= 1
+                    and non_empty_headers <= 1
                 ):
                     continue
                 # FR-33: detect strike-through at row AND table level.

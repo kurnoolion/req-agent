@@ -209,3 +209,65 @@ def test_merged_cells_survive_json_roundtrip(tmp_path: Path):
     assert len(t.merged_cells) == 1
     assert t.merged_cells[0].text == "Footer Label"
     assert t.merged_cells[0].colspan == 2
+
+
+# ---------------------------------------------------------------------------
+# Degenerate-table filter — drops only when every cell is empty.
+# ---------------------------------------------------------------------------
+
+def test_single_cell_content_table_preserved(tmp_path: Path):
+    """Word documents commonly use 1×1 tables as paragraph containers
+    (e.g. a section's entire body inside a one-cell table for layout
+    purposes). The prior filter shape (`non_empty_headers <= 1 and
+    total_cells == 0`) accidentally dropped these — the single content
+    cell becomes the only "header", body is empty, both conditions
+    trigger. Real corpus regression: a doc's next-section content was
+    missing from the IR after a glossary section because it was wrapped
+    in a 1×1 table."""
+    doc = Document()
+    doc.add_paragraph("Some intro paragraph.")
+    tbl = doc.add_table(rows=1, cols=1)
+    tbl.style = "Table Grid"
+    tbl.rows[0].cells[0].text = "Real content trapped in a 1x1 wrapper table."
+
+    p = tmp_path / "single_cell.docx"
+    doc.save(p)
+    ir = _extract(p)
+    tables = _tables(ir)
+    assert len(tables) == 1
+    assert tables[0].headers == [
+        "Real content trapped in a 1x1 wrapper table.",
+    ]
+    assert tables[0].rows == []
+
+
+def test_empty_table_still_dropped(tmp_path: Path):
+    """The filter's actual intent — a fully-empty table contributes
+    nothing and is still dropped. Guards against the loosening
+    over-shooting."""
+    doc = Document()
+    doc.add_paragraph("Before.")
+    tbl = doc.add_table(rows=2, cols=3)
+    tbl.style = "Table Grid"
+    # leave every cell empty
+
+    p = tmp_path / "empty.docx"
+    doc.save(p)
+    ir = _extract(p)
+    assert _tables(ir) == []
+
+
+def test_sparse_table_with_one_content_cell_preserved(tmp_path: Path):
+    """1×N table where only one cell has content — also was dropped by
+    the prior filter. Now survives so the parser sees the content."""
+    doc = Document()
+    tbl = doc.add_table(rows=1, cols=3)
+    tbl.style = "Table Grid"
+    tbl.rows[0].cells[1].text = "Lone content"
+
+    p = tmp_path / "sparse.docx"
+    doc.save(p)
+    ir = _extract(p)
+    tables = _tables(ir)
+    assert len(tables) == 1
+    assert tables[0].headers == ["", "Lone content", ""]

@@ -337,10 +337,14 @@ class DOCXExtractor(BaseExtractor):
         header_runs = rows_runs[0]
         body_row_runs = rows_runs[1:]
 
-        # Skip degenerate tables — single empty column
-        non_empty_headers = [h for h in headers if h]
-        total_cells = sum(1 for row in body_rows for c in row if c)
-        if len(non_empty_headers) <= 1 and total_cells == 0:
+        # Drop only when every cell across headers + body is empty.
+        # The previous shape (`len(non_empty_headers) <= 1 and total_cells
+        # == 0`) accidentally dropped 1×1 content tables — Word docs
+        # commonly use single-cell tables as paragraph containers, and
+        # the prior filter silently lost them on extract.
+        non_empty_headers = sum(1 for h in headers if h)
+        non_empty_body = sum(1 for row in body_rows for c in row if c)
+        if non_empty_headers == 0 and non_empty_body == 0:
             return None
 
         # Build merged_cells list — only entries that actually span >1.
