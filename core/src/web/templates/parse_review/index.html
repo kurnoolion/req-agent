@@ -28,7 +28,7 @@
       </span>
     </span>
     <span class="text-muted small ms-auto">
-      <i class="bi bi-info-circle"></i> click a Doc to open its 3-pane Review
+      <i class="bi bi-info-circle"></i> click a Doc to open its 3-pane Review · chevron toggles row detail
     </span>
   </div>
 
@@ -42,6 +42,7 @@
         <th class="text-end">Glossary</th>
         <th class="text-end">Internal Refs</th>
         <th class="text-end">Specs Refs</th>
+        <th style="width: 1%;"></th>
       </tr>
     </thead>
     <tbody>
@@ -51,14 +52,10 @@
           | sort(attribute='revhist_sections') %}
       {% for d in sorted_docs %}
         {% set row_id = "psr-" ~ loop.index %}
-        <tr style="cursor: pointer;"
-            data-bs-toggle="collapse"
-            data-bs-target="#{{ row_id }}-detail"
-            aria-expanded="false">
+        <tr>
           <td>
             <a href="{{ root_path }}/parse-review/{{ d.doc_id }}"
                class="text-decoration-none"
-               onclick="event.stopPropagation();"
                {% if d.plan_name %}title="{{ d.plan_name }}"{% endif %}>
               {{ d.doc_id }}
             </a>
@@ -81,9 +78,19 @@
           </td>
           <td class="text-end">{{ d.internal_refs }}</td>
           <td class="text-end">{{ d.spec_refs }}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-link p-0 text-muted"
+                    type="button"
+                    data-bs-toggle="collapse"
+                    data-bs-target="#{{ row_id }}-detail"
+                    aria-expanded="false"
+                    title="Show detection evidence">
+              <i class="bi bi-chevron-down"></i>
+            </button>
+          </td>
         </tr>
         <tr class="collapse" id="{{ row_id }}-detail">
-          <td colspan="7" class="p-3 bg-light">
+          <td colspan="8" class="p-3 bg-light">
             <div class="row g-3">
               <div class="col-md-6">
                 <strong>Revhist evidence</strong>
