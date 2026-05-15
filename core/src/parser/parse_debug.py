@@ -206,16 +206,30 @@ def cmd_revhist(args: argparse.Namespace) -> int:
 # behaviour against a real corpus before the profile schema lands.
 # When ``GlossaryDetection`` is built, these will move to the schema
 # as field defaults and this block deletes.
-_GLOSSARY_VOCAB_TOKENS = [
-    "acronym", "acronyms",
-    "abbrev", "abbreviation", "abbreviations",
-    "definition", "definitions",
-    "term", "terms",
-    "expansion", "expansions",
-    "meaning", "meanings",
+
+# Narrow keyword set — these are the high-signal label tokens used in
+# real corpora: "Glossary", "Acronyms/Definitions", "Acronyms,
+# Abbreviations & Definitions", "Acronym/Term", etc. Lowercased for
+# case-insensitive comparison.
+_GLOSSARY_KEYWORDS = {
     "glossary",
-    "description",
-]
+    "definition", "definitions",
+    "acronym", "acronyms",
+    "abbreviation", "abbreviations",
+    "term", "terms",
+}
+
+# Stopwords dropped from the meaningful-token count so titles like
+# "Acronyms And Definitions" or "Definitions Of Terms" score by their
+# substantive content, not their connectives.
+_GLOSSARY_STOPWORDS = {
+    "and", "or", "the", "with", "for", "of", "a", "an",
+}
+
+# Token-split pattern: whitespace + common separators ('/', ',', '&',
+# '|', ';', parentheses, hyphens-with-spaces). Hyphens INSIDE a word
+# (e.g. "well-known") aren't split — only ``\s|/|,|&|\|;|()`` are.
+_GLOSSARY_TOKEN_SPLIT_RE = re.compile(r"[\s/,&|;()]+")
 
 # Col-0 shape: short uppercase / mixed-case acronym tokens. Bounded
 # length so prose doesn't slip in.
@@ -226,6 +240,40 @@ _GLOSSARY_COL0_ACRONYM_RE = re.compile(r"^[A-Z][A-Za-z0-9/_-]{1,15}$")
 def _looks_like_prose(text: str) -> bool:
     s = (text or "").strip()
     return len(s) > 8 and any(c.isspace() for c in s)
+
+
+def _glossary_density(
+    text: str, req_id_re: re.Pattern | None,
+) -> tuple[int, int, float, list[str]]:
+    """Compute the glossary-label density on *text*.
+
+    Returns ``(keyword_hits, meaningful_token_count, density, hit_tokens)``.
+
+    Steps:
+    1. Strip any req_id-shaped substring (per the substituted
+       ``requirement_id.pattern``). Real corpus titles often carry a
+       trailing ``VZ_REQ_..._\\d+`` token that would otherwise inflate
+       the denominator.
+    2. Split on whitespace + common separators (``/``, ``,``, ``&``,
+       ``|``, ``;``, ``()``).
+    3. Filter out empty tokens AND stopwords (``and``, ``or``, ``the``,
+       ``with``, ``for``, ``of``, ``a``, ``an``).
+    4. Count case-insensitive matches against the narrow keyword set.
+
+    Returns density 0.0 when no meaningful tokens remain (empty title /
+    title made entirely of req_id + separators).
+    """
+    if req_id_re is not None:
+        text = req_id_re.sub(" ", text or "")
+    tokens = _GLOSSARY_TOKEN_SPLIT_RE.split(text or "")
+    meaningful = [
+        t for t in tokens
+        if t and t.lower() not in _GLOSSARY_STOPWORDS
+    ]
+    if not meaningful:
+        return 0, 0, 0.0, []
+    hit_tokens = [t for t in meaningful if t.lower() in _GLOSSARY_KEYWORDS]
+    return len(hit_tokens), len(meaningful), len(hit_tokens) / len(meaningful), hit_tokens
 
 
 def _glossary_position_score(frac: float) -> float:
@@ -256,8 +304,13 @@ def cmd_glossary(args: argparse.Namespace) -> int:
     print()
     print(f"# proposed GlossaryDetection scoring defaults (preview — "
           f"not yet in profile schema)")
-    print(f"  vocab_tokens ({len(_GLOSSARY_VOCAB_TOKENS)}): "
-          f"{', '.join(_GLOSSARY_VOCAB_TOKENS[:8])}…")
+    print(f"  keywords ({len(_GLOSSARY_KEYWORDS)}): "
+          f"{', '.join(sorted(_GLOSSARY_KEYWORDS))}")
+    print(f"  stopwords ({len(_GLOSSARY_STOPWORDS)}): "
+          f"{', '.join(sorted(_GLOSSARY_STOPWORDS))}")
+    print(f"  density rule: keyword_hits / meaningful_tokens >= 0.75")
+    print(f"  surface: heading/paragraph title OR table joined-headers + merged-cells")
+    print(f"  req_id strip: trailing req_id token removed before tokenizing")
     print(f"  col-0 acronym shape: {_GLOSSARY_COL0_ACRONYM_RE.pattern!r}")
     print(f"  col-1 prose heuristic: len>8 AND has whitespace")
     print(f"  position rule: 1.0 if frac > 0.15 else 0.0  "
@@ -267,9 +320,16 @@ def cmd_glossary(args: argparse.Namespace) -> int:
     print()
 
     # --- Label-path candidates --- glossary keywords in heading/paragraph
-    print("[label-path candidates — heading/paragraph containing glossary-vocab]")
+    # Build a parser instance for ``_heading_title_text`` access.
+    from core.src.parser.structural_parser import GenericStructuralParser
+    parser = GenericStructuralParser(profile)
+    req_id_re = parser._req_id_anchored_re
+
+    print("[label-path candidates — heading/paragraph density check]")
+    print("  rule: density(hits / meaningful tokens) >= 0.75 after stripping req_id + stopwords")
+    print()
     label_hits = 0
-    section_re = (
+    section_re_legacy = (
         re.compile(profile.heading_detection.definitions_section_pattern)
         if profile.heading_detection.definitions_section_pattern else None
     )
@@ -277,24 +337,28 @@ def cmd_glossary(args: argparse.Namespace) -> int:
         if b.type not in (BlockType.PARAGRAPH, BlockType.HEADING):
             continue
         t = (b.text or "").lower()
-        if not any(k in t for k in (
-            "glossar", "acronym", "abbrev", "definition",
-            "term", "expansion", "meaning",
-        )):
+        if not any(k in t for k in _GLOSSARY_KEYWORDS):
             continue
-        # _heading_title_text accesses parser-side methods; build a
-        # minimal parser instance just for the helper.
-        from core.src.parser.structural_parser import GenericStructuralParser
-        parser = GenericStructuralParser(profile)
         normalized = parser._heading_title_text(b)
-        matches = bool(section_re and section_re.search(normalized))
-        flag = "✓ MATCH" if matches else "  miss "
-        if matches:
+
+        hits, total_meaningful, density, hit_tokens = _glossary_density(
+            normalized, req_id_re,
+        )
+        density_match = density >= 0.75
+
+        # Also show the legacy regex verdict for comparison.
+        legacy_match = bool(section_re_legacy and section_re_legacy.search(normalized))
+
+        flag = "✓ DENSITY" if density_match else "  miss   "
+        if density_match:
             label_hits += 1
-        print(f"{flag}  idx={b.position.index:>4d}  "
-              f"type={b.type.value:9s}")
+        print(f"{flag}  idx={b.position.index:>4d}  type={b.type.value:9s}  "
+              f"density={hits}/{total_meaningful}={density:.0%}  "
+              f"(legacy regex: {'MATCH' if legacy_match else 'miss'})")
         print(f"        raw:        {(b.text or '')[:120]!r}")
         print(f"        normalized: {normalized[:120]!r}")
+        if hit_tokens:
+            print(f"        hit tokens: {hit_tokens}")
         if b.runs:
             run_summary = " | ".join(
                 f"{r.text[:30]!r}" for r in b.runs[:4]
@@ -302,10 +366,10 @@ def cmd_glossary(args: argparse.Namespace) -> int:
             print(f"        runs ({len(b.runs)}): {run_summary}")
         print()
     if label_hits == 0:
-        print("  (no label-path matches — fall through to table-header / score)")
+        print("  (no label-path matches at density >= 0.75)")
         print()
     else:
-        print(f"  total label-path matches: {label_hits}")
+        print(f"  total label-path matches (density): {label_hits}")
         print()
 
     # --- Table-header regex check (D-069 path) ---
@@ -334,8 +398,12 @@ def cmd_glossary(args: argparse.Namespace) -> int:
         print()
 
     # --- Per-TABLE proposed-score breakdown ---
+    # Vocab signal applies to headers + merged-cell text (label surface),
+    # NOT body cells — the density rule is about the label, not the
+    # table's content rows. The cell-fingerprint signal scans rows
+    # separately for col-0 acronym shape + col-1 prose shape.
     print("[per-TABLE proposed-score preview — "
-          "position + vocab + cell-fingerprint]")
+          "position + vocab-density + cell-fingerprint]")
     n_tables = 0
     n_pass = 0
     threshold = 0.55  # mirror RevhistDetection default
@@ -352,21 +420,12 @@ def cmd_glossary(args: argparse.Namespace) -> int:
         # Position
         pos_score = _glossary_position_score(frac)
 
-        # Vocab — scan headers + merged-cell text + body cells, like
-        # revhist post-a8ed9cf.
-        body_text = " || ".join(
-            " | ".join(str(c).strip() for c in row if c)
-            for row in rows if row
+        # Vocab density — applied to headers + merged-cell text.
+        label_surface = joined_headers + " " + " ".join(merged_texts)
+        hits, total_meaningful, density, hit_tokens = _glossary_density(
+            label_surface, req_id_re,
         )
-        haystack = (
-            joined_headers + " || " + " || ".join(merged_texts)
-            + " || " + body_text
-        ).lower()
-        hits = set()
-        for tok in _GLOSSARY_VOCAB_TOKENS:
-            if re.search(r"\b" + re.escape(tok) + r"\b", haystack):
-                hits.add(tok)
-        vocab_score = min(len(hits), 4) / 4.0  # cap at 4, normalize
+        vocab_score = 1.0 if density >= 0.75 else 0.0
 
         # Cell fingerprint — col 0 acronym-shape, col 1 prose-shape.
         # Each column contributes 0.5 if its shape gate fires for
@@ -396,15 +455,18 @@ def cmd_glossary(args: argparse.Namespace) -> int:
         marker = "✓ PASS" if clears else "  ----"
         if clears:
             n_pass += 1
+        density_repr = (
+            f"{hits}/{total_meaningful}={density:.0%}"
+            if total_meaningful else "(empty surface)"
+        )
         print(f"{marker}  idx={idx:>4d}  frac={frac:.2f}  "
               f"score={combined:.2f} "
               f"(pos={pos_score:.2f} vocab={vocab_score:.2f} cell={cell_score:.2f})")
         print(f"        headers: {joined_headers[:120] or '(empty)'}")
         if merged_texts:
             print(f"        merged:  {' || '.join(merged_texts)[:120]}")
-        if hits:
-            print(f"        vocab hits ({len(hits)}): "
-                  f"{', '.join(sorted(hits))}")
+        print(f"        density: {density_repr}"
+              + (f"  hits={hit_tokens}" if hit_tokens else ""))
         for r_idx, row in enumerate(rows[:3]):
             row_repr = " | ".join(
                 (str(c).strip() or '')[:40] for c in list(row)[:6]
