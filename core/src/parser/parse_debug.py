@@ -440,6 +440,258 @@ def cmd_glossary(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# references subcommand
+# ---------------------------------------------------------------------------
+
+def _trunc(s: str, n: int = 100) -> str:
+    s = s or ""
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def cmd_references(args: argparse.Namespace) -> int:
+    """Diagnostic preview for the four reference-detection paths:
+
+      1. Reference-list / bibliography section extraction
+         (profile.reference_list_section_pattern + entry_pattern → tree.reference_list_map)
+      2. Intra-doc requirement_id citations
+         (profile.requirement_id.pattern → tree.requirements[*].cross_references.internal)
+      3. Cross-doc requirement_id citations
+         (same regex → cross_references.external_plans)
+      4. Standards spec citations
+         (hardcoded 3GPP TS / Release regexes → cross_references.standards)
+
+    Also surfaces compiled-but-unused profile fields
+    (cross_reference_patterns.standards_citations + internal_section_refs)
+    so the user can see what they'd catch if wired into the parser.
+
+    Runs the full parser to get accurate evidence — same code path the
+    production pipeline takes.
+    """
+    from core.src.parser.structural_parser import GenericStructuralParser
+
+    env_dir: Path = args.env_dir
+    profile, profile_path = _load_profile(env_dir)
+    ir = _load_ir(env_dir, args.doc)
+    parser = GenericStructuralParser(profile)
+
+    crp = profile.cross_reference_patterns
+    total = len(ir.content_blocks)
+
+    print(f"# parse_debug references — doc={args.doc!r}")
+    print(f"profile: {profile_path}")
+    print(f"  reference_list_section_pattern = "
+          f"{profile.reference_list_section_pattern!r}")
+    print(f"  reference_list_entry_pattern   = "
+          f"{profile.reference_list_entry_pattern!r}")
+    print(f"  requirement_id.pattern         = "
+          f"{profile.requirement_id.pattern!r}")
+    print(f"  requirement_id.components      = "
+          f"separator={profile.requirement_id.components.get('separator','_')!r} "
+          f"plan_id_position={profile.requirement_id.components.get('plan_id_position')}")
+    print(f"  cross_reference_patterns:")
+    print(f"    standards_citations ({len(crp.standards_citations)}): "
+          f"{crp.standards_citations!r}")
+    print(f"    internal_section_refs       = {crp.internal_section_refs!r}")
+    print(f"    requirement_id_refs         = {crp.requirement_id_refs!r}")
+    print()
+    print(f"total content blocks: {total}")
+    print()
+
+    # Run the full parser. Cheap relative to the embedding stage and
+    # matches what the production pipeline sees.
+    tree = parser.parse(ir)
+
+    # ------------------------------------------------------------------
+    # [1] Reference list / bibliography section
+    # ------------------------------------------------------------------
+    print("[1. Reference list / bibliography section]")
+    if tree.reference_list_section_number:
+        print(f"  ✓ MATCH  section={tree.reference_list_section_number!r}  "
+              f"entries={len(tree.reference_list_map)}")
+        if tree.reference_list_map:
+            # Sample up to 20 entries (sorted by entry number).
+            sample = sorted(tree.reference_list_map.items())[:20]
+            for num, entry in sample:
+                spec = entry.get("spec", "")
+                title = entry.get("title", "")
+                print(f"    [{num}] spec={spec!r}"
+                      + (f"  title={_trunc(title, 80)!r}" if title else ""))
+            if len(tree.reference_list_map) > 20:
+                print(f"    … {len(tree.reference_list_map) - 20} more entries")
+        else:
+            print("    (section matched but reference_list_entry_pattern produced "
+                  "no entries — check the entry regex against the section body)")
+    elif parser._reference_list_section_re is None:
+        print("  (disabled — reference_list_section_pattern is empty)")
+    else:
+        print(f"  miss   no section matched "
+              f"{profile.reference_list_section_pattern!r}")
+        # List the first few section titles to help diagnose pattern misses.
+        sample_titles = [
+            f"{s.section_number} {s.title}".strip()
+            for s in (tree.requirements or [])[:10]
+            if s.title
+        ]
+        if sample_titles:
+            print(f"    sample section titles in tree:")
+            for t in sample_titles:
+                print(f"      - {_trunc(t, 100)}")
+    print()
+
+    # ------------------------------------------------------------------
+    # [2] Intra-doc requirement_id refs
+    # [3] Cross-doc requirement_id refs
+    # ------------------------------------------------------------------
+    # Aggregate per-section CrossReferences into corpus-wide tallies.
+    from collections import Counter, defaultdict
+
+    intra_total = 0
+    cross_plan_counts: Counter = Counter()         # plan_name -> count of mentioning sections
+    standards_keys: Counter = Counter()            # (spec, section, release) -> count
+    per_section_intra: list[tuple[str, str, int]] = []  # (section_number, title, intra_count)
+
+    for r in tree.requirements:
+        xr = r.cross_references
+        intra_total += len(xr.internal)
+        if xr.internal:
+            per_section_intra.append((
+                r.section_number or "—",
+                _trunc(r.title or "", 60),
+                len(xr.internal),
+            ))
+        for plan in xr.external_plans:
+            cross_plan_counts[plan] += 1
+        for s in xr.standards:
+            standards_keys[(s.spec, s.section or "", s.release or "")] += 1
+
+    print("[2. Intra-doc (same-plan) requirement_id citations]")
+    distinct_intra = set()
+    for r in tree.requirements:
+        for rid in r.cross_references.internal:
+            distinct_intra.add(rid)
+    print(f"  intra_doc refs (cumulative): {intra_total}")
+    print(f"  distinct intra req_ids cited: {len(distinct_intra)}")
+    if per_section_intra:
+        # Top 10 sections by intra-doc citation count.
+        top = sorted(per_section_intra, key=lambda x: -x[2])[:10]
+        print(f"  top sections by intra-doc citation count:")
+        for sec_num, title, n in top:
+            print(f"    §{sec_num:<10}  intra={n:>3}  title={title!r}")
+    else:
+        print(f"  (no intra-doc citations found — check requirement_id.pattern "
+              f"against the section body text)")
+    print()
+
+    print("[3. Cross-doc (external-plan) requirement_id citations]")
+    if cross_plan_counts:
+        print(f"  distinct external plans cited: {len(cross_plan_counts)}")
+        for plan, n in cross_plan_counts.most_common(20):
+            print(f"    plan={plan!r:<30}  cited in {n} section(s)")
+    else:
+        print(f"  (no external-plan citations — either single-plan corpus, "
+              f"or req_id.components.plan_id_position is misconfigured)")
+    print()
+
+    # ------------------------------------------------------------------
+    # [4] Standards spec citations
+    # ------------------------------------------------------------------
+    print("[4. Standards spec citations]")
+    print(f"  hardcoded regexes used by the parser today:")
+    print(f"    3GPP TS detail:    {parser._std_detail_re.pattern!r}")
+    print(f"    3GPP TS spec-only: {r'3GPP\s+TS\s+(\d[\d.]*\d)'!r}  (inline)")
+    print(f"    Release:           {parser._std_release_re.pattern!r}")
+    print()
+    if standards_keys:
+        print(f"  distinct standards detected: {len(standards_keys)}")
+        for (spec, section, release), n in standards_keys.most_common(30):
+            sect = f"§{section}" if section else "(no section)"
+            rel = f"  {release}" if release else ""
+            print(f"    {spec:<18}  {sect:<15}{rel:<14}  refs={n}")
+        # Releases summary
+        if tree.referenced_standards_releases:
+            print(f"  referenced_standards_releases: "
+                  f"{dict(tree.referenced_standards_releases)}")
+    else:
+        print(f"  (no standards citations detected — corpus may not cite 3GPP "
+              f"specs, or the hardcoded '3GPP TS ...' regex misses the citation "
+              f"style this corpus uses)")
+    print()
+
+    # ------------------------------------------------------------------
+    # [5] Compiled-but-unused profile fields
+    #
+    # The parser's __init__ compiles `crp.standards_citations` (into
+    # _std_res) and `crp.internal_section_refs` (into _section_ref_re),
+    # but `_extract_cross_refs` only uses the hardcoded 3GPP regexes and
+    # the req_id regex. These two profile-driven patterns currently
+    # aren't consulted. Surface their hit counts so the user can see
+    # what they'd catch if wired in.
+    # ------------------------------------------------------------------
+    print("[5. Profile-listed-but-UNUSED cross-reference patterns]")
+    print(f"  (compiled at parser.__init__ but `_extract_cross_refs` doesn't "
+          f"call them — wiring them is a separate task)")
+    print()
+
+    # Aggregate section text for hit-counting. Only scan sections that
+    # actually have body text (skip the empty container sections).
+    all_text = "\n\n".join(
+        r.text for r in tree.requirements if r.text
+    )
+    text_len = len(all_text)
+    print(f"  scanned text: {text_len:,} chars across {sum(1 for r in tree.requirements if r.text)} "
+          f"non-empty sections")
+    print()
+
+    # 5a. standards_citations — profile-configurable spec citation regexes.
+    print(f"  5a. cross_reference_patterns.standards_citations "
+          f"({len(parser._std_res)} pattern(s)):")
+    if not parser._std_res:
+        print(f"      (empty — no profile-driven spec patterns configured)")
+    else:
+        for i, rx in enumerate(parser._std_res):
+            matches = rx.findall(all_text)
+            n = len(matches)
+            sample = matches[0] if matches else None
+            sample_str = (
+                f"  sample={_trunc(str(sample), 60)!r}"
+                if sample is not None else ""
+            )
+            print(f"    [{i}] {rx.pattern!r}  matches={n}{sample_str}")
+    print()
+
+    # 5b. internal_section_refs — profile-configurable intra-doc section refs.
+    print(f"  5b. cross_reference_patterns.internal_section_refs:")
+    if parser._section_ref_re is None:
+        print(f"      (empty — no profile-driven section-ref pattern configured)")
+    else:
+        matches = parser._section_ref_re.findall(all_text)
+        n = len(matches)
+        print(f"      pattern={parser._section_ref_re.pattern!r}  matches={n}")
+        if matches:
+            uniq = list(dict.fromkeys(
+                m if isinstance(m, str) else " | ".join(str(x) for x in m)
+                for m in matches
+            ))[:10]
+            print(f"      sample (up to 10 distinct):")
+            for m in uniq:
+                print(f"        - {_trunc(str(m), 100)}")
+    print()
+
+    # ------------------------------------------------------------------
+    # Summary
+    # ------------------------------------------------------------------
+    print(
+        f"summary: ref_list={len(tree.reference_list_map)} entries · "
+        f"intra_doc={intra_total} refs ({len(distinct_intra)} distinct) · "
+        f"cross_plan={sum(cross_plan_counts.values())} refs "
+        f"({len(cross_plan_counts)} distinct plans) · "
+        f"standards={sum(standards_keys.values())} refs "
+        f"({len(standards_keys)} distinct)"
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # Entry
 # ---------------------------------------------------------------------------
 
@@ -472,6 +724,19 @@ def main() -> None:
         help="Doc id (the stem of <env_dir>/out/extract/<doc>_ir.json)",
     )
 
+    rf = sub.add_parser(
+        "references",
+        help="Show reference / citation detection diagnostics: bibliography "
+             "section + entries; intra-doc, cross-doc, and standards "
+             "citation tallies; plus hit counts for profile-listed-but-"
+             "currently-unused cross-reference patterns.",
+    )
+    rf.add_argument("--env-dir", required=True, type=Path)
+    rf.add_argument(
+        "--doc", required=True,
+        help="Doc id (the stem of <env_dir>/out/extract/<doc>_ir.json)",
+    )
+
     args = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
@@ -480,6 +745,8 @@ def main() -> None:
             rc = cmd_revhist(args)
         elif args.cmd == "glossary":
             rc = cmd_glossary(args)
+        elif args.cmd == "references":
+            rc = cmd_references(args)
         else:
             p.error(f"unknown subcommand: {args.cmd}")
             rc = 2
