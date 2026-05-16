@@ -1,0 +1,32 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Licensed under MIT.
+#
+# SIRA enrichment overrides for the NORA telecom corpus. Inherits the
+# parameter defaults from scripts/configs/enrich/default.yaml and only
+# swaps the prompt files to our v01 telecom variants.
+#
+# Default parameters carried over (NOT redefined here so changes upstream
+# in default.yaml propagate cleanly):
+#   max_docs: 0           — process all docs
+#   max_doc_chars: 4000   — char cap per requirement before sending to LLM.
+#                            NORA reqs are typically <2000 chars; rare table-
+#                            heavy chunks may hit this cap.
+#   concurrency: 4096     — parallel LLM requests. Will need tuning down for
+#                            the proprietary LLM endpoint's rate limit (the
+#                            shim doesn't queue; bursts hit the backend
+#                            directly).
+#   doc_max_tokens: 2048  — generation cap per enrichment call.
+#   query_max_tokens: 1024
+#   temperature: 0.4
+#   seed: 42
+#   max_n: 4              — max words per generated phrase.
+#   max_df_ratio: 0.05    — DF-filter cap (drop terms in >5% of corpus —
+#                            the discriminative-term invariant from D-DRAFT-1).
+#   tokenizer: unicode_stem
+#
+# Concurrency note: at 4096 SIRA can saturate even a 100B endpoint. For
+# the first NORA run, override on CLI: enrich.concurrency=8 (or whatever
+# the proprietary endpoint can absorb).
+
+doc_prompt_file: configs/enrich/prompts/doc_requirement_v01.txt
+query_prompt_file: configs/enrich/prompts/query_requirement_v01.txt

@@ -58,3 +58,9 @@ environments/*.json
 
 # COMPACT per-clone session binding (do not commit)
 .compact/
+
+# Sandbox area for third-party tools (sira/ strand and similar).
+# Cloned upstream repos are unversioned here so we can `git pull` them
+# independently of NORA's history. Glue we write (adapters, shims,
+# run notes) lives in subdirs of sandbox/ that AREN'T under sandbox/sira/.
+sandbox/sira/

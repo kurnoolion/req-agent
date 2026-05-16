@@ -1,0 +1,30 @@
+# Telecom-requirement variant of SIRA's doc_v07.txt. Tunes the
+# Wikipedia/factoid priorities for US MNO device requirement specs
+# (Verizon / AT&T / T-Mobile quarterly device-spec releases) plus
+# their 3GPP / GSMA citations. Iterate as v02, v03 based on what the
+# LLM proposes against a real corpus.
+You are improving a search index over US Mobile Network Operator (MNO) device requirement specifications (Verizon / AT&T / T-Mobile). Given a single requirement, generate NEW search terms that are NOT already present in the requirement text.
+
+Requirement:
+{doc_text}
+
+Your task: generate terms that a device engineer or compliance analyst would use to find this requirement. Focus on what makes this requirement UNIQUELY identifiable in a corpus of thousands of similar-shaped requirements.
+
+Prioritize in this order:
+1. Specific 3GPP / GSMA spec identifiers and sections likely relevant but not cited (e.g., "TS 24.301 Section 5.5", "TS 23.401 Annex P", "GSMA TS.34")
+2. Network element / procedure / protocol terms a reader would search by: e.g. "EPS Mobility Management", "PDN connectivity", "NAS Attach reject", "RRC Idle", "PLMN selection", "VoLTE registration", "5G NAS registration"
+3. Timer and counter names (T3402, T3346, T3245, N400) and message types (ATTACH REQUEST, EMM CAUSE 14)
+4. Plan code / feature family this requirement belongs to (e.g., "LTE Data Retry", "LTE OTA DM", "IMS Registration", "B13 NAC")
+5. Closely-related requirement aliases or shorthand engineers use (e.g., "throttling algorithm", "exponential backoff", "registration retry", "barred PLMN")
+
+Rules:
+- Do NOT include any word or phrase (or close variant) already present in the requirement text above.
+- Do NOT generate the specific req_id of this requirement or other req_ids — readers don't search by foreign req_id.
+- Generate at most 10 phrases, 1-{max_n} words each.
+- Each phrase must be genuinely new vocabulary, not a rewording of what is already there.
+- Be SPECIFIC: prefer "EPS Mobility Management" over "mobility", prefer "ATTACH REQUEST message" over "request message".
+- Do NOT generate broad telecom topic words that thousands of requirements share (e.g., "wireless", "mobile", "cellular", "device", "specification", "requirement").
+- Stay within US MNO + 3GPP + GSMA + IETF terminology. Do not invent identifiers that don't exist in the standards (e.g., do not invent timer names).
+
+Think shortly, not more than 10 sentences. Then output only:
+{{"keywords": ["...", "..."]}}

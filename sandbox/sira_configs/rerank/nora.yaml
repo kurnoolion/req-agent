@@ -1,0 +1,20 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Licensed under MIT.
+#
+# SIRA reranker overrides for the NORA telecom corpus. Inherits defaults
+# from scripts/configs/rerank/default.yaml and overrides the prompt file.
+#
+# Default parameters carried (see scripts/configs/rerank/default.yaml):
+#   top_n: 200            — number of candidates to LLM-rerank per query.
+#                            NORA corpus is ~13k requirements; top_n=200
+#                            means 200 LLM calls per query × 18 queries =
+#                            3600 reranker calls per eval pass. Tune down
+#                            on CLI if the endpoint's slow:
+#                            rerank.top_n=50.
+#   max_doc_chars: 4000
+#   concurrency: 2048
+#   max_tokens: 64        — reranker returns just {"score": <int>}, tiny.
+#   temperature: 0.0      — reranker is greedy / deterministic by design.
+#   seed: 42
+
+prompt_file: configs/rerank/prompts/relevance_requirement_v01.txt
