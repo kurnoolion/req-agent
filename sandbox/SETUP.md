@@ -26,14 +26,40 @@ git clone --depth 1 https://github.com/facebookresearch/sira.git sandbox/sira
 
 ### 2. Create the Python env
 
-SIRA's README recommends conda; `uv` works the same way. From inside the clone:
+Pick the path that matches your machine.
+
+#### 2a. Trimmed install — recommended on the work PC (no GPU + restricted network)
+
+The four SIRA pipeline stages we actually run (`bm25`, `enrich_corpus`, `enrich_query`, `rerank`) import only `bm25x` (local Rust build via maturin), `aiohttp`, `hydra-core`, `omegaconf`, `polars`, `huggingface_hub` (just for the import — the download itself is skipped because our adapter writes `metadata.json`). They do **not** import `torch` / `sglang` / `transformers` / `flash-attn` / `flashinfer`. Those heavy deps in SIRA's `pyproject.toml` are for running sglang locally, which we bypass entirely via the FastAPI shim → proprietary LLM.
+
+So we install only what's needed and tell `uv` to skip the rest:
+
+```bash
+cd sandbox/sira
+uv venv .venv --python 3.12
+source .venv/bin/activate
+
+# Step 1: only the deps the four stages need.
+uv pip install --system-certs \
+    aiohttp hydra-core omegaconf polars maturin pybind11 huggingface_hub
+
+# Step 2: install sira itself in editable mode, skipping its dep tree
+# entirely. --no-deps means uv won't try to fetch torch / sglang / etc.
+uv pip install --system-certs --no-deps -e .
+
+source sandbox.sh   # sets PYTHONPATH + cd helpers
+```
+
+This avoids all three custom wheel indexes (`download.pytorch.org`, `docs.sglang.ai`, `flashinfer.ai`) — handy if your corporate firewall whitelists only PyPI.
+
+#### 2b. Full install — once you have GPU + open network (e.g. DGX Spark)
 
 ```bash
 cd sandbox/sira
 uv venv .venv --python 3.12
 source .venv/bin/activate
 uv pip install -e .
-source sandbox.sh   # sets PYTHONPATH + cd helpers
+source sandbox.sh
 ```
 
 `uv pip install -e .` will reach out to three non-HF wheel indexes:
@@ -60,6 +86,21 @@ Or set once for the shell session:
 ```bash
 export UV_NATIVE_TLS=true   # uv >=0.5 reads this for every uv command
 ```
+
+**Corporate firewall blocking download.pytorch.org** — if `uv` reports `torch was not found in the package registry` even with `--system-certs`, the corporate proxy is dropping requests to `download.pytorch.org` entirely (allowlist mode). You have two options:
+- **Use the trimmed install (2a) instead** — we don't need torch anyway for our pipeline path.
+- **Pre-download wheels on a connected box, transfer them**:
+  ```bash
+  # On connected box:
+  uv pip download torch==2.9.1 torchvision==0.24.1 \
+      --index-url https://download.pytorch.org/whl/cu130 -d wheels/
+  uv pip download sglang-kernel \
+      --index-url https://docs.sglang.ai/whl/cu130 -d wheels/
+  # ... and so on for flashinfer-jit-cache + flash-attn-4
+
+  # Transfer wheels/ to work PC, then:
+  uv pip install --no-index --find-links wheels/ -e .
+  ```
 
 ### 3. Build the `bm25x` Rust extension
 
