@@ -44,6 +44,23 @@ source sandbox.sh   # sets PYTHONPATH + cd helpers
 
 Plus regular PyPI for everything else.
 
+**Corporate TLS interception** — if `uv pip install` fails with
+`invalid peer certificate: UnknownIssuer` (the message names the
+specific index, e.g. `docs.sglang.ai`), your network is re-signing
+HTTPS with a corporate CA that isn't in `uv`'s bundled cert store.
+Pass `--system-certs` to opt into the system CA store (which already
+trusts the corporate CA, or the install wouldn't be possible at all):
+
+```bash
+uv pip install -e . --system-certs
+```
+
+Or set once for the shell session:
+
+```bash
+export UV_NATIVE_TLS=true   # uv >=0.5 reads this for every uv command
+```
+
 ### 3. Build the `bm25x` Rust extension
 
 The Python wrapper imports `bm25x` from the Rust crate via `maturin`. From inside `sandbox/sira/`:
