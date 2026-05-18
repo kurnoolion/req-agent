@@ -28,3 +28,29 @@
 
 ### Flags
 - SIRA's LLM call shape (sglang-native schema-constrained gen vs OpenAI-style chat-completions) is unknown until we read `src/sira/llm.py` post-clone. The shim's translation layer complexity depends on it — flagged as Phase 0 finding, not a blocker.
+
+## 2026-05-17 — work-PC install shakedown + overnight pipeline kicked off
+
+### Done this session
+- **Phase 0 productive prep** (dev PC, commit `dd6effe`): cloned `facebookresearch/sira` into gitignored `sandbox/sira/`; confirmed LLM call shape is plain OpenAI Chat Completions (no SIRA fork needed); read actual generic prompts (`doc_v07` / `query_v07` / `relevance_v04`) — they're Wikipedia/factoid-tuned, so wrote `v01` telecom variants (req_id / plan / 3GPP-spec / network-element examples); built the FastAPI shim (`sandbox/shim/openai_shim.py`), NORA→BEIR adapter (`sandbox/adapter/nora_to_beir.py`), three SIRA hydra configs (`sira_configs/{data,enrich,rerank}/nora.yaml`), `install_configs.sh`, README + SETUP.md.
+- **Phase 1 work-PC install shakedown** — 13 follow-up commits fixed corporate-env friction one error at a time:
+  - TLS-CA-not-trusted ×2: `uv pip --system-certs` (`9a31097`); httpx reads `SSL_CERT_FILE` (`4b29f48`).
+  - HTTPS_PROXY interception ×2: shim's outbound (`bde15e8` — `NORA_LLM_SKIP_PROXY`); SIRA's `urllib` localhost probe (`5e54116` — `activate.sh` auto-adds `127.0.0.1,localhost,::1` to NO_PROXY).
+  - GPU stack inaccessible (firewall blocks download.pytorch.org): documented trimmed-install path (`164307e`); empirically pinned the actual minimum dep set — `polars[rtcompat]` for AVX2-less CPU (`b7c2211`), `beir --no-deps` + `pytrec_eval` + `numpy` for eval_bm25 (`fd05334`).
+  - Pass-through shim mode so `proprietary_provider.complete()` doesn't need implementing (`669c541`) — `NORA_LLM_BASE_URL` + `NORA_LLM_API_KEY` + `NORA_LLM_MODEL` env vars (D-044 / D-049 parity).
+  - `sandbox.sh` is conda-only → wrote uv-flavored `sandbox/activate.sh` (`b68e9d2`).
+  - Hydra config bugs: bogus `server.auto_start=false` flag I'd invented — removed; shim now serves `/v1/models` so SIRA auto-detects (`41e8a06`). `enrich/nora.yaml` and `rerank/nora.yaml` lacked `defaults: [default, _self_]` so CLI overrides like `enrich.concurrency=8` 500'd (`a6a3dea`).
+  - .gitignore hygiene: `data/` rule was eating `sandbox/sira_configs/data/nora.yaml` — added negative-glob (`66c22f0`); ignored regenerated `sandbox/adapter/out/` (`870ef7b`).
+- **Verify-C cleared** on work PC against the adapter output: BM25-only baseline returned `Recall@10: 53.4%, NDCG@10: 0.427, Recall@100: 80.8%, Recall@200: 83.8%`. Mid-tier vs BEIR benchmarks; meaningful headroom for the LLM-enrichment stages.
+- **Verify-D kicked off overnight.** Throughput measured at 92 calls in 7 min (~36s/call avg at `enrich.concurrency=8`); full corpus run projected at ~17h. User detaching shim + pipeline under tmux/nohup before leaving for the night.
+
+### In progress
+- Overnight pipeline run (Phase 1 full). Four `best.json` outputs expected at `sandbox/adapter/out/nora/eval/{baseline,doc-enrich,query-enrich,rerank}/`. First-light comparison tomorrow morning.
+
+### Next
+- Triage tomorrow's eval JSONs. Compare Recall@10 lift per stage against BM25 baseline (53.4%). The interesting numbers: doc-enrich (does corpus DF-filter help?), rerank (does the LLM reranker pull more correct reqs into top-10?).
+- Scope per-query probe via NORA's Test page (~half-day implementation). Strand-decision-compatible because SIRA stays whole in `sandbox/sira_query/` — NORA web UI just gains a thin proxy toggle. Synthesizer reused for apples-to-apples. Wait until eval results land + I've read SIRA's per-query functions + NORA's `query.py` before writing the precise file-level plan.
+
+### Flags
+- **Throughput vs. wall-clock asymmetry**: at 36s/call, the 13k-req enrichment is the long pole. If results tomorrow look promising and we want fast iteration on prompts or `max_doc_chars`, we'd need to either (a) raise concurrency above 8 (untested if the proprietary endpoint absorbs it), or (b) sample with `max_docs=N` for iteration loops, then full-run only at end. Decide post-eval.
+- **NLTK / other transitive deps**: SIRA's pipeline LLM stages (`enrich_corpus` / `enrich_query` / `rerank`) haven't been exercised yet on work PC. If they need any deps the BM25 stage didn't (nltk, scipy, pandas), we'll discover them only after overnight run progresses past BM25. Monitoring tomorrow.
