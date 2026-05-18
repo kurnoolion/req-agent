@@ -49,7 +49,11 @@ uv pip install --system-certs \
 # entirely. --no-deps means uv won't try to fetch torch / sglang / etc.
 uv pip install --system-certs --no-deps -e .
 
-source sandbox.sh   # sets PYTHONPATH + cd helpers
+# Activate the env + set PYTHONPATH + HF-offline env vars.
+# Use OUR replacement; the upstream `sandbox.sh` is conda-only and
+# errors with "conda env 'sira312' not found" on uv-based installs.
+cd $REPO_ROOT
+source sandbox/activate.sh
 ```
 
 This avoids all three custom wheel indexes (`download.pytorch.org`, `docs.sglang.ai`, `flashinfer.ai`) — handy if your corporate firewall whitelists only PyPI.
@@ -61,7 +65,8 @@ cd sandbox/sira
 uv venv .venv --python 3.12
 source .venv/bin/activate
 uv pip install -e .
-source sandbox.sh
+cd $REPO_ROOT
+source sandbox/activate.sh   # our replacement for upstream sandbox.sh (conda-only)
 ```
 
 `uv pip install -e .` will reach out to three non-HF wheel indexes:
@@ -225,11 +230,11 @@ head -1 sandbox/adapter/out/nora/raw/corpus.jsonl | python -m json.tool
 
 ### C. BM25 baseline on NORA (no LLM, fastest sanity check)
 
-From `sandbox/sira/`:
+From the repo root:
 
 ```bash
-source .venv/bin/activate
-source sandbox.sh
+source sandbox/activate.sh
+cd sandbox/sira
 python scripts/eval_bm25.py \
     data=nora \
     db_root=$(realpath ../adapter/out)
@@ -246,8 +251,9 @@ If this step works, the data pipeline is sound — every LLM-touching stage down
 cd $REPO_ROOT && uvicorn sandbox.shim.openai_shim:app --port 8030
 
 # Terminal 2 — pipeline
-cd $REPO_ROOT/sandbox/sira
-source .venv/bin/activate && source sandbox.sh
+cd $REPO_ROOT
+source sandbox/activate.sh
+cd sandbox/sira
 python scripts/run_pipeline.py \
     data=nora \
     enrich=nora \
