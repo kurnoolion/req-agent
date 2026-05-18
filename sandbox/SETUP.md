@@ -40,7 +40,9 @@ uv venv .venv --python 3.12
 source .venv/bin/activate
 
 # Step 1: only the deps the four stages need + httpx for the shim's
-# pass-through mode (step 5a) + FastAPI/uvicorn to run the shim.
+# pass-through mode (step 5a) + FastAPI/uvicorn to run the shim
+# + beir (--no-deps so it doesn't drag in torch/sentence-transformers)
+# and beir's actual runtime needs (pytrec_eval, numpy).
 #
 # Polars note: the default `polars` wheel requires AVX2 / FMA / BMI1+2.
 # On older/virtualized CPUs without those (common on corporate work
@@ -50,7 +52,15 @@ source .venv/bin/activate
 # `polars` and gain SIMD acceleration — negligible for our data sizes.
 uv pip install --system-certs \
     aiohttp hydra-core omegaconf 'polars[rtcompat]' maturin pybind11 \
-    huggingface_hub fastapi uvicorn httpx
+    huggingface_hub fastapi uvicorn httpx \
+    pytrec_eval numpy
+
+# beir is used only for its EvaluateRetrieval metric wrapper. Full
+# install pulls torch + sentence-transformers (~1 GB) which we don't
+# need; --no-deps trims that out. pytrec_eval (above) is what
+# EvaluateRetrieval actually calls under the hood; numpy is for its
+# math.
+uv pip install --system-certs --no-deps beir
 
 # Step 2: install sira itself in editable mode, skipping its dep tree
 # entirely. --no-deps means uv won't try to fetch torch / sglang / etc.
