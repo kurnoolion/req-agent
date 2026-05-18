@@ -41,9 +41,16 @@ source .venv/bin/activate
 
 # Step 1: only the deps the four stages need + httpx for the shim's
 # pass-through mode (step 5a) + FastAPI/uvicorn to run the shim.
+#
+# Polars note: the default `polars` wheel requires AVX2 / FMA / BMI1+2.
+# On older/virtualized CPUs without those (common on corporate work
+# PCs) it segfaults with "Illegal instruction" at runtime. The trimmed
+# install below uses the compat wheel for safety. On a modern x86_64
+# (Tiger Lake+, Zen2+) you can swap `polars[rtcompat]` for plain
+# `polars` and gain SIMD acceleration — negligible for our data sizes.
 uv pip install --system-certs \
-    aiohttp hydra-core omegaconf polars maturin pybind11 huggingface_hub \
-    fastapi uvicorn httpx
+    aiohttp hydra-core omegaconf 'polars[rtcompat]' maturin pybind11 \
+    huggingface_hub fastapi uvicorn httpx
 
 # Step 2: install sira itself in editable mode, skipping its dep tree
 # entirely. --no-deps means uv won't try to fetch torch / sglang / etc.
@@ -327,3 +334,4 @@ Add these to `sandbox/sira/sandbox.sh` if you want them auto-set on `source`.
 | sglang process keeps trying to start | `server.auto_start` defaulting to true | Pass `server.auto_start=false` on every `run_pipeline.py` invocation |
 | eval numbers look wrong (e.g. 0% recall) | Adapter wrote `_id` field that doesn't match qrels `corpus-id` | Spot-check: `head -1 corpus.jsonl` and one qrel row — `_id` must equal `corpus-id` |
 | Adapter skips most reqs as "no-id" | Source `_tree.json` has empty `req_id` fields | Re-run NORA parse stage; if the source corpus genuinely lacks req_ids, this strand's approach doesn't apply |
+| `Illegal instruction (core dumped)` + polars warning about "avx2, fma, bmi1, bmi2, lzcnt, movbe" | CPU lacks AVX2 (older / virtualized x86_64) and you installed plain `polars` | `uv pip install --reinstall --system-certs 'polars[rtcompat]'`. Alternative spelling if the extra doesn't resolve: `uv pip install --system-certs polars-lts-cpu` (after `uv pip uninstall polars`). |
