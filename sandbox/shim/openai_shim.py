@@ -50,6 +50,33 @@ _LLM_MODEL = os.getenv("NORA_LLM_MODEL", "")
 _LLM_TIMEOUT = float(os.getenv("NORA_LLM_TIMEOUT", "300"))
 
 
+def _resolve_verify():
+    """Map env-var knobs to httpx's `verify=` argument.
+
+    Corporate-TLS-interception case (common on company-issued laptops):
+    `httpx` defaults to certifi's CA bundle which doesn't trust the
+    corporate CA, even when the system store does. The connection then
+    silently dies (e.g. "Server disconnected without sending a
+    response"). Two escape hatches:
+
+    * ``SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt`` (or
+      ``REQUESTS_CA_BUNDLE`` — same idea) → point httpx at the system
+      bundle that already has the corporate CA installed.
+    * ``NORA_LLM_VERIFY_SSL=false`` → skip verification entirely. Only
+      reasonable for internal-network endpoints; never for public APIs.
+    """
+    verify_flag = os.getenv("NORA_LLM_VERIFY_SSL", "true").lower()
+    if verify_flag in ("false", "0", "no"):
+        return False
+    cert_file = os.getenv("SSL_CERT_FILE") or os.getenv("REQUESTS_CA_BUNDLE")
+    if cert_file:
+        return cert_file
+    return True
+
+
+_HTTPX_VERIFY = _resolve_verify()
+
+
 # Adapter-mode provider is loaded lazily — only when pass-through is
 # disabled. Keeps the shim usable without filling in proprietary_provider
 # when the proprietary LLM speaks OpenAI directly.
@@ -105,7 +132,7 @@ def chat_completions(req: _ChatRequest) -> dict:
             headers["Authorization"] = f"Bearer {_LLM_API_KEY}"
         url = f"{_LLM_BASE_URL}/chat/completions"
         try:
-            with httpx.Client(timeout=_LLM_TIMEOUT) as client:
+            with httpx.Client(timeout=_LLM_TIMEOUT, verify=_HTTPX_VERIFY) as client:
                 upstream = client.post(url, json=payload, headers=headers)
         except httpx.RequestError as exc:
             raise HTTPException(status_code=502, detail=f"upstream error: {exc}")
@@ -165,12 +192,19 @@ def chat_completions(req: _ChatRequest) -> dict:
 @app.get("/healthz")
 def healthz() -> dict:
     if _LLM_BASE_URL:
+        if _HTTPX_VERIFY is False:
+            verify_label = "OFF (NORA_LLM_VERIFY_SSL=false)"
+        elif isinstance(_HTTPX_VERIFY, str):
+            verify_label = f"custom CA bundle: {_HTTPX_VERIFY}"
+        else:
+            verify_label = "default (certifi)"
         return {
             "ok": True,
             "mode": "pass-through",
             "base_url": _LLM_BASE_URL,
             "model_override": _LLM_MODEL or None,
             "api_key_set": bool(_LLM_API_KEY),
+            "tls_verify": verify_label,
         }
     return {
         "ok": True,

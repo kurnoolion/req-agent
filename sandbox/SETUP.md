@@ -142,6 +142,11 @@ export NORA_LLM_BASE_URL=https://your-internal-llm/v1   # base — shim appends 
 export NORA_LLM_API_KEY=<bearer-token>                  # optional; injected as `Authorization: Bearer …`
 export NORA_LLM_MODEL=<actual-model-name>               # optional; overrides whatever SIRA sends in `model`
 export NORA_LLM_TIMEOUT=300                             # optional; per-request seconds, default 300
+
+# Corporate TLS only (skip on open networks):
+export SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt # if your upstream uses a corporate-CA cert
+# OR (escape hatch, internal endpoints only):
+# export NORA_LLM_VERIFY_SSL=false
 ```
 
 If `NORA_LLM_MODEL` is unset the shim forwards whatever SIRA puts in the `model` field. SIRA defaults to a sglang-style identifier (e.g. `qwen3.6-35b-a3b-fp8:h100`); set `NORA_LLM_MODEL` to the actual name your endpoint accepts.
@@ -300,6 +305,7 @@ Add these to `sandbox/sira/sandbox.sh` if you want them auto-set on `source`.
 | `curl /healthz` returns "Connection refused" | Shim isn't running | `uvicorn sandbox.shim.openai_shim:app --port 8030` from repo root |
 | `/v1/chat/completions` returns 501 with "NotImplementedError" | Adapter mode + stub `proprietary_provider.complete()` | Either implement `complete()` (step 5b) or switch to pass-through by setting `NORA_LLM_BASE_URL` (step 5a) and restarting the shim |
 | `/v1/chat/completions` returns 502 with "upstream error: ..." | Pass-through mode + unreachable upstream (DNS, refused, timeout) | Check `NORA_LLM_BASE_URL` value; `curl -i $NORA_LLM_BASE_URL/chat/completions` independently to isolate |
+| `/v1/chat/completions` returns 502 with "Server disconnected without sending a response" | Corporate TLS interception — `httpx` uses its bundled certifi CA and doesn't trust the corporate CA. Same root cause as `uv`'s `--system-certs` issue earlier. | Set `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` (or wherever your system stores the bundle that includes the corporate CA) and restart the shim. `curl /healthz` should now show `"tls_verify": "custom CA bundle: ..."`. **Escape hatch (last resort, internal-only):** `NORA_LLM_VERIFY_SSL=false`. Don't use this for public endpoints. |
 | Pass-through returns 401 / 403 from upstream | Bad / missing `NORA_LLM_API_KEY` | Confirm key value and that the upstream accepts it via direct curl |
 | Pass-through returns 400 "model not found" from upstream | SIRA's `model` field (e.g. `qwen3.6-35b-a3b-fp8:h100`) isn't recognized by your endpoint | Set `NORA_LLM_MODEL` to the actual model name and restart the shim |
 | `prepare` stage tries to download from HF anyway | `metadata.json` missing or unreadable | `ls sandbox/adapter/out/nora/raw/metadata.json`; re-run adapter |
