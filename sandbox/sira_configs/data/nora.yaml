@@ -1,0 +1,31 @@
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+# Licensed under MIT (matches SIRA's license on derived config files).
+#
+# SIRA dataset config for the local NORA corpus produced by
+# sandbox/adapter/nora_to_beir.py.
+#
+# When `<db_root>/<name>/raw/metadata.json` exists, SIRA's
+# prepare_mteb_data.py early-returns (no HF download). Point it at our
+# adapter output:
+#
+#   python -m sandbox.adapter.nora_to_beir \
+#       --env-dir <env_dir> \
+#       --output sandbox/adapter/out/nora
+#
+#   python scripts/run_pipeline.py \
+#       data=nora \
+#       db_root=$(realpath ../../adapter/out) \
+#       server.auto_start=false
+#
+# (Run from inside the sandbox/sira/ clone after copying this YAML to
+# scripts/configs/data/. See sandbox/README.md for the install step.)
+
+name: nora
+repo: nora-local-adapter   # informational only; no HF fetch happens
+split: test
+min_query_len: 2
+
+# Recall-at-K cutoffs. NORA's 18-Q eval is small; surface up to top_200
+# so concept-shaped queries (cross_doc / standards_comparison) can be
+# audited at deeper ranks against the published A4 baseline.
+k_values: [10, 20, 50, 100, 200]

@@ -26,6 +26,10 @@ Thumbs.db
 
 # Data directory (raw docs and extracted output)
 data/
+# Exception: sandbox/sira_configs/data/ holds SIRA hydra config files,
+# not corpus data. The bare `data/` pattern above was matching it.
+!sandbox/sira_configs/data/
+!sandbox/sira_configs/data/**
 
 # Extracted images (byproduct of PDF extraction)
 extracted_images/
