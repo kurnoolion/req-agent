@@ -4,6 +4,15 @@
 # SIRA reranker overrides for the NORA telecom corpus. Inherits defaults
 # from scripts/configs/rerank/default.yaml and overrides the prompt file.
 #
+# `defaults` list pulls in default.yaml FIRST so CLI overrides like
+# `rerank.top_n=50` or `rerank.concurrency=8` work. Without this,
+# `rerank=nora` replaces the rerank subtree wholesale and overrides
+# fail with ConfigCompositionException.
+
+defaults:
+  - default
+  - _self_
+#
 # Default parameters carried (see scripts/configs/rerank/default.yaml):
 #   top_n: 200            — number of candidates to LLM-rerank per query.
 #                            NORA corpus is ~13k requirements; top_n=200

@@ -5,6 +5,16 @@
 # parameter defaults from scripts/configs/enrich/default.yaml and only
 # swaps the prompt files to our v01 telecom variants.
 #
+# The `defaults` list pulls in default.yaml FIRST, then layers our two
+# overrides on top via `_self_`. Without this, `enrich=nora` replaces
+# the enrich subtree wholesale and CLI overrides like
+# `enrich.concurrency=8` fail with ConfigCompositionException
+# "Could not override 'enrich.concurrency'".
+
+defaults:
+  - default
+  - _self_
+#
 # Default parameters carried over (NOT redefined here so changes upstream
 # in default.yaml propagate cleanly):
 #   max_docs: 0           — process all docs
