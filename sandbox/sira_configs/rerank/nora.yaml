@@ -21,9 +21,16 @@ defaults:
 #                            on CLI if the endpoint's slow:
 #                            rerank.top_n=50.
 #   max_doc_chars: 4000
-#   concurrency: 2048
+#   concurrency: 2048     — overridden to 1 below for the work-PC
+#                            proxy-throttled environment.
 #   max_tokens: 64        — reranker returns just {"score": <int>}, tiny.
 #   temperature: 0.0      — reranker is greedy / deterministic by design.
 #   seed: 42
+
+# Default to strict serial — same proxy-throttling reason as enrich/nora.yaml.
+# Reranker calls are fast (just `{"score": N}` returns), so serial isn't as
+# painful here as for corpus enrichment. Override on CLI for unthrottled
+# environments: `rerank.concurrency=8`.
+concurrency: 1
 
 prompt_file: configs/rerank/prompts/relevance_requirement_v01.txt

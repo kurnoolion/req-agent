@@ -21,10 +21,8 @@ defaults:
 #   max_doc_chars: 4000   — char cap per requirement before sending to LLM.
 #                            NORA reqs are typically <2000 chars; rare table-
 #                            heavy chunks may hit this cap.
-#   concurrency: 4096     — parallel LLM requests. Will need tuning down for
-#                            the proprietary LLM endpoint's rate limit (the
-#                            shim doesn't queue; bursts hit the backend
-#                            directly).
+#   concurrency: 4096     — parallel LLM requests. We override below to 1
+#                            for the work-PC proxy-throttled environment.
 #   doc_max_tokens: 2048  — generation cap per enrichment call.
 #   query_max_tokens: 1024
 #   temperature: 0.4
@@ -34,9 +32,12 @@ defaults:
 #                            the discriminative-term invariant from D-DRAFT-1).
 #   tokenizer: unicode_stem
 #
-# Concurrency note: at 4096 SIRA can saturate even a 100B endpoint. For
-# the first NORA run, override on CLI: enrich.concurrency=8 (or whatever
-# the proprietary endpoint can absorb).
+# Default to strict serial. The corporate proxy between the work PC
+# and the proprietary LLM endpoint throttles parallel requests; the
+# upstream default of 4096 saturates the throttle and gets 5xx
+# responses. Override on CLI for unthrottled environments (DGX Spark
+# with local sglang, etc.): `enrich.concurrency=16`.
+concurrency: 1
 
 doc_prompt_file: configs/enrich/prompts/doc_requirement_v01.txt
 query_prompt_file: configs/enrich/prompts/query_requirement_v01.txt
