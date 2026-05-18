@@ -77,6 +77,19 @@ def _resolve_verify():
 _HTTPX_VERIFY = _resolve_verify()
 
 
+# Corporate-proxy bypass. httpx defaults to `trust_env=True` and so
+# auto-honors `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY`. On a work PC
+# with a global HTTPS_PROXY for outbound traffic, an internal LLM
+# endpoint that's reachable directly will be routed through the proxy
+# anyway — which often resets the connection ("Server disconnected
+# without sending a response"). `NORA_LLM_SKIP_PROXY=true` forces
+# `trust_env=False` so httpx ignores the proxy env vars entirely.
+#
+# Equivalent durable fix at the shell level: add the LLM hostname to
+# NO_PROXY ("export NO_PROXY=$NO_PROXY,your-llm-host.internal").
+_LLM_SKIP_PROXY = os.getenv("NORA_LLM_SKIP_PROXY", "").lower() in ("true", "1", "yes")
+
+
 # Adapter-mode provider is loaded lazily — only when pass-through is
 # disabled. Keeps the shim usable without filling in proprietary_provider
 # when the proprietary LLM speaks OpenAI directly.
@@ -132,7 +145,11 @@ def chat_completions(req: _ChatRequest) -> dict:
             headers["Authorization"] = f"Bearer {_LLM_API_KEY}"
         url = f"{_LLM_BASE_URL}/chat/completions"
         try:
-            with httpx.Client(timeout=_LLM_TIMEOUT, verify=_HTTPX_VERIFY) as client:
+            with httpx.Client(
+                timeout=_LLM_TIMEOUT,
+                verify=_HTTPX_VERIFY,
+                trust_env=not _LLM_SKIP_PROXY,
+            ) as client:
                 upstream = client.post(url, json=payload, headers=headers)
         except httpx.RequestError as exc:
             raise HTTPException(status_code=502, detail=f"upstream error: {exc}")
@@ -205,6 +222,7 @@ def healthz() -> dict:
             "model_override": _LLM_MODEL or None,
             "api_key_set": bool(_LLM_API_KEY),
             "tls_verify": verify_label,
+            "skip_proxy": _LLM_SKIP_PROXY,
         }
     return {
         "ok": True,
