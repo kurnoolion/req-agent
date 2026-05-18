@@ -39,9 +39,11 @@ cd sandbox/sira
 uv venv .venv --python 3.12
 source .venv/bin/activate
 
-# Step 1: only the deps the four stages need.
+# Step 1: only the deps the four stages need + httpx for the shim's
+# pass-through mode (step 5a) + FastAPI/uvicorn to run the shim.
 uv pip install --system-certs \
-    aiohttp hydra-core omegaconf polars maturin pybind11 huggingface_hub
+    aiohttp hydra-core omegaconf polars maturin pybind11 huggingface_hub \
+    fastapi uvicorn httpx
 
 # Step 2: install sira itself in editable mode, skipping its dep tree
 # entirely. --no-deps means uv won't try to fetch torch / sglang / etc.
@@ -125,9 +127,30 @@ Idempotent. Re-run after editing any of:
 - `sandbox/sira_configs/{data,enrich,rerank}/nora.yaml`
 - `sandbox/prompts/{doc,query,relevance}_requirement_v01.txt`
 
-### 5. Implement `proprietary_provider.complete()`
+### 5. Point the shim at your LLM
 
-Open `customizations/llm/proprietary_provider.py` and replace the `complete()` body with the call to your company's LLM endpoint. The signature must continue to match the `LLMProvider` Protocol:
+The shim runs in one of two modes; pick the one that matches your deployment.
+
+#### 5a. Pass-through mode — your proprietary LLM exposes OpenAI Chat Completions
+
+If `https://your-llm/v1/chat/completions` already accepts the OpenAI request shape, the shim becomes a thin proxy: receives SIRA's request, forwards verbatim, returns the response. **No code to write** — `customizations/llm/proprietary_provider.py` is bypassed entirely.
+
+Set these env vars in the shell that runs `uvicorn`:
+
+```bash
+export NORA_LLM_BASE_URL=https://your-internal-llm/v1   # base — shim appends /chat/completions
+export NORA_LLM_API_KEY=<bearer-token>                  # optional; injected as `Authorization: Bearer …`
+export NORA_LLM_MODEL=<actual-model-name>               # optional; overrides whatever SIRA sends in `model`
+export NORA_LLM_TIMEOUT=300                             # optional; per-request seconds, default 300
+```
+
+If `NORA_LLM_MODEL` is unset the shim forwards whatever SIRA puts in the `model` field. SIRA defaults to a sglang-style identifier (e.g. `qwen3.6-35b-a3b-fp8:h100`); set `NORA_LLM_MODEL` to the actual name your endpoint accepts.
+
+These are the same env var names NORA's own LLM layer uses (D-044 / D-049), so if you already have NORA's OpenAI-compatible provider configured for the regular pipeline, the shim picks up the same config automatically.
+
+#### 5b. Adapter mode — your proprietary LLM uses some other API
+
+Leave `NORA_LLM_BASE_URL` **unset**. The shim falls back to calling `customizations/llm/proprietary_provider.py`'s `complete()`. Implement that method per your deployment — the signature must match the `LLMProvider` Protocol:
 
 ```python
 def complete(self, prompt: str, system: str = "",
@@ -140,7 +163,7 @@ Return the completion text. See `customizations/llm/README.md` for guidance.
 
 ### A. Shim health
 
-In one terminal, from `$REPO_ROOT`:
+In one terminal, from `$REPO_ROOT` (env vars from step 5a or unset for 5b):
 
 ```bash
 uvicorn sandbox.shim.openai_shim:app --port 8030
@@ -150,15 +173,19 @@ In another:
 
 ```bash
 curl -s http://127.0.0.1:8030/healthz
-# {"ok": true, "model": "...", "endpoint": "...", "calls": 0}
+# pass-through:  {"ok": true, "mode": "pass-through", "base_url": "...", "model_override": "...", "api_key_set": true}
+# adapter:       {"ok": true, "mode": "adapter", "model": "...", "endpoint": "...", "calls": 0}
 
 curl -s -X POST http://127.0.0.1:8030/v1/chat/completions \
   -H 'Content-Type: application/json' \
   -d '{"model": "test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16}'
 ```
 
-If `complete()` is implemented: 200 with an `OpenAI-shaped` response.
-If `complete()` is the stub: 501 with `"NotImplementedError..."` — implement step 5 first.
+Expected outcomes:
+- **Pass-through + valid upstream**: 200 with the upstream OpenAI response forwarded verbatim.
+- **Pass-through + bad upstream URL / auth**: 502 with `upstream error: ...` or `upstream NNN: ...`. Fix `NORA_LLM_BASE_URL` / `NORA_LLM_API_KEY`.
+- **Adapter + `complete()` implemented**: 200 with an OpenAI-shaped envelope wrapping the provider's string.
+- **Adapter + stub `complete()`**: 501 with `NotImplementedError`. Either implement step 5b *or* switch to 5a by setting `NORA_LLM_BASE_URL`.
 
 ### B. Adapter on real data
 
@@ -271,7 +298,10 @@ Add these to `sandbox/sira/sandbox.sh` if you want them auto-set on `source`.
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `curl /healthz` returns "Connection refused" | Shim isn't running | `uvicorn sandbox.shim.openai_shim:app --port 8030` from repo root |
-| `/v1/chat/completions` returns 501 with "NotImplementedError" | `proprietary_provider.complete()` is still the stub | Implement the body per `customizations/llm/README.md` |
+| `/v1/chat/completions` returns 501 with "NotImplementedError" | Adapter mode + stub `proprietary_provider.complete()` | Either implement `complete()` (step 5b) or switch to pass-through by setting `NORA_LLM_BASE_URL` (step 5a) and restarting the shim |
+| `/v1/chat/completions` returns 502 with "upstream error: ..." | Pass-through mode + unreachable upstream (DNS, refused, timeout) | Check `NORA_LLM_BASE_URL` value; `curl -i $NORA_LLM_BASE_URL/chat/completions` independently to isolate |
+| Pass-through returns 401 / 403 from upstream | Bad / missing `NORA_LLM_API_KEY` | Confirm key value and that the upstream accepts it via direct curl |
+| Pass-through returns 400 "model not found" from upstream | SIRA's `model` field (e.g. `qwen3.6-35b-a3b-fp8:h100`) isn't recognized by your endpoint | Set `NORA_LLM_MODEL` to the actual model name and restart the shim |
 | `prepare` stage tries to download from HF anyway | `metadata.json` missing or unreadable | `ls sandbox/adapter/out/nora/raw/metadata.json`; re-run adapter |
 | `bm25` stage error "No module named 'bm25x'" | Maturin build didn't install | `cd sandbox/sira/src/sira/bm25x/python && maturin develop --release` |
 | `enrich_corpus` extremely slow / endpoint times out | Default `concurrency=4096` saturates the proprietary endpoint | Override on CLI: `enrich.concurrency=4` (or whatever your endpoint absorbs) |
