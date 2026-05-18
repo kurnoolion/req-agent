@@ -206,6 +206,30 @@ def chat_completions(req: _ChatRequest) -> dict:
     }
 
 
+@app.get("/v1/models")
+def list_models() -> dict:
+    """OpenAI-compatible model list. SIRA's `run_pipeline.py` probes
+    `GET /v1/models` to decide whether to spawn its own sglang server
+    or use an existing one. As long as we 200 here, SIRA picks us.
+    The body shape mirrors OpenAI's response so any future caller
+    that does parse it still sees something sensible.
+    """
+    model_id = _LLM_MODEL or "proprietary"
+    if not _LLM_BASE_URL and _provider and _provider.model:
+        model_id = _provider.model
+    return {
+        "object": "list",
+        "data": [
+            {
+                "id": model_id,
+                "object": "model",
+                "created": 0,
+                "owned_by": "nora-shim",
+            }
+        ],
+    }
+
+
 @app.get("/healthz")
 def healthz() -> dict:
     if _LLM_BASE_URL:

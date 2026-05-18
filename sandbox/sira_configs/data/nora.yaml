@@ -15,10 +15,12 @@
 #   python scripts/run_pipeline.py \
 #       data=nora \
 #       db_root=$(realpath ../../adapter/out) \
-#       server.auto_start=false
+#       sglang.port=8030
 #
 # (Run from inside the sandbox/sira/ clone after copying this YAML to
-# scripts/configs/data/. See sandbox/README.md for the install step.)
+# scripts/configs/data/. The shim on port 8030 must be running first —
+# SIRA auto-detects it via GET /v1/models and won't try to spawn sglang.
+# See sandbox/SETUP.md for the install + run steps.)
 
 name: nora
 repo: nora-local-adapter   # informational only; no HF fetch happens

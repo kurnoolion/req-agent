@@ -277,15 +277,15 @@ python scripts/run_pipeline.py \
     rerank=nora \
     db_root=$(realpath ../adapter/out) \
     sglang.port=8030 \
-    server.auto_start=false \
     enrich.concurrency=8 \
     rerank.concurrency=8
 ```
 
 Critical flags:
-- `server.auto_start=false` — SIRA does **not** spawn its own sglang process; talks to our shim instead.
 - `sglang.port=8030` — SIRA's hardcoded `http://127.0.0.1:{port}/v1/chat/completions` resolves to our shim.
 - `enrich.concurrency=8` / `rerank.concurrency=8` — defaults are 4096 / 2048 (calibrated for a local H100 sglang). At those numbers, our shim → proprietary endpoint will saturate. Tune to whatever the proprietary endpoint absorbs cleanly.
+
+**Spawning sglang vs. using our shim:** SIRA's `run_pipeline.py` auto-detects whether a server is already running on `sglang.port` — it does `GET http://127.0.0.1:{port}/v1/models` and if that returns 200, logs *"Using existing LLM server on port {port}"* and proceeds. If the probe fails, it tries to spawn sglang locally (requires GPU + the full install). Our shim implements `/v1/models` for exactly this purpose, so **as long as `uvicorn` is running before you launch `run_pipeline.py`, SIRA picks up the shim automatically.** There's no `server.auto_start` flag — the detection is purely based on whether the port answers.
 
 Output: per-stage eval JSONs at `sandbox/adapter/out/nora/eval/{baseline, doc-enrich, query-enrich, rerank}/best.json`. Compare `recall@10` across stages — that's the per-stage lift attributable to corpus enrichment / query enrichment / LLM reranking. Compare the final `recall@10` against NORA's A4 baseline (88.0% overall / 67.6% accuracy on the same 18-Q set).
 
@@ -309,11 +309,11 @@ If your work PC blocks HF or has restricted outbound HTTPS, here's the exhaustiv
 - `huggingface_hub.snapshot_download` — only call site is `prepare_mteb_data.py`, gated by the `metadata.json`-exists check our adapter satisfies.
 - No `nltk.download(...)` anywhere.
 - BM25 tokenizer (`unicode_stem`) is Rust-internal via `unicode-normalization` + `rust-stemmers` crates — built in at compile time, no runtime download.
-- sglang doesn't run — `server.auto_start=false` keeps SIRA from spawning its sub-process. The only LLM call site goes through our shim → proprietary endpoint (`127.0.0.1` → company internal — no public network).
+- sglang doesn't run — our shim is already listening on `sglang.port` (it responds to `/v1/models` with 200), so SIRA auto-detects it and doesn't try to spawn its own sub-process. All LLM call sites go through our shim → proprietary endpoint (`127.0.0.1` → company internal — no public network).
 
-### Runtime if you flip `server.auto_start=true`
+### Runtime if the shim ISN'T running when you start run_pipeline.py
 
-SIRA would spawn sglang locally, which `from_pretrained`'s the configured model (default `qwen3.6-35b-a3b-fp8:h100` per `scripts/configs/sglang/`). **That triggers an HF cache download for the model weights** — many gigabytes. Do not flip this until your work PC can either reach HF or you've pre-staged the model in `$HF_HOME`.
+SIRA's auto-detection probe (`GET /v1/models`) fails → it tries to spawn sglang locally, which `from_pretrained`'s the configured model (default `qwen3.6-35b-a3b-fp8:h100` per `scripts/configs/sglang/`). **That triggers an HF cache download for the model weights** — many gigabytes. Always start the shim FIRST. If the shim crashes mid-pipeline, SIRA's subsequent retries will also fail (its `_start_server` waits 900s by default before giving up); restart the shim and retry the pipeline rather than letting it fall through to sglang spawn.
 
 ### Defensive belt-and-suspenders
 
@@ -341,7 +341,8 @@ Add these to `sandbox/sira/sandbox.sh` if you want them auto-set on `source`.
 | `bm25` stage error "No module named 'bm25x'" | Maturin build didn't install | `cd sandbox/sira/src/sira/bm25x/python && maturin develop --release` |
 | `enrich_corpus` extremely slow / endpoint times out | Default `concurrency=4096` saturates the proprietary endpoint | Override on CLI: `enrich.concurrency=4` (or whatever your endpoint absorbs) |
 | `rerank` extremely slow | top_n=200 × N queries × 1 LLM call each adds up | Override `rerank.top_n=50` first, then dial up |
-| sglang process keeps trying to start | `server.auto_start` defaulting to true | Pass `server.auto_start=false` on every `run_pipeline.py` invocation |
+| sglang process keeps trying to start | The shim isn't responding on `sglang.port`, so SIRA falls through to spawning its own server | Start the shim BEFORE launching `run_pipeline.py`. Confirm with `curl -s http://127.0.0.1:8030/v1/models` — must return 200 with a model list |
+| `hydra.errors.ConfigCompositionException: Could not override 'server.auto_start'` | Stale instruction — the flag doesn't exist in SIRA's config | Drop the `server.auto_start=false` argument entirely; detection is automatic (see "Critical flags" note above) |
 | eval numbers look wrong (e.g. 0% recall) | Adapter wrote `_id` field that doesn't match qrels `corpus-id` | Spot-check: `head -1 corpus.jsonl` and one qrel row — `_id` must equal `corpus-id` |
 | Adapter skips most reqs as "no-id" | Source `_tree.json` has empty `req_id` fields | Re-run NORA parse stage; if the source corpus genuinely lacks req_ids, this strand's approach doesn't apply |
 | `Illegal instruction (core dumped)` + polars warning about "avx2, fma, bmi1, bmi2, lzcnt, movbe" | CPU lacks AVX2 (older / virtualized x86_64) and you installed plain `polars` | `uv pip install --reinstall --system-certs 'polars[rtcompat]'`. Alternative spelling if the extra doesn't resolve: `uv pip install --system-certs polars-lts-cpu` (after `uv pip uninstall polars`). |

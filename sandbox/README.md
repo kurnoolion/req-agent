@@ -68,16 +68,18 @@ it under real load — the stub raises `NotImplementedError` → 501.)
 **Step 4 — Run SIRA against NORA** (when GPU is online; assumes
 SIRA's env is set up per its own README):
 
+    cd $REPO_ROOT
+    source sandbox/activate.sh
     cd sandbox/sira
-    source sandbox.sh
     python scripts/run_pipeline.py \
         data=nora \
         enrich=nora \
         rerank=nora \
         db_root=$(realpath ../adapter/out) \
-        sglang.port=8030 \
-        server.auto_start=false
+        sglang.port=8030
 
-`server.auto_start=false` is critical — it tells SIRA not to spawn its
-own sglang process. SIRA will then hit `http://127.0.0.1:8030/v1/chat/completions`,
-which is our shim, which routes onto the proprietary LLM.
+SIRA auto-detects an existing server on `sglang.port` via `GET /v1/models`
+— our shim implements that endpoint, so as long as the shim is running
+(see Step 1 above) SIRA picks it up automatically. If `/v1/models` 404s
+or the port is unreachable, SIRA falls back to spawning sglang locally
+(needs GPU + full install). See `SETUP.md` for the full procedure.
