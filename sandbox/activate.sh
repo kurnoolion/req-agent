@@ -21,6 +21,29 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SIRA_DIR="$REPO_ROOT/sandbox/sira"
 VENV="$SIRA_DIR/.venv"
 
+# Bypass any corporate HTTP_PROXY / HTTPS_PROXY for localhost. SIRA's
+# `run_pipeline.py` auto-detects an existing LLM server via
+# `urllib.request.urlopen('http://127.0.0.1:{port}/v1/models')`, and
+# every enrichment / reranking call also goes to the same shim URL.
+# Python's urllib (unlike curl) honors NO_PROXY but not the convention
+# that localhost should auto-bypass; without these entries the probe
+# is silently routed through the proxy and times out, after which SIRA
+# falls back to spawning sglang locally and fails (no GPU stack).
+#
+# Done before the venv check so the fix lands even when activate.sh
+# would otherwise abort on a half-set-up sandbox.
+# We append rather than overwrite so any pre-existing NO_PROXY is kept.
+_local_bypass="127.0.0.1,localhost,::1,0.0.0.0"
+case ",${NO_PROXY:-}," in
+    *",127.0.0.1,"*) ;;  # already present
+    *) export NO_PROXY="${NO_PROXY:+${NO_PROXY},}${_local_bypass}" ;;
+esac
+case ",${no_proxy:-}," in
+    *",127.0.0.1,"*) ;;
+    *) export no_proxy="${no_proxy:+${no_proxy},}${_local_bypass}" ;;
+esac
+unset _local_bypass
+
 if [ ! -d "$VENV" ]; then
     echo "ERROR: $VENV not found — run SETUP.md step 2a first:" >&2
     echo "  cd $SIRA_DIR && uv venv .venv --python 3.12" >&2
