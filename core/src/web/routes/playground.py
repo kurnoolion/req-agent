@@ -19,15 +19,54 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time
 from typing import Any
 
+import httpx
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+
+# URL of the SIRA per-query probe service (sandbox/sira_query/service.py).
+# Defaults assume the service is started locally on port 8040; in
+# production deployments this typically points at a same-host service
+# the operator started alongside NORA's web app. See sandbox/SETUP.md
+# "Per-query SIRA probe" for the full launch procedure.
+_SIRA_QUERY_URL = os.getenv(
+    "NORA_SIRA_QUERY_URL", "http://127.0.0.1:8040",
+).rstrip("/")
+
+# Timeout matches the SIRA service's own LLM call timeout (300s per
+# llm_call) plus rerank-stage budget. At concurrency=1 + ~36s/call on
+# a proxy-throttled LLM, top_n=20 reranks → ~12 min worst case for a
+# single query. Set generously.
+_SIRA_QUERY_TIMEOUT = float(os.getenv("NORA_SIRA_QUERY_TIMEOUT", "1200"))
+
+
+async def _call_sira_query(question: str, top_k: int | None = None) -> dict[str, Any]:
+    """POST the question to the SIRA per-query probe service and
+    return its JSON response.
+
+    Errors are surfaced verbatim — caller renders them in the answer
+    template as an error block.
+    """
+    payload: dict[str, Any] = {"query": question}
+    if top_k:
+        payload["top_k"] = top_k
+    async with httpx.AsyncClient(timeout=_SIRA_QUERY_TIMEOUT) as client:
+        resp = await client.post(
+            f"{_SIRA_QUERY_URL}/sira-query", json=payload,
+        )
+    if resp.status_code != 200:
+        raise RuntimeError(
+            f"SIRA service returned {resp.status_code}: {resp.text[:300]}"
+        )
+    return resp.json()
 
 
 def _corpus_label() -> str:
@@ -98,6 +137,18 @@ def _build_sections() -> list[dict[str, Any]]:
             "enabled": False,
             "blurb": "Look up 3GPP TS section text by spec + section.",
         },
+        {
+            "id": "sira_retrieval",
+            "label": "SIRA Retrieval",
+            "enabled": True,
+            "blurb": (
+                "Probe SIRA's per-query retrieval (BM25 + query enrichment "
+                "+ LLM rerank) against the same corpus. Returns ranked req_ids "
+                "with text previews — the synthesizer stage is skipped. "
+                "Requires the SIRA query service running locally (see "
+                "sandbox/SETUP.md \"Per-query SIRA probe\")."
+            ),
+        },
     ]
 
 
@@ -108,6 +159,7 @@ _SECTION_IDS: set[str] = {
     "compliance_check",
     "cross_mno_compare",
     "standards_lookup",
+    "sira_retrieval",
 }
 
 
@@ -146,9 +198,36 @@ async def playground_ask(request: Request):
             "error": "Question is required.",
         })
 
-    # Hand off to the section's runner. Currently only requirement_bot
-    # is wired; other sections are tab-disabled in the template, but
-    # an explicit POST against them returns a friendly stub.
+    # Hand off to the section's runner. requirement_bot → NORA's full
+    # pipeline; sira_retrieval → SIRA service via HTTP proxy. The other
+    # placeholder sections remain tab-disabled.
+    if section == "sira_retrieval":
+        start = time.time()
+        try:
+            sira_result = await _call_sira_query(question)
+        except Exception as exc:
+            logger.exception("SIRA query failed")
+            return _template_response(request, "test/_answer.html", {
+                "error": f"SIRA service call failed: {exc}",
+                "section": section,
+                "question": question,
+            })
+        elapsed_ms = int((time.time() - start) * 1000)
+        # SIRA retrieval doesn't feed feedback widgets (no answer/citations
+        # to vote on) — render results directly without recording a
+        # FeedbackStore row.
+        return _template_response(request, "test/_answer.html", {
+            "section": section,
+            "question": question,
+            "sira_results": sira_result.get("results", []),
+            "sira_expansion_phrases": sira_result.get("expansion_phrases_kept", []),
+            "sira_timings_ms": sira_result.get("timings_ms", {}),
+            "sira_candidates_reranked": sira_result.get("candidates_reranked", 0),
+            "sira_notes": sira_result.get("notes", []),
+            "sira_top_k": sira_result.get("top_k"),
+            "elapsed_ms": elapsed_ms,
+        })
+
     if section != "requirement_bot":
         return _template_response(request, "test/_answer.html", {
             "error": f"Section '{section}' is not yet implemented.",

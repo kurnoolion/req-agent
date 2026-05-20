@@ -288,6 +288,82 @@ Critical flags:
 
 Output: per-stage eval JSONs at `sandbox/adapter/out/nora/eval/{baseline, doc-enrich, query-enrich, rerank}/best.json`. Compare `recall@10` across stages — that's the per-stage lift attributable to corpus enrichment / query enrichment / LLM reranking. Compare the final `recall@10` against NORA's A4 baseline (88.0% overall / 67.6% accuracy on the same 18-Q set).
 
+### E. Per-query SIRA probe (NORA Test page "SIRA Retrieval" tab)
+
+Interactive way to type a query and see SIRA's ranked retrieval. Available once verify-D has completed (SIRA's BM25 index + doc enrichments are on disk). Adds NO new SIRA modifications — just exposes per-query inference via a third local service.
+
+**Architecture:**
+
+```
+┌─────────────────┐   POST /api/test/ask        ┌──────────────────────────┐
+│  NORA web app   │ ───────────────────────────▶│  /test page              │
+│  (port :8000 or │   { question, section=      │  (renders SIRA tab)      │
+│   whatever)     │      "sira_retrieval" }     └──────────────────────────┘
+└────────┬────────┘                                       │
+         │ HTTP POST                                      │
+         │ NORA_SIRA_QUERY_URL                            ▼
+         ▼                                       ┌──────────────────────────┐
+┌─────────────────┐   POST /sira-query           │  template renders        │
+│  SIRA query     │ ◀────────────────────────────│  ranked req_ids + scores │
+│  service        │   { query, top_k }           │  + text previews         │
+│  (port :8040)   │                              └──────────────────────────┘
+└────────┬────────┘
+         │ HTTP POST × N
+         ▼ /v1/chat/completions
+┌─────────────────┐
+│  Shim           │
+│  (port :8030)   │
+└────────┬────────┘
+         │ (httpx via NORA_LLM_BASE_URL)
+         ▼
+┌─────────────────┐
+│  Proprietary    │
+│  LLM endpoint   │
+└─────────────────┘
+```
+
+Three local services needed: shim (8030) + SIRA query service (8040) + NORA web (default whatever).
+
+**Setup (in three terminals, all from repo root):**
+
+```bash
+# Terminal 1 — shim, same as everywhere else
+source sandbox/activate.sh   # also exports SSL_CERT_FILE, NO_PROXY entries, etc.
+# Make sure NORA_LLM_BASE_URL / NORA_LLM_API_KEY / NORA_LLM_MODEL are set here.
+uvicorn sandbox.shim.openai_shim:app --port 8030
+
+# Terminal 2 — SIRA query service
+source sandbox/activate.sh
+export NORA_SIRA_DB_ROOT=$(realpath sandbox/adapter/out)
+# Optional knobs:
+# export NORA_SIRA_TOP_K=10              # default top_k when caller doesn't supply
+# export NORA_SIRA_RERANK_TOP_N=20       # candidates fed to LLM reranker
+# export NORA_SIRA_MAX_DF_RATIO=0.05     # DF-filter cap for query expansion
+# export NORA_SIRA_EXPANSION_WEIGHT=0.5  # BM25 expansion weight
+uvicorn sandbox.sira_query.service:app --port 8040
+
+# Verify the SIRA service loaded its state:
+curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
+# Want: "ok": true, "corpus_size": NN_THOUSAND, "query_prompt_loaded": true,
+#       "rerank_prompt_loaded": true.
+
+# Terminal 3 — NORA web app
+# By default it points at http://127.0.0.1:8040 for the SIRA service.
+# Override with NORA_SIRA_QUERY_URL=... if you run the service elsewhere.
+python -m core.src.web.app   # or however you normally start NORA's web
+```
+
+Open `http://<host>:<port>/test`, click the **SIRA Retrieval** tab, type a query. The response is a ranked list of req_ids with bm25 + rerank scores, NO synthesized answer. Interactive latency is dominated by the LLM rerank step — at `concurrency=1` + a slow proprietary endpoint, expect **~30 seconds to ~12 minutes per query** depending on `NORA_SIRA_RERANK_TOP_N`.
+
+**Tuning the latency:**
+
+| Setting | Default | Tradeoff |
+|---|---|---|
+| `NORA_SIRA_RERANK_TOP_N` | 20 | Smaller = faster (fewer LLM rerank calls) but loses any correct doc not in the BM25-with-expansion top-N |
+| `NORA_SIRA_TOP_K` | 10 | UI cap; doesn't affect latency |
+
+For a quick first-look at SIRA's retrieval shape, drop `NORA_SIRA_RERANK_TOP_N=10` — interactive latency drops to ~6 min on a 36s/call endpoint.
+
 ## Network access — what gets downloaded
 
 If your work PC blocks HF or has restricted outbound HTTPS, here's the exhaustive list of what SIRA reaches for:

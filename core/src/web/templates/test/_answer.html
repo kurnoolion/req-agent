@@ -2,6 +2,92 @@
   <div class="alert alert-danger">
     <strong>Error:</strong> {{ error }}
   </div>
+{% elif sira_results is defined %}
+  {# SIRA retrieval — renders ranked req_ids with text previews. No
+     synthesized answer, no citations, no feedback widget. The result
+     comes from the sandbox/sira_query/service.py probe service via
+     NORA_SIRA_QUERY_URL. #}
+  <div class="border rounded p-3 mb-3 bg-light">
+    <div class="text-muted small mb-2">
+      <strong>Q:</strong> {{ question }}
+    </div>
+    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+      <span class="badge bg-secondary">SIRA retrieval</span>
+      <span class="text-muted small">top {{ sira_top_k }}</span>
+      <span class="text-muted small">·</span>
+      <span class="text-muted small">{{ sira_candidates_reranked }} candidates reranked</span>
+      <span class="text-muted small">·</span>
+      <span class="text-muted small">{{ elapsed_ms }} ms total</span>
+      {% if sira_timings_ms %}
+        <span class="text-muted small">
+          (expand={{ sira_timings_ms.get('expand_ms', 0) }} ms ·
+          search={{ sira_timings_ms.get('search_ms', 0) }} ms ·
+          rerank={{ sira_timings_ms.get('rerank_ms', 0) }} ms)
+        </span>
+      {% endif %}
+    </div>
+    {% if sira_expansion_phrases %}
+      <div class="mb-3">
+        <div class="text-muted small mb-1">
+          <strong>Query expansion phrases (LLM-generated, DF-filter survived):</strong>
+        </div>
+        {% for p in sira_expansion_phrases %}
+          <span class="badge bg-light text-dark border me-1 mb-1">{{ p }}</span>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% if sira_notes %}
+      <div class="alert alert-warning small mb-3 py-2">
+        {% for note in sira_notes %}
+          <div>⚠ {{ note }}</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+    {% if not sira_results %}
+      <div class="alert alert-info small">
+        No results returned. Check the SIRA service logs and
+        <code>{{ root_path }}/api/test/ask</code> response details.
+      </div>
+    {% else %}
+      <div>
+        {% for r in sira_results %}
+          <div class="card mb-2">
+            <div class="card-body py-2 px-3">
+              <div class="d-flex justify-content-between align-items-start">
+                <div class="flex-grow-1 me-3">
+                  <div class="small text-muted mb-1">
+                    <span class="badge bg-dark me-1">#{{ r.rank }}</span>
+                    <code>{{ r.req_id }}</code>
+                  </div>
+                  {% if r.title %}
+                    <div class="fw-semibold mb-1" style="font-size: .92rem;">
+                      {{ r.title }}
+                    </div>
+                  {% endif %}
+                  {% if r.text_preview %}
+                    <div class="text-muted small" style="font-size: .85rem;">
+                      {{ r.text_preview }}{% if r.text_preview|length >= 400 %}…{% endif %}
+                    </div>
+                  {% endif %}
+                </div>
+                <div class="text-end small" style="min-width: 140px;">
+                  <div>
+                    rerank
+                    <span class="badge bg-{% if r.rerank_score >= 60 %}success{% elif r.rerank_score >= 30 %}warning{% else %}secondary{% endif %}">
+                      {{ r.rerank_score }}
+                    </span>
+                  </div>
+                  <div class="text-muted">
+                    bm25 {{ '%.2f'|format(r.bm25_score) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        {% endfor %}
+      </div>
+    {% endif %}
+  </div>
 {% elif disambiguation_required %}
   {# Stage 4.7 — system found multiple plausible groups whose scores
      are within gap_threshold of each other. Render each group as a
