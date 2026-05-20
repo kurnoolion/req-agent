@@ -47,7 +47,7 @@
               hx-post="{{ root_path }}/api/test/ask"
               hx-target="#test-answer"
               hx-swap="innerHTML"
-              hx-indicator="#test-spinner"
+              hx-indicator="#test-loading-block, #test-spinner"
               hx-disabled-elt="find button"
             >
               <input type="hidden" name="section" value="{{ section.id }}">
@@ -72,6 +72,33 @@
               </button>
             </form>
 
+            <!-- Prominent loading block — visible during htmx-request,
+                 sits between the form and the answer area. SIRA queries
+                 in particular can take 30s-12min so a small button
+                 spinner isn't enough feedback. -->
+            <div id="test-loading-block" class="htmx-indicator-block mt-4">
+              <div class="card border-primary">
+                <div class="card-body py-3">
+                  <div class="d-flex align-items-center gap-3">
+                    <div class="spinner-border text-primary" role="status"></div>
+                    <div>
+                      <div class="fw-semibold">Running query…</div>
+                      <div class="text-muted small">
+                        {% if active_section == "sira_retrieval" %}
+                          SIRA queries run BM25 → LLM rerank → NORA synthesizer.
+                          At <code>concurrency=1</code> the rerank stage can take 30s–12min
+                          depending on <code>NORA_SIRA_RERANK_TOP_N</code>; then the
+                          synthesizer adds ~5–30s. Page won't update until results return.
+                        {% else %}
+                          Retrieval + synthesis usually takes 5–30 seconds.
+                        {% endif %}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
             <!-- Answer + feedback area (HTMX swaps into this) -->
             <div id="test-answer" class="mt-4"></div>
 
@@ -90,9 +117,13 @@
 
 <style>
   /* Match the existing UI's pattern: HTMX swaps the indicator
-     in by toggling display. */
-  .htmx-indicator { display: none; }
+     in by toggling display. Two flavors:
+       - .htmx-indicator       inline (used by the button label)
+       - .htmx-indicator-block block-level (used by the loading card) */
+  .htmx-indicator,
+  .htmx-indicator-block { display: none; }
   .htmx-request .htmx-indicator { display: inline-block; }
+  .htmx-request .htmx-indicator-block { display: block; }
   .htmx-request .htmx-indicator-fallback { display: none; }
 </style>
 {% endblock %}

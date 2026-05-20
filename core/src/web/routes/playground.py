@@ -47,6 +47,44 @@ _SIRA_QUERY_URL = os.getenv(
 # single query. Set generously.
 _SIRA_QUERY_TIMEOUT = float(os.getenv("NORA_SIRA_QUERY_TIMEOUT", "1200"))
 
+# Score-based filter: which SIRA-ranked chunks should be pinned to
+# NORA's synthesizer. A chunk must pass BOTH gates:
+#
+#   * Absolute floor: rerank_score >= NORA_SIRA_PIN_MIN_SCORE.
+#     Anchored to the reranker prompt's score guide — score 21-40 is
+#     "discusses related concepts," 41+ is "partial answer or better."
+#     The default 30 sits in that range. With our observed bucketed
+#     distribution (0/20/40/60/80 clusters), this drops everything ≤20
+#     ("peripherally related but no answer").
+#
+#   * Relative threshold: rerank_score >= max_score × NORA_SIRA_PIN_REL_THRESHOLD.
+#     Adapts to query difficulty: if the best chunk only scored 30,
+#     pin chunks ≥15 (don't strip everything). Default 0.5 keeps
+#     chunks at least half as relevant as the top.
+#
+# Set NORA_SIRA_PIN_MIN_SCORE=0 + NORA_SIRA_PIN_REL_THRESHOLD=0.0 to
+# disable filtering (legacy behavior — pins all top_k chunks).
+_PIN_MIN_SCORE = float(os.getenv("NORA_SIRA_PIN_MIN_SCORE", "30"))
+_PIN_REL_THRESHOLD = float(os.getenv("NORA_SIRA_PIN_REL_THRESHOLD", "0.5"))
+
+
+def _select_pinned_chunks(
+    sira_results: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], int]:
+    """Apply the score-based filter to SIRA's ranked results.
+    Returns (pinned_results, max_rerank_score).
+    """
+    if not sira_results:
+        return [], 0
+    max_score = max(int(r.get("rerank_score", 0) or 0) for r in sira_results)
+    rel_floor = max_score * _PIN_REL_THRESHOLD
+    pinned = [
+        r for r in sira_results
+        if int(r.get("rerank_score", 0) or 0) >= _PIN_MIN_SCORE
+        and int(r.get("rerank_score", 0) or 0) >= rel_floor
+    ]
+    return pinned, max_score
+
 
 async def _call_sira_query(question: str, top_k: int | None = None) -> dict[str, Any]:
     """POST the question to the SIRA per-query probe service and
@@ -219,12 +257,19 @@ async def playground_ask(request: Request):
                 "question": question,
             })
 
-        # Convert SIRA's ranked req_ids → NORA's chunk_id format
-        # (`req:{req_id}` per chunk_builder.py:144). Pinned synthesizer
-        # then composes an answer from these chunks instead of
-        # running its own retrieval.
+        # Apply the score-based filter (see _select_pinned_chunks docstring).
+        # We display ALL ranked results in the template but only pin the
+        # high-confidence ones for the synthesizer.
         sira_results = sira_result.get("results", [])
-        pinned_chunk_ids = [f"req:{r['req_id']}" for r in sira_results if r.get("req_id")]
+        pinned_results, max_rerank_score = _select_pinned_chunks(sira_results)
+        pinned_req_ids = {r["req_id"] for r in pinned_results if r.get("req_id")}
+        # Mark each ranked result as pinned/filtered for the template.
+        for r in sira_results:
+            r["pinned"] = r.get("req_id") in pinned_req_ids
+
+        # Convert pinned req_ids → NORA's chunk_id format
+        # (`req:{req_id}` per chunk_builder.py:144).
+        pinned_chunk_ids = [f"req:{rid}" for rid in pinned_req_ids]
 
         synth_result: dict[str, Any] = {}
         synth_error: str | None = None
@@ -270,9 +315,14 @@ async def playground_ask(request: Request):
             "sira_results": sira_results,
             "sira_expansion_phrases": sira_result.get("expansion_phrases_kept", []),
             "sira_timings_ms": sira_result.get("timings_ms", {}),
+            "sira_rerank_call_stats": sira_result.get("rerank_call_stats", {}),
             "sira_candidates_reranked": sira_result.get("candidates_reranked", 0),
             "sira_notes": sira_result.get("notes", []),
             "sira_top_k": sira_result.get("top_k"),
+            "sira_pinned_count": len(pinned_chunk_ids),
+            "sira_max_rerank_score": max_rerank_score,
+            "sira_pin_min_score": _PIN_MIN_SCORE,
+            "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
             "elapsed_ms": elapsed_ms,
             # Synthesizer view (same fields as requirement_bot path)
             "answer": synth_result.get("answer", "") if synth_result else "",

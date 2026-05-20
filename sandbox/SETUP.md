@@ -373,6 +373,22 @@ Interactive latency is dominated by the LLM rerank step on the SIRA side — at 
 
 For a quick first-look at SIRA's retrieval shape, drop `NORA_SIRA_RERANK_TOP_N=10` — interactive latency drops to ~6 min on a 36s/call endpoint.
 
+**Synthesizer chunk filter (set on the NORA web side, not the SIRA service):**
+
+SIRA returns a ranked list of `top_k` candidates regardless of how relevant they actually are. Pinning all of them to NORA's synthesizer feeds the LLM low-confidence chunks alongside high-confidence ones — the LLM ends up citing whatever has matching keywords, including the noisy tail. To prevent this, the SIRA tab applies a **two-gate score filter** to decide which chunks to pin:
+
+| Setting | Default | Effect |
+|---|---|---|
+| `NORA_SIRA_PIN_MIN_SCORE` | `30` | Absolute floor — drop chunks below this rerank score. Anchored to the reranker prompt's "discusses related concepts" band (21-40); chunks at 0-20 are "peripherally related but no answer." |
+| `NORA_SIRA_PIN_REL_THRESHOLD` | `0.5` | Relative floor — drop chunks below `0.5 × max(rerank_score)`. Adapts to query difficulty: if the best chunk only scored 30, pin chunks ≥15 instead of stripping everything. |
+
+A chunk must clear **both** gates to be pinned. The retrieval view in the UI shows ALL chunks but marks pinned ones with a `pinned` badge and dims the filtered ones (~55% opacity). To disable filtering and revert to the legacy "pin everything" behavior, set both env vars to 0.
+
+**Instrumentation surfaced in the response (visible above the retrieval cards):**
+
+- Per-stage timings (`expand`, `search`, `rerank`) plus total
+- Rerank call distribution: count, mean, p50, p95, max per query — surfaces tail latency from individual slow LLM calls. The full ordered call list is also returned in JSON for further analysis (not displayed in the UI).
+
 ## Network access — what gets downloaded
 
 If your work PC blocks HF or has restricted outbound HTTPS, here's the exhaustive list of what SIRA reaches for:

@@ -13,20 +13,37 @@
       <strong>Q:</strong> {{ question }}
     </div>
 
-    {# Top header strip — provenance + timing #}
-    <div class="d-flex align-items-center gap-2 mb-3 flex-wrap">
+    {# Top header strip — provenance + score filter summary #}
+    <div class="d-flex align-items-center gap-2 mb-2 flex-wrap">
       <span class="badge bg-secondary">SIRA retrieval → NORA synthesizer</span>
-      <span class="text-muted small">{{ sira_candidates_reranked }} candidates reranked → top {{ sira_top_k }} pinned</span>
-      <span class="text-muted small">·</span>
-      <span class="text-muted small">{{ elapsed_ms }} ms total</span>
-      {% if sira_timings_ms %}
+      <span class="text-muted small">
+        {{ sira_candidates_reranked }} reranked · top {{ sira_top_k }} retrieved ·
+        <strong>{{ sira_pinned_count }} pinned to synth</strong>
+      </span>
+      {% if sira_max_rerank_score is defined and sira_max_rerank_score > 0 %}
+        <span class="text-muted small">·</span>
         <span class="text-muted small">
-          (expand={{ sira_timings_ms.get('expand_ms', 0) }} ms ·
-          search={{ sira_timings_ms.get('search_ms', 0) }} ms ·
-          rerank={{ sira_timings_ms.get('rerank_ms', 0) }} ms)
+          filter: score ≥ max({{ sira_pin_min_score|int }}, {{ sira_max_rerank_score }}×{{ sira_pin_rel_threshold }})
         </span>
       {% endif %}
     </div>
+
+    {# Timing breakdown — total + per-stage + rerank distribution #}
+    {% if sira_timings_ms %}
+      <div class="small text-muted mb-3">
+        <strong>Timing:</strong>
+        total={{ elapsed_ms }} ms · expand={{ sira_timings_ms.get('expand_ms', 0) }} ms ·
+        search={{ sira_timings_ms.get('search_ms', 0) }} ms ·
+        rerank={{ sira_timings_ms.get('rerank_ms', 0) }} ms
+        {% if sira_rerank_call_stats and sira_rerank_call_stats.count %}
+          ({{ sira_rerank_call_stats.count }} calls,
+          mean={{ sira_rerank_call_stats.mean_ms }} ms,
+          p50={{ sira_rerank_call_stats.p50_ms }} ms,
+          p95={{ sira_rerank_call_stats.p95_ms }} ms,
+          max={{ sira_rerank_call_stats.max_ms }} ms)
+        {% endif %}
+      </div>
+    {% endif %}
 
     {% if sira_notes %}
       <div class="alert alert-warning small mb-3 py-2">
@@ -83,13 +100,19 @@
         <div class="alert alert-info small">No retrieval results.</div>
       {% else %}
         {% for r in sira_results %}
-          <div class="card mb-2">
+          <div class="card mb-2 {% if r.pinned %}border-primary{% else %}border-secondary{% endif %}"
+               {% if not r.pinned %}style="opacity: 0.55;"{% endif %}>
             <div class="card-body py-2 px-3">
               <div class="d-flex justify-content-between align-items-start">
                 <div class="flex-grow-1 me-3">
                   <div class="small text-muted mb-1">
                     <span class="badge bg-dark me-1">#{{ r.rank }}</span>
                     <code>{{ r.req_id }}</code>
+                    {% if r.pinned %}
+                      <span class="badge bg-primary ms-1" title="passed score filter → fed to synthesizer">pinned</span>
+                    {% else %}
+                      <span class="badge bg-light text-muted border ms-1" title="below score filter → NOT fed to synthesizer">filtered</span>
+                    {% endif %}
                   </div>
                   {% if r.title %}<div class="fw-semibold mb-1" style="font-size: .92rem;">{{ r.title }}</div>{% endif %}
                   {% if r.text_preview %}<div class="text-muted small" style="font-size: .85rem;">{{ r.text_preview }}{% if r.text_preview|length >= 400 %}…{% endif %}</div>{% endif %}

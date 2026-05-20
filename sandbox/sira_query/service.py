@@ -315,8 +315,11 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
         # proxy-throttled environments) this stage is the slow one —
         # top_n × ~per_call_latency. We process serially via asyncio
         # but each call still goes one-at-a-time through the shim.
+        # Per-call timing is collected for the response so the user
+        # can see the latency distribution + any outliers.
         t0 = time.time()
         reranked: list[tuple[int, float, int]] = []
+        rerank_call_ms: list[int] = []
         if _rerank_prompt_template and hits:
             try:
                 for idx, score in hits:
@@ -327,12 +330,14 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
                     prompt = _rerank_prompt_template.format(
                         query=req.query, document=doc_text,
                     )
+                    call_t0 = time.time()
                     try:
                         raw = await _llm_call(client, prompt, max_tokens=64, temperature=0.0)
                         rerank_score = _parse_score(raw)
                     except Exception as exc:
                         notes.append(f"rerank failed for {rid}: {exc}")
                         rerank_score = 0
+                    rerank_call_ms.append(int((time.time() - call_t0) * 1000))
                     reranked.append((idx, score, rerank_score))
                 # Sort by rerank score desc, then BM25 desc as tiebreaker.
                 reranked.sort(key=lambda x: (-x[2], -x[1]))
@@ -344,6 +349,38 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
                 notes.append("rerank prompt missing — results are BM25-with-expansion only")
             reranked = [(idx, score, 0) for idx, score in hits]
         timings["rerank_ms"] = int((time.time() - t0) * 1000)
+
+    # Compute rerank-call statistics for instrumentation surface.
+    def _pct(sorted_xs: list[int], p: float) -> int:
+        if not sorted_xs:
+            return 0
+        k = max(0, min(len(sorted_xs) - 1, int(round(p * (len(sorted_xs) - 1)))))
+        return sorted_xs[k]
+
+    rerank_call_stats: dict[str, Any] = {}
+    if rerank_call_ms:
+        sorted_ms = sorted(rerank_call_ms)
+        rerank_call_stats = {
+            "count": len(sorted_ms),
+            "total_ms": sum(sorted_ms),
+            "min_ms": sorted_ms[0],
+            "max_ms": sorted_ms[-1],
+            "mean_ms": int(sum(sorted_ms) / len(sorted_ms)),
+            "p50_ms": _pct(sorted_ms, 0.50),
+            "p95_ms": _pct(sorted_ms, 0.95),
+            # Full ordered list — query-order, not sorted — so a user
+            # can spot if e.g. the first 3 calls were slow then it
+            # smoothed out (cold start) or if there's a degraded tail.
+            "call_ms": rerank_call_ms,
+        }
+        logger.info(
+            "sira-query rerank: count=%d total=%dms mean=%dms p50=%dms p95=%dms max=%dms",
+            len(sorted_ms), sum(sorted_ms),
+            rerank_call_stats["mean_ms"],
+            rerank_call_stats["p50_ms"],
+            rerank_call_stats["p95_ms"],
+            sorted_ms[-1],
+        )
 
     # Format final response -----------------------------------------
     out: list[dict[str, Any]] = []
@@ -367,5 +404,6 @@ async def sira_query(req: _SiraQueryRequest) -> dict[str, Any]:
         "expansion_phrases_kept": kept_phrases,
         "results": out,
         "timings_ms": timings,
+        "rerank_call_stats": rerank_call_stats,
         "notes": notes,
     }
