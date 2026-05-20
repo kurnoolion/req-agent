@@ -290,7 +290,9 @@ Output: per-stage eval JSONs at `sandbox/adapter/out/nora/eval/{baseline, doc-en
 
 ### E. Per-query SIRA probe (NORA Test page "SIRA Retrieval" tab)
 
-Interactive way to type a query and see SIRA's ranked retrieval. Available once verify-D has completed (SIRA's BM25 index + doc enrichments are on disk). Adds NO new SIRA modifications — just exposes per-query inference via a third local service.
+Interactive way to type a query and see SIRA's ranked retrieval **and a synthesized answer composed from those chunks by NORA's existing synthesizer**. Apples-to-apples vs. the Requirement Bot tab: same synthesizer, the ONLY variable is the retrieval lane (NORA's hybrid vs. SIRA's BM25 + query enrichment + LLM rerank).
+
+Available once verify-D has completed (SIRA's BM25 index + doc enrichments are on disk). Adds NO new SIRA modifications — just exposes per-query inference via a third local service, plus a thin proxy on NORA's `/test` page.
 
 **Architecture:**
 
@@ -353,7 +355,14 @@ curl -s http://127.0.0.1:8040/healthz | python3 -m json.tool
 python -m core.src.web.app   # or however you normally start NORA's web
 ```
 
-Open `http://<host>:<port>/test`, click the **SIRA Retrieval** tab, type a query. The response is a ranked list of req_ids with bm25 + rerank scores, NO synthesized answer. Interactive latency is dominated by the LLM rerank step — at `concurrency=1` + a slow proprietary endpoint, expect **~30 seconds to ~12 minutes per query** depending on `NORA_SIRA_RERANK_TOP_N`.
+Open `http://<host>:<port>/test`, click the **SIRA Retrieval** tab, type a query. The response shows:
+
+1. **Synthesized answer** (top) — NORA's synthesizer composed an answer from the chunks SIRA ranked highest. The answer + citations format is identical to the Requirement Bot tab.
+2. **SIRA-side retrieval** (below) — the ranked list of req_ids with bm25 + rerank scores, so you can see what the synthesizer was working with.
+
+Both views land in the same response. The synthesizer runs on the chunks pinned by SIRA's ranking (uses NORA's `pinned_chunk_ids` mechanism — same code path as the existing "synthesize from this group" disambiguation flow).
+
+Interactive latency is dominated by the LLM rerank step on the SIRA side — at `concurrency=1` + a slow proprietary endpoint, expect **~30 seconds to ~12 minutes per query** for the retrieval step alone, plus NORA's usual synthesizer latency (~5-30s). Tunable via `NORA_SIRA_RERANK_TOP_N`.
 
 **Tuning the latency:**
 

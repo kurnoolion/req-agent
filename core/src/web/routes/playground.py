@@ -202,6 +202,12 @@ async def playground_ask(request: Request):
     # pipeline; sira_retrieval → SIRA service via HTTP proxy. The other
     # placeholder sections remain tab-disabled.
     if section == "sira_retrieval":
+        # Two-step flow:
+        #   1. Call the SIRA service → get ranked req_ids
+        #   2. Pin NORA's synthesizer to those chunks → get an answer
+        # The synthesizer is shared with the requirement_bot tab, so
+        # this is apples-to-apples: SAME synthesizer, only the retrieval
+        # lane (NORA hybrid vs. SIRA BM25+enrich+rerank) differs.
         start = time.time()
         try:
             sira_result = await _call_sira_query(question)
@@ -212,20 +218,70 @@ async def playground_ask(request: Request):
                 "section": section,
                 "question": question,
             })
+
+        # Convert SIRA's ranked req_ids → NORA's chunk_id format
+        # (`req:{req_id}` per chunk_builder.py:144). Pinned synthesizer
+        # then composes an answer from these chunks instead of
+        # running its own retrieval.
+        sira_results = sira_result.get("results", [])
+        pinned_chunk_ids = [f"req:{r['req_id']}" for r in sira_results if r.get("req_id")]
+
+        synth_result: dict[str, Any] = {}
+        synth_error: str | None = None
+        if pinned_chunk_ids:
+            try:
+                synth_result = await asyncio.to_thread(
+                    _run_query_for_test, question, request.app, pinned_chunk_ids,
+                )
+                if "error" in synth_result:
+                    synth_error = synth_result["error"]
+            except Exception as exc:
+                logger.exception("SIRA-driven synthesizer call failed")
+                synth_error = f"Synthesizer failed: {exc}"
         elapsed_ms = int((time.time() - start) * 1000)
-        # SIRA retrieval doesn't feed feedback widgets (no answer/citations
-        # to vote on) — render results directly without recording a
-        # FeedbackStore row.
+
+        # Record feedback row for the SIRA-synthesized answer (same
+        # FeedbackStore + same shape as requirement_bot, just tagged
+        # with section="sira_retrieval").
+        row_id = None
+        if synth_result and not synth_error:
+            try:
+                feedback_store = request.app.state.feedback_store
+                row_id = await feedback_store.record_qa(
+                    section=section,
+                    question=question,
+                    answer=synth_result.get("answer", ""),
+                    citations=synth_result.get("citations", []),
+                    query_elapsed_ms=elapsed_ms,
+                    llm_model=synth_result.get("llm_model"),
+                    metadata={
+                        "sira_pinned_chunks": len(pinned_chunk_ids),
+                        "sira_candidates_reranked": sira_result.get("candidates_reranked", 0),
+                    },
+                )
+            except Exception as exc:
+                logger.warning("FeedbackStore.record_qa failed for SIRA row: %s", exc)
+
         return _template_response(request, "test/_answer.html", {
             "section": section,
             "question": question,
-            "sira_results": sira_result.get("results", []),
+            "row_id": row_id,
+            # SIRA-retrieval view
+            "sira_results": sira_results,
             "sira_expansion_phrases": sira_result.get("expansion_phrases_kept", []),
             "sira_timings_ms": sira_result.get("timings_ms", {}),
             "sira_candidates_reranked": sira_result.get("candidates_reranked", 0),
             "sira_notes": sira_result.get("notes", []),
             "sira_top_k": sira_result.get("top_k"),
             "elapsed_ms": elapsed_ms,
+            # Synthesizer view (same fields as requirement_bot path)
+            "answer": synth_result.get("answer", "") if synth_result else "",
+            "citations": synth_result.get("citations", []) if synth_result else [],
+            "llm_citations": synth_result.get("llm_citations", []) if synth_result else [],
+            "rag_chunks": synth_result.get("rag_chunks", []) if synth_result else [],
+            "rag_chunk_count": synth_result.get("rag_chunk_count", 0) if synth_result else 0,
+            "candidate_count": len(pinned_chunk_ids),
+            "synth_error": synth_error,
         })
 
     if section != "requirement_bot":
