@@ -324,13 +324,30 @@ async def playground_ask(request: Request):
             "sira_pin_min_score": _PIN_MIN_SCORE,
             "sira_pin_rel_threshold": _PIN_REL_THRESHOLD,
             "elapsed_ms": elapsed_ms,
-            # Synthesizer view (same fields as requirement_bot path)
+            # Synthesizer view — pass the SAME fields requirement_bot
+            # passes, so the shared template renders citation audit /
+            # LLM prompt / fragment view consistently across tabs.
             "answer": synth_result.get("answer", "") if synth_result else "",
             "citations": synth_result.get("citations", []) if synth_result else [],
             "llm_citations": synth_result.get("llm_citations", []) if synth_result else [],
             "rag_chunks": synth_result.get("rag_chunks", []) if synth_result else [],
             "rag_chunk_count": synth_result.get("rag_chunk_count", 0) if synth_result else 0,
-            "candidate_count": len(pinned_chunk_ids),
+            "citation_audit": synth_result.get("citation_audit") if synth_result else None,
+            "llm_system_prompt": synth_result.get("llm_system_prompt", "") if synth_result else "",
+            "llm_context_text": synth_result.get("llm_context_text", "") if synth_result else "",
+            # query_intent / graph_candidates — the pinned-chunk pipeline
+            # path skips Stage 1 (taxonomy) + Stage 3 (graph scoping)
+            # entirely, so these are None for SIRA. Passing through what
+            # the synthesizer returned (typically None) — the template's
+            # `{% if query_intent %}` gates silently hide the panels.
+            "query_intent": synth_result.get("query_intent") if synth_result else None,
+            "graph_candidates": synth_result.get("graph_candidates") if synth_result else None,
+            # candidate_count is the legacy "candidates from graph"
+            # footer variable for the requirement_bot path. On SIRA we
+            # already show "N pinned to synth" prominently in the
+            # preamble, so set this to 0 to suppress the duplicate
+            # (and misleadingly-labeled) footer text.
+            "candidate_count": 0,
             "synth_error": synth_error,
         })
 
